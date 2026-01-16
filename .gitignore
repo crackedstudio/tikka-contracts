@@ -1,13 +1,6 @@
-cache/
-out/
-lib/
-node_modules/
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env.development
-.env.test
-.env.production
-.env.local
+# Rust's output directory
+target
+
+# Local settings
+.soroban
+.stellar
