@@ -88,6 +88,26 @@ fn next_raffle_id(env: &Env) -> u64 {
 
 #[contractimpl]
 impl Contract {
+    /// Creates a new raffle with the specified parameters.
+    ///
+    /// # Arguments
+    /// * `creator` - The address creating the raffle (must be authenticated)
+    /// * `description` - Description of the raffle
+    /// * `end_time` - Unix timestamp when the raffle ends
+    /// * `max_tickets` - Maximum number of tickets that can be sold
+    /// * `allow_multiple` - Whether a single buyer can purchase multiple tickets
+    /// * `ticket_price` - Price per ticket in payment token units
+    /// * `payment_token` - Address of the token contract for payments
+    /// * `prize_amount` - Amount of prize in payment token units
+    ///
+    /// # Returns
+    /// * `u64` - The ID of the newly created raffle
+    ///
+    /// # Panics
+    /// * If end_time is in the past
+    /// * If max_tickets is zero
+    /// * If ticket_price is invalid (<= 0)
+    /// * If prize_amount is invalid (<= 0)
     pub fn create_raffle(
         env: Env,
         creator: Address,
@@ -135,6 +155,15 @@ impl Contract {
         raffle_id
     }
 
+    /// Deposits the prize amount into the contract escrow.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    ///
+    /// # Panics
+    /// * If the caller is not the creator
+    /// * If the raffle is inactive
+    /// * If the prize has already been deposited
     pub fn deposit_prize(env: Env, raffle_id: u64) {
         let mut raffle = read_raffle(&env, raffle_id);
         raffle.creator.require_auth();
@@ -153,6 +182,20 @@ impl Contract {
         write_raffle(&env, &raffle);
     }
 
+    /// Purchases a ticket for the specified raffle.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    /// * `buyer` - The address purchasing the ticket (must be authenticated)
+    ///
+    /// # Returns
+    /// * `u32` - The total number of tickets sold for this raffle after purchase
+    ///
+    /// # Panics
+    /// * If the raffle is inactive
+    /// * If the raffle has ended
+    /// * If all tickets are sold out
+    /// * If multiple tickets are not allowed and buyer already has a ticket
     pub fn buy_ticket(env: Env, raffle_id: u64, buyer: Address) -> u32 {
         buyer.require_auth();
         let mut raffle = read_raffle(&env, raffle_id);
@@ -186,6 +229,19 @@ impl Contract {
         raffle.tickets_sold
     }
 
+    /// Finalizes a raffle and selects a winner.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle to finalize
+    ///
+    /// # Returns
+    /// * `Address` - The address of the winner
+    ///
+    /// # Panics
+    /// * If the caller is not the creator
+    /// * If the raffle is inactive
+    /// * If the raffle has not ended yet
+    /// * If no tickets were sold
     pub fn finalize_raffle(env: Env, raffle_id: u64) -> Address {
         let mut raffle = read_raffle(&env, raffle_id);
         raffle.creator.require_auth();
@@ -210,7 +266,20 @@ impl Contract {
         winner
     }
 
-    pub fn claim_prize(env: Env, raffle_id: u64, winner: Address) {
+    /// Claims the prize for the winner of a raffle.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    /// * `winner` - The address of the winner (must be authenticated)
+    ///
+    /// # Returns
+    /// * `i128` - The amount of prize claimed
+    ///
+    /// # Panics
+    /// * If the caller is not the winner
+    /// * If the prize has not been deposited
+    /// * If the prize has already been claimed
+    pub fn claim_prize(env: Env, raffle_id: u64, winner: Address) -> i128 {
         winner.require_auth();
         let mut raffle = read_raffle(&env, raffle_id);
         if raffle.winner != Some(winner.clone()) {
@@ -223,18 +292,37 @@ impl Contract {
             panic!("prize_already_claimed");
         }
 
+        let prize_amount = raffle.prize_amount;
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, &winner, &raffle.prize_amount);
+        token_client.transfer(&contract_address, &winner, &prize_amount);
 
         raffle.prize_claimed = true;
         write_raffle(&env, &raffle);
+        prize_amount
     }
 
+    /// Retrieves raffle information by ID.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle to retrieve
+    ///
+    /// # Returns
+    /// * `Raffle` - The raffle data structure
+    ///
+    /// # Panics
+    /// * If the raffle does not exist
     pub fn get_raffle(env: Env, raffle_id: u64) -> Raffle {
         read_raffle(&env, raffle_id)
     }
 
+    /// Retrieves all ticket buyers for a raffle.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    ///
+    /// # Returns
+    /// * `Vec<Address>` - Vector of addresses representing ticket buyers
     pub fn get_tickets(env: Env, raffle_id: u64) -> Vec<Address> {
         read_tickets(&env, raffle_id)
     }
