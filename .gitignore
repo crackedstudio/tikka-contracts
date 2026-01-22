@@ -4,3 +4,21 @@ target
 # Local settings
 .soroban
 .stellar
+
+# Planning and development files
+task_plan.md
+findings.md
+progress.md
+issue-*-requirements
+CLAUDE.md
+
+# Claude AI configuration and skills
+.claude/
+.agents/
+.opencode/
+
+# Cursor IDE files
+.cursor/
+
+# Test snapshots
+test_snapshots/
