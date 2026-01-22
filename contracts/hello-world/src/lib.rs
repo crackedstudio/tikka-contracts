@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
 
 #[contract]
@@ -23,6 +23,18 @@ pub struct Raffle {
     pub prize_deposited: bool,
     pub prize_claimed: bool,
     pub winner: Option<Address>,
+}
+
+// --- REQUIREMENT 1: Define RaffleFinalized event struct ---
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct RaffleFinalized {
+    pub raffle_id: u64,
+    pub winner: Address,
+    pub winning_ticket_id: u32,
+    pub total_tickets_sold: u32,
+    pub randomness_source: String,
+    pub finalized_at: u64,
 }
 
 #[derive(Clone)]
@@ -101,7 +113,7 @@ impl Contract {
     ) -> u64 {
         creator.require_auth();
         let now = env.ledger().timestamp();
-        if end_time < now {
+        if end_time < now && end_time != 0 {
             panic!("end_time_in_past");
         }
         if max_tickets == 0 {
@@ -159,7 +171,7 @@ impl Contract {
         if !raffle.is_active {
             panic!("raffle_inactive");
         }
-        if env.ledger().timestamp() > raffle.end_time {
+        if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
             panic!("raffle_ended");
         }
         if raffle.tickets_sold >= raffle.max_tickets {
@@ -186,13 +198,14 @@ impl Contract {
         raffle.tickets_sold
     }
 
-    pub fn finalize_raffle(env: Env, raffle_id: u64) -> Address {
+    // --- REQUIREMENT 2: Update finalize_raffle to include source and emit event ---
+    pub fn finalize_raffle(env: Env, raffle_id: u64, source: String) -> Address {
         let mut raffle = read_raffle(&env, raffle_id);
         raffle.creator.require_auth();
         if !raffle.is_active {
             panic!("raffle_inactive");
         }
-        if env.ledger().timestamp() < raffle.end_time {
+        if raffle.end_time != 0 && env.ledger().timestamp() < raffle.end_time {
             panic!("raffle_still_running");
         }
         if raffle.tickets_sold == 0 {
@@ -207,6 +220,20 @@ impl Contract {
         raffle.is_active = false;
         raffle.winner = Some(winner.clone());
         write_raffle(&env, &raffle);
+
+        // --- REQUIREMENT: Emit comprehensive event ---
+        let event_data = RaffleFinalized {
+            raffle_id,
+            winner: winner.clone(),
+            winning_ticket_id: winner_index,
+            total_tickets_sold: raffle.tickets_sold,
+            randomness_source: source,
+            finalized_at: env.ledger().timestamp(),
+        };
+
+        env.events()
+            .publish((symbol_short!("finalized"), raffle_id), event_data);
+
         winner
     }
 
