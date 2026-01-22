@@ -27,6 +27,17 @@ pub struct Raffle {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct PrizeClaimed {
+    pub raffle_id: u64,
+    pub winner: Address,
+    pub gross_amount: i128,
+    pub net_amount: i128,
+    pub platform_fee: i128,
+    pub claimed_at: u64,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub enum DataKey {
     NextRaffleId,
     Raffle(u64),
@@ -223,9 +234,26 @@ impl Contract {
             panic!("prize_already_claimed");
         }
 
+        let gross_amount = raffle.prize_amount;
+        let platform_fee = 0i128; 
+        let net_amount = gross_amount - platform_fee;
+        let claimed_at = env.ledger().timestamp();
+
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, &winner, &raffle.prize_amount);
+        token_client.transfer(&contract_address, &winner, &net_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "PrizeClaimed"), raffle_id),
+            PrizeClaimed {
+                raffle_id,
+                winner: winner.clone(),
+                gross_amount,
+                net_amount,
+                platform_fee,
+                claimed_at,
+            },
+        );
 
         raffle.prize_claimed = true;
         write_raffle(&env, &raffle);
