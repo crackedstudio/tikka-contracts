@@ -1,4 +1,5 @@
 #![no_std]
+use core::cmp::min;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
@@ -448,6 +449,48 @@ impl Contract {
     /// * If the raffle does not exist
     pub fn get_raffle(env: Env, raffle_id: u64) -> Raffle {
         read_raffle(&env, raffle_id)
+    }
+
+    /// Retrieves all raffle IDs with pagination.
+    ///
+    /// Pagination is applied after sorting. `offset` is the index within the
+    /// sorted list. `limit` is capped at 100.
+    pub fn get_all_raffle_ids(
+        env: Env,
+        offset: u32,
+        limit: u32,
+        newest_first: bool,
+    ) -> Vec<u64> {
+        let total = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextRaffleId)
+            .unwrap_or(0u64);
+        let capped_limit = min(limit, 100u32);
+        let mut result = Vec::new(&env);
+
+        if capped_limit == 0 || total == 0 {
+            return result;
+        }
+
+        let offset_u64 = offset as u64;
+        if offset_u64 >= total {
+            return result;
+        }
+
+        let end = min(offset_u64 + capped_limit as u64, total);
+        if newest_first {
+            for position in offset_u64..end {
+                let raffle_id = total - 1 - position;
+                result.push_back(raffle_id);
+            }
+        } else {
+            for raffle_id in offset_u64..end {
+                result.push_back(raffle_id);
+            }
+        }
+
+        result
     }
 
     /// Retrieves all ticket buyers for a raffle.
