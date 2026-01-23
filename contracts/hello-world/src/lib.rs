@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
 
 #[contract]
@@ -43,6 +43,7 @@ pub enum DataKey {
     Raffle(u64),
     Tickets(u64),
     TicketCount(u64, Address),
+    ActiveRaffles,
 }
 
 fn read_raffle(env: &Env, raffle_id: u64) -> Raffle {
@@ -95,6 +96,37 @@ fn next_raffle_id(env: &Env) -> u64 {
         .persistent()
         .set(&DataKey::NextRaffleId, &next);
     current
+}
+
+fn read_active_raffles(env: &Env) -> Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ActiveRaffles)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn write_active_raffles(env: &Env, active_raffles: &Vec<u64>) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::ActiveRaffles, active_raffles);
+}
+
+fn add_active_raffle(env: &Env, raffle_id: u64) {
+    let mut active_raffles = read_active_raffles(env);
+    active_raffles.push_back(raffle_id);
+    write_active_raffles(env, &active_raffles);
+}
+
+fn remove_active_raffle(env: &Env, raffle_id: u64) {
+    let mut active_raffles = read_active_raffles(env);
+    let mut new_active = Vec::new(env);
+    for i in 0..active_raffles.len() {
+        let id = active_raffles.get(i).unwrap();
+        if id != raffle_id {
+            new_active.push_back(id);
+        }
+    }
+    write_active_raffles(env, &new_active);
 }
 
 #[contractimpl]
@@ -163,6 +195,7 @@ impl Contract {
             winner: None,
         };
         write_raffle(&env, &raffle);
+        add_active_raffle(&env, raffle_id);
         raffle_id
     }
 
@@ -350,6 +383,7 @@ impl Contract {
         raffle.is_active = false;
         raffle.winner = Some(winner.clone());
         write_raffle(&env, &raffle);
+        remove_active_raffle(&env, raffle_id);
         winner
     }
 
@@ -389,20 +423,13 @@ impl Contract {
         token_client.transfer(&contract_address, &winner, &net_amount);
 
         env.events().publish(
-            (Symbol::new(&env, "PrizeClaimed"), raffle_id),
-            PrizeClaimed {
-                raffle_id,
-                winner: winner.clone(),
-                gross_amount,
-                net_amount,
-                platform_fee,
-                claimed_at,
-            },
+            (symbol_short!("prize"), raffle_id),
+            (winner.clone(), gross_amount, net_amount, platform_fee, claimed_at),
         );
 
         raffle.prize_claimed = true;
         write_raffle(&env, &raffle);
-        prize_amount
+        net_amount
     }
 
     /// Retrieves raffle information by ID.
@@ -428,6 +455,34 @@ impl Contract {
     /// * `Vec<Address>` - Vector of addresses representing ticket buyers
     pub fn get_tickets(env: Env, raffle_id: u64) -> Vec<Address> {
         read_tickets(&env, raffle_id)
+    }
+
+    pub fn get_active_raffle_ids(env: Env, offset: u32, limit: u32) -> Vec<u64> {
+        let capped_limit = if limit > 100 { 100 } else { limit };
+        let all_active = read_active_raffles(&env);
+        let current_time = env.ledger().timestamp();
+        let mut result = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..all_active.len() {
+            if count >= capped_limit {
+                break;
+            }
+            let raffle_id = all_active.get(i).unwrap();
+            let raffle = read_raffle(&env, raffle_id);
+            
+            if raffle.is_active && raffle.end_time > current_time {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                result.push_back(raffle_id);
+                count += 1;
+            }
+        }
+
+        result
     }
 }
 
