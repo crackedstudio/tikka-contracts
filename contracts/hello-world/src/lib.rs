@@ -47,6 +47,17 @@ pub enum DataKey {
     ActiveRaffles,
 }
 
+#[derive(Clone)]
+#[contracttype]
+pub struct TicketPurchased {
+    pub raffle_id: u64,
+    pub buyer: Address,
+    pub ticket_ids: Vec<u32>,
+    pub quantity: u32,
+    pub total_paid: i128,
+    pub timestamp: u64,
+}
+
 fn read_raffle(env: &Env, raffle_id: u64) -> Raffle {
     env.storage()
         .persistent()
@@ -270,6 +281,104 @@ impl Contract {
         raffle.tickets_sold += 1;
         write_ticket_count(&env, raffle_id, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
+
+        // Calculate ticket ID (1-indexed)
+        let ticket_id = raffle.tickets_sold;
+        let quantity = 1u32;
+        let total_paid = raffle.ticket_price;
+        let timestamp = env.ledger().timestamp();
+
+        // Create ticket_ids vector with single ticket ID
+        let mut ticket_ids = Vec::new(&env);
+        ticket_ids.push_back(ticket_id);
+
+        // Emit TicketPurchased event
+        env.events().publish(
+            (symbol_short!("TktPurch"),),
+            TicketPurchased {
+                raffle_id,
+                buyer: buyer.clone(),
+                ticket_ids,
+                quantity,
+                total_paid,
+                timestamp,
+            },
+        );
+
+        raffle.tickets_sold
+    }
+
+    pub fn buy_tickets(env: Env, raffle_id: u64, buyer: Address, quantity: u32) -> u32 {
+        buyer.require_auth();
+        let mut raffle = read_raffle(&env, raffle_id);
+        
+        // Validate quantity
+        if quantity == 0 {
+            panic!("quantity_zero");
+        }
+        
+        if !raffle.is_active {
+            panic!("raffle_inactive");
+        }
+        if env.ledger().timestamp() > raffle.end_time {
+            panic!("raffle_ended");
+        }
+        
+        // Check if we have enough tickets available
+        let remaining_tickets = raffle.max_tickets - raffle.tickets_sold;
+        if quantity > remaining_tickets {
+            panic!("insufficient_tickets");
+        }
+
+        let current_count = read_ticket_count(&env, raffle_id, &buyer);
+        if !raffle.allow_multiple && current_count > 0 {
+            panic!("multiple_tickets_not_allowed");
+        }
+
+        // Calculate total payment
+        let total_payment = raffle.ticket_price
+            .checked_mul(quantity as i128)
+            .unwrap_or_else(|| panic!("payment_overflow"));
+
+        // Transfer tokens for all tickets
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&buyer, &contract_address, &total_payment);
+
+        // Generate ticket IDs (1-indexed, sequential)
+        let start_ticket_id = raffle.tickets_sold + 1;
+        let mut ticket_ids = Vec::new(&env);
+        for i in 0..quantity {
+            ticket_ids.push_back(start_ticket_id + i);
+        }
+
+        // Update tickets list (add buyer address for each ticket)
+        let mut tickets = read_tickets(&env, raffle_id);
+        for _ in 0..quantity {
+            tickets.push_back(buyer.clone());
+        }
+        write_tickets(&env, raffle_id, &tickets);
+
+        // Update raffle state
+        raffle.tickets_sold += quantity;
+        write_ticket_count(&env, raffle_id, &buyer, current_count + quantity);
+        write_raffle(&env, &raffle);
+
+        // Get timestamp
+        let timestamp = env.ledger().timestamp();
+
+        // Emit TicketPurchased event with all ticket IDs
+        env.events().publish(
+            (symbol_short!("TktPurch"),),
+            TicketPurchased {
+                raffle_id,
+                buyer: buyer.clone(),
+                ticket_ids,
+                quantity,
+                total_paid: total_payment,
+                timestamp,
+            },
+        );
 
         raffle.tickets_sold
     }
