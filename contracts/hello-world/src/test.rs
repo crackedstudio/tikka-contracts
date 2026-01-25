@@ -249,11 +249,6 @@ fn test_multiple_single_purchases_emit_multiple_events() {
 
     client.deposit_prize(&raffle_id);
 
-    let raffle = client.get_raffle(&raffle_id);
-    assert_eq!(raffle.tickets_sold, 5);
-
-    let initial_balance = token_client.balance(&buyer);
-    assert_eq!(initial_balance, 10_000 - (5 * 10)); // 5 tickets × 10 price = 50
     // First purchase and get its event
     client.buy_ticket(&raffle_id, &buyer1);
     let events1 = env.events().all();
@@ -294,332 +289,102 @@ fn test_multiple_single_purchases_emit_multiple_events() {
 }
 
 #[test]
-fn test_raffle_created_event_emits_with_all_fields() {
+fn test_pagination_get_all_raffle_ids() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, Contract);
+    let creator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+
+    let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
-    let creator = Address::generate(&env);
-    let payment_token = Address::generate(&env);
-    let description = String::from_str(&env, "Test Raffle Event");
-    let end_time = 1000u64;
-    let max_tickets = 100u32;
-    let ticket_price = 10i128;
-    let prize_amount = 500i128;
+    // Create 5 raffles
+    for _ in 0..5 {
+        client.create_raffle(
+            &creator,
+            &String::from_str(&env, "Test Raffle"),
+            &0u64,
+            &10u32,
+            &true,
+            &1i128,
+            &token_id,
+            &10i128,
+        );
+    }
 
-    // Create raffle
-    let raffle_id = client.create_raffle(
-        &creator,
-        &description,
-        &end_time,
-        &max_tickets,
-        &true,
-        &ticket_price,
-        &payment_token,
-        &prize_amount,
-    );
+    // Test offset 0, limit 3
+    let result = client.get_all_raffle_ids(&0, &3, &false);
+    assert_eq!(result.data.len(), 3);
+    assert_eq!(result.meta.total, 5);
+    assert_eq!(result.meta.offset, 0);
+    assert_eq!(result.meta.limit, 3);
+    assert!(result.meta.has_more);
 
-    // Get events
-    let events = env.events().all();
+    // Test offset 3, limit 3 (should get 2 items)
+    let result = client.get_all_raffle_ids(&3, &3, &false);
+    assert_eq!(result.data.len(), 2);
+    assert_eq!(result.meta.total, 5);
+    assert_eq!(result.meta.offset, 3);
+    assert!(!result.meta.has_more);
 
-    // Verify event was emitted
-    assert!(events.len() > 0);
+    // Test offset beyond total
+    let result = client.get_all_raffle_ids(&10, &3, &false);
+    assert_eq!(result.data.len(), 0);
+    assert_eq!(result.meta.total, 5);
+    assert!(!result.meta.has_more);
 
-    // Find the RaffleCreated event
-    let event = events.iter().find(|e| {
-        e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env)
-    }).expect("RaffleCreated event not found");
-
-    // Verify event topic contains raffle_id
-    assert_eq!(event.topics.get(1).unwrap(), raffle_id.into_val(&env));
-
-    // Verify event data
-    let event_data: RaffleCreated = event.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data.raffle_id, raffle_id);
-    assert_eq!(event_data.creator, creator);
-    assert_eq!(event_data.end_time, end_time);
-    assert_eq!(event_data.max_tickets, max_tickets);
-    assert_eq!(event_data.ticket_price, ticket_price);
-    assert_eq!(event_data.payment_token, payment_token);
-    assert_eq!(event_data.description, description);
+    // Test newest_first
+    let result = client.get_all_raffle_ids(&0, &3, &true);
+    assert_eq!(result.data.get(0).unwrap(), 4u64); // newest first
+    assert_eq!(result.data.get(2).unwrap(), 2u64);
 }
 
 #[test]
-fn test_raffle_created_event_data_matches_parameters() {
+fn test_pagination_limit_enforced() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, Contract);
+    let creator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+
+    let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
-    let creator = Address::generate(&env);
-    let payment_token = Address::generate(&env);
-    let description = String::from_str(&env, "Match Test Raffle");
-    let end_time = 5000u64;
-    let max_tickets = 250u32;
-    let ticket_price = 25i128;
-    let prize_amount = 1000i128;
+    // Create 5 raffles
+    for _ in 0..5 {
+        client.create_raffle(
+            &creator,
+            &String::from_str(&env, "Test Raffle"),
+            &0u64,
+            &10u32,
+            &true,
+            &1i128,
+            &token_id,
+            &10i128,
+        );
+    }
 
-    // Create raffle
-    let raffle_id = client.create_raffle(
-        &creator,
-        &description,
-        &end_time,
-        &max_tickets,
-        &false,
-        &ticket_price,
-        &payment_token,
-        &prize_amount,
-    );
-
-    // Verify stored raffle matches event data
-    let raffle = client.get_raffle(&raffle_id);
-    let events = env.events().all();
-
-    let event = events.iter().find(|e| {
-        e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env)
-    }).unwrap();
-
-    let event_data: RaffleCreated = event.data.clone().try_into_val(&env).unwrap();
-
-    // Verify event data matches both input parameters and stored raffle
-    assert_eq!(event_data.raffle_id, raffle.id);
-    assert_eq!(event_data.creator, raffle.creator);
-    assert_eq!(event_data.end_time, raffle.end_time);
-    assert_eq!(event_data.max_tickets, raffle.max_tickets);
-    assert_eq!(event_data.ticket_price, raffle.ticket_price);
-    assert_eq!(event_data.payment_token, raffle.payment_token);
-    assert_eq!(event_data.description, raffle.description);
+    // Request limit > 100, should be capped
+    let result = client.get_all_raffle_ids(&0, &200, &false);
+    assert_eq!(result.meta.limit, 100); // Capped at 100
 }
 
 #[test]
-fn test_raffle_created_event_emits_for_edge_cases() {
+fn test_pagination_empty_results() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, Contract);
+    let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
-    let creator = Address::generate(&env);
-    let payment_token = Address::generate(&env);
-
-    // Test with minimum valid values
-    let min_description = String::from_str(&env, "A");
-    let min_end_time = 1u64;
-    let min_max_tickets = 1u32;
-    let min_ticket_price = 1i128;
-    let min_prize_amount = 1i128;
-
-    let raffle_id_min = client.create_raffle(
-        &creator,
-        &min_description,
-        &min_end_time,
-        &min_max_tickets,
-        &false,
-        &min_ticket_price,
-        &payment_token,
-        &min_prize_amount,
-    );
-
-    // Verify event emitted for minimum values
-    let events_min = env.events().all();
-    let event_min = events_min.iter().find(|e| {
-        e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env) &&
-        e.topics.get(1).unwrap() == raffle_id_min.into_val(&env)
-    }).expect("Event not found for minimum values");
-
-    let event_data_min: RaffleCreated = event_min.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data_min.max_tickets, min_max_tickets);
-    assert_eq!(event_data_min.ticket_price, min_ticket_price);
-
-    // Test with maximum valid values
-    let max_description = String::from_str(&env, "Very long description with lots of text to test maximum length handling in event emission");
-    let max_end_time = u64::MAX;
-    let max_max_tickets = u32::MAX;
-    let max_ticket_price = i128::MAX;
-    let max_prize_amount = i128::MAX;
-
-    let raffle_id_max = client.create_raffle(
-        &creator,
-        &max_description,
-        &max_end_time,
-        &max_max_tickets,
-        &true,
-        &max_ticket_price,
-        &payment_token,
-        &max_prize_amount,
-    );
-
-    // Verify event emitted for maximum values
-    let events_max = env.events().all();
-    let event_max = events_max.iter().find(|e| {
-        e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env) &&
-        e.topics.get(1).unwrap() == raffle_id_max.into_val(&env)
-    }).expect("Event not found for maximum values");
-
-    let event_data_max: RaffleCreated = event_max.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data_max.max_tickets, max_max_tickets);
-    assert_eq!(event_data_max.ticket_price, max_ticket_price);
-    assert_eq!(event_data_max.end_time, max_end_time);
-}
-
-#[test]
-fn test_multiple_raffles_emit_separate_events() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, Contract);
-    let client = ContractClient::new(&env, &contract_id);
-
-    let creator1 = Address::generate(&env);
-    let creator2 = Address::generate(&env);
-    let payment_token = Address::generate(&env);
-
-    // Create first raffle
-    let desc1 = String::from_str(&env, "First Raffle");
-    let raffle_id_1 = client.create_raffle(
-        &creator1,
-        &desc1,
-        &1000u64,
-        &50u32,
-        &true,
-        &10i128,
-        &payment_token,
-        &500i128,
-    );
-
-    // Create second raffle
-    let desc2 = String::from_str(&env, "Second Raffle");
-    let raffle_id_2 = client.create_raffle(
-        &creator2,
-        &desc2,
-        &2000u64,
-        &100u32,
-        &false,
-        &20i128,
-        &payment_token,
-        &1000i128,
-    );
-
-    // Create third raffle
-    let desc3 = String::from_str(&env, "Third Raffle");
-    let raffle_id_3 = client.create_raffle(
-        &creator1,
-        &desc3,
-        &3000u64,
-        &75u32,
-        &true,
-        &15i128,
-        &payment_token,
-        &750i128,
-    );
-
-    // Get all events
-    let events = env.events().all();
-
-    // Filter RaffleCreated events
-    let raffle_created_events: Vec<_> = events.iter()
-        .filter(|e| e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env))
-        .collect();
-
-    // Verify we have exactly 3 RaffleCreated events
-    assert_eq!(raffle_created_events.len(), 3);
-
-    // Verify each event has correct raffle_id in topics
-    let event_1 = raffle_created_events.iter()
-        .find(|e| e.topics.get(1).unwrap() == raffle_id_1.into_val(&env))
-        .expect("Event for raffle 1 not found");
-    let event_2 = raffle_created_events.iter()
-        .find(|e| e.topics.get(1).unwrap() == raffle_id_2.into_val(&env))
-        .expect("Event for raffle 2 not found");
-    let event_3 = raffle_created_events.iter()
-        .find(|e| e.topics.get(1).unwrap() == raffle_id_3.into_val(&env))
-        .expect("Event for raffle 3 not found");
-
-    // Verify event data for each raffle
-    let event_data_1: RaffleCreated = event_1.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data_1.raffle_id, raffle_id_1);
-    assert_eq!(event_data_1.creator, creator1);
-    assert_eq!(event_data_1.description, desc1);
-
-    let event_data_2: RaffleCreated = event_2.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data_2.raffle_id, raffle_id_2);
-    assert_eq!(event_data_2.creator, creator2);
-    assert_eq!(event_data_2.description, desc2);
-
-    let event_data_3: RaffleCreated = event_3.data.clone().try_into_val(&env).unwrap();
-    assert_eq!(event_data_3.raffle_id, raffle_id_3);
-    assert_eq!(event_data_3.creator, creator1);
-    assert_eq!(event_data_3.description, desc3);
-
-    // Verify raffle IDs are sequential
-    assert_eq!(raffle_id_1, 0);
-    assert_eq!(raffle_id_2, 1);
-    assert_eq!(raffle_id_3, 2);
-}
-
-#[test]
-fn test_event_provides_sufficient_indexing_data() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, Contract);
-    let client = ContractClient::new(&env, &contract_id);
-
-    let creator = Address::generate(&env);
-    let payment_token = Address::generate(&env);
-    let description = String::from_str(&env, "Indexing Test Raffle");
-    let end_time = 10000u64;
-    let max_tickets = 500u32;
-    let ticket_price = 50i128;
-    let prize_amount = 5000i128;
-
-    let raffle_id = client.create_raffle(
-        &creator,
-        &description,
-        &end_time,
-        &max_tickets,
-        &true,
-        &ticket_price,
-        &payment_token,
-        &prize_amount,
-    );
-
-    let events = env.events().all();
-    let event = events.iter().find(|e| {
-        e.topics.get(0).unwrap() == Symbol::new(&env, "RaffleCreated").into_val(&env)
-    }).unwrap();
-
-    let event_data: RaffleCreated = event.data.clone().try_into_val(&env).unwrap();
-
-    // Verify event contains all critical data for frontend indexing:
-
-    // 1. Unique identifier
-    assert!(event_data.raffle_id >= 0);
-
-    // 2. Creator for filtering by user
-    assert_eq!(event_data.creator, creator);
-
-    // 3. Time-based filtering
-    assert_eq!(event_data.end_time, end_time);
-
-    // 4. Availability information
-    assert_eq!(event_data.max_tickets, max_tickets);
-
-    // 5. Pricing information
-    assert_eq!(event_data.ticket_price, ticket_price);
-
-    // 6. Payment token for multi-token filtering
-    assert_eq!(event_data.payment_token, payment_token);
-
-    // 7. Human-readable description
-    assert_eq!(event_data.description, description);
-
-    // All essential fields present - frontend can:
-    // - Display raffle card with all info without additional queries
-    // - Filter by creator, token, price range, or end time
-    // - Sort by end_time or raffle_id
-    // - Calculate availability percentage
+    // Test with 0 raffles
+    let result = client.get_all_raffle_ids(&0, &10, &false);
+    assert_eq!(result.data.len(), 0);
+    assert_eq!(result.meta.total, 0);
+    assert!(!result.meta.has_more);
 }

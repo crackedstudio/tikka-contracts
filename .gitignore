@@ -22,3 +22,10 @@ CLAUDE.md
 
 # Test snapshots
 test_snapshots/
+
+# Skills
+.windsurf/
+# ./skills
+requirements.md
+.github/skills/rust-blockchain/
+.github/skills/senior-fullstack
