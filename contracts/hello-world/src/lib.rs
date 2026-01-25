@@ -1,7 +1,7 @@
 #![no_std]
 use core::cmp::min;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
 
 #[contract]
@@ -52,6 +52,16 @@ pub struct RaffleWithStats {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct Ticket {
+    pub id: u32,
+    pub raffle_id: u64,
+    pub buyer: Address,
+    pub purchase_time: u64,
+    pub ticket_number: u32,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub struct PrizeClaimed {
     pub raffle_id: u64,
     pub winner: Address,
@@ -68,6 +78,20 @@ pub enum DataKey {
     Raffle(u64),
     Tickets(u64),
     TicketCount(u64, Address),
+    ActiveRaffles,
+    Ticket(u64, u32),
+    NextTicketId(u64),
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct TicketPurchased {
+    pub raffle_id: u64,
+    pub buyer: Address,
+    pub ticket_ids: Vec<u32>,
+    pub quantity: u32,
+    pub total_paid: i128,
+    pub timestamp: u64,
 }
 
 fn read_raffle(env: &Env, raffle_id: u64) -> Raffle {
@@ -150,6 +174,62 @@ fn next_raffle_id(env: &Env) -> u64 {
     current
 }
 
+fn read_active_raffles(env: &Env) -> Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ActiveRaffles)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn write_active_raffles(env: &Env, active_raffles: &Vec<u64>) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::ActiveRaffles, active_raffles);
+}
+
+fn add_active_raffle(env: &Env, raffle_id: u64) {
+    let mut active_raffles = read_active_raffles(env);
+    active_raffles.push_back(raffle_id);
+    write_active_raffles(env, &active_raffles);
+}
+
+fn remove_active_raffle(env: &Env, raffle_id: u64) {
+    let mut active_raffles = read_active_raffles(env);
+    let mut new_active = Vec::new(env);
+    for i in 0..active_raffles.len() {
+        let id = active_raffles.get(i).unwrap();
+        if id != raffle_id {
+            new_active.push_back(id);
+        }
+    }
+    write_active_raffles(env, &new_active);
+}
+
+fn next_ticket_id(env: &Env, raffle_id: u64) -> u32 {
+    let current = env
+        .storage()
+        .persistent()
+        .get(&DataKey::NextTicketId(raffle_id))
+        .unwrap_or(0u32);
+    let next = current + 1;
+    env.storage()
+        .persistent()
+        .set(&DataKey::NextTicketId(raffle_id), &next);
+    next
+}
+
+fn write_ticket(env: &Env, raffle_id: u64, ticket: &Ticket) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Ticket(raffle_id, ticket.id), ticket);
+}
+
+fn read_ticket(env: &Env, raffle_id: u64, ticket_id: u32) -> Option<Ticket> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Ticket(raffle_id, ticket_id))
+}
+
 #[contractimpl]
 impl Contract {
     /// Creates a new raffle with the specified parameters.
@@ -216,6 +296,7 @@ impl Contract {
             winner: None,
         };
         write_raffle(&env, &raffle);
+        add_active_raffle(&env, raffle_id);
         raffle_id
     }
 
@@ -282,6 +363,21 @@ impl Contract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&buyer, &contract_address, &raffle.ticket_price);
 
+        // Generate next ticket ID
+        let ticket_id = next_ticket_id(&env, raffle_id);
+        let timestamp = env.ledger().timestamp();
+
+        // Create and store Ticket struct
+        let ticket = Ticket {
+            id: ticket_id,
+            raffle_id,
+            buyer: buyer.clone(),
+            purchase_time: timestamp,
+            ticket_number: raffle.tickets_sold + 1,
+        };
+        write_ticket(&env, raffle_id, &ticket);
+
+        // Maintain backward compatibility with Vec<Address>
         let mut tickets = read_tickets(&env, raffle_id);
         tickets.push_back(buyer.clone());
         write_tickets(&env, raffle_id, &tickets);
@@ -290,9 +386,107 @@ impl Contract {
         write_ticket_count(&env, raffle_id, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
 
+        // Create ticket_ids vector with single ticket ID
+        let mut ticket_ids = Vec::new(&env);
+        ticket_ids.push_back(ticket_id);
+
+        // Emit TicketPurchased event
+        env.events().publish(
+            (symbol_short!("TktPurch"),),
+            TicketPurchased {
+                raffle_id,
+                buyer: buyer.clone(),
+                ticket_ids,
+                quantity: 1u32,
+                total_paid: raffle.ticket_price,
+                timestamp,
+            },
+        );
+
         raffle.tickets_sold
     }
 
+    pub fn buy_tickets(env: Env, raffle_id: u64, buyer: Address, quantity: u32) -> u32 {
+        buyer.require_auth();
+        let mut raffle = read_raffle(&env, raffle_id);
+        
+        // Validate quantity
+        if quantity == 0 {
+            panic!("quantity_zero");
+        }
+        
+        if !raffle.is_active {
+            panic!("raffle_inactive");
+        }
+        if env.ledger().timestamp() > raffle.end_time {
+            panic!("raffle_ended");
+        }
+        
+        // Check if we have enough tickets available
+        let remaining_tickets = raffle.max_tickets - raffle.tickets_sold;
+        if quantity > remaining_tickets {
+            panic!("insufficient_tickets");
+        }
+
+        let current_count = read_ticket_count(&env, raffle_id, &buyer);
+        if !raffle.allow_multiple && current_count > 0 {
+            panic!("multiple_tickets_not_allowed");
+        }
+
+        // Calculate total payment
+        let total_payment = raffle.ticket_price
+            .checked_mul(quantity as i128)
+            .unwrap_or_else(|| panic!("payment_overflow"));
+
+        // Transfer tokens for all tickets
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&buyer, &contract_address, &total_payment);
+
+        let timestamp = env.ledger().timestamp();
+        let mut ticket_ids = Vec::new(&env);
+
+        // Create individual Ticket structs for each purchase
+        for i in 0..quantity {
+            let ticket_id = next_ticket_id(&env, raffle_id);
+            let ticket = Ticket {
+                id: ticket_id,
+                raffle_id,
+                buyer: buyer.clone(),
+                purchase_time: timestamp,
+                ticket_number: raffle.tickets_sold + i + 1,
+            };
+            write_ticket(&env, raffle_id, &ticket);
+            ticket_ids.push_back(ticket_id);
+        }
+
+        // Maintain backward compatibility with Vec<Address>
+        let mut tickets = read_tickets(&env, raffle_id);
+        for _ in 0..quantity {
+            tickets.push_back(buyer.clone());
+        }
+        write_tickets(&env, raffle_id, &tickets);
+
+        // Update raffle state
+        raffle.tickets_sold += quantity;
+        write_ticket_count(&env, raffle_id, &buyer, current_count + quantity);
+        write_raffle(&env, &raffle);
+
+        // Emit TicketPurchased event with all ticket IDs
+        env.events().publish(
+            (symbol_short!("TktPurch"),),
+            TicketPurchased {
+                raffle_id,
+                buyer: buyer.clone(),
+                ticket_ids,
+                quantity,
+                total_paid: total_payment,
+                timestamp,
+            },
+        );
+
+        raffle.tickets_sold
+    }
 
     /// Finalizes a raffle and selects a winner.
     ///
@@ -308,78 +502,6 @@ impl Contract {
     /// * If the raffle has not ended yet
     /// * If no tickets were sold
 
-    /// Purchases multiple tickets for the specified raffle in a single transaction.
-    ///
-    /// # Arguments
-    /// * `raffle_id` - The ID of the raffle
-    /// * `buyer` - The address purchasing the tickets (must be authenticated)
-    /// * `quantity` - The number of tickets to purchase
-    ///
-    /// # Returns
-    /// * `u32` - The total number of tickets sold for this raffle after purchase
-    ///
-    /// # Panics
-    /// * If quantity is zero
-    /// * If the raffle is inactive
-    /// * If the raffle has ended
-    /// * If quantity exceeds available tickets (max_tickets - tickets_sold)
-    /// * If multiple tickets are not allowed and buyer already has tickets
-    /// * If multiple tickets are not allowed and quantity > 1
-    pub fn buy_tickets(env: Env, raffle_id: u64, buyer: Address, quantity: u32) -> u32 {
-        buyer.require_auth();
-        
-        if quantity == 0 {
-            panic!("quantity_zero");
-        }
-        
-        let mut raffle = read_raffle(&env, raffle_id);
-        if !raffle.is_active {
-            panic!("raffle_inactive");
-        }
-        if env.ledger().timestamp() > raffle.end_time {
-            panic!("raffle_ended");
-        }
-        
-        let available_tickets = raffle.max_tickets - raffle.tickets_sold;
-        if quantity > available_tickets {
-            panic!("insufficient_tickets_available");
-        }
-
-        let current_count = read_ticket_count(&env, raffle_id, &buyer);
-        if !raffle.allow_multiple {
-            if current_count > 0 {
-                panic!("multiple_tickets_not_allowed");
-            }
-            if quantity > 1 {
-                panic!("multiple_tickets_not_allowed");
-            }
-        }
-
-        // Calculate total cost: quantity × ticket_price
-        let total_cost = raffle
-            .ticket_price
-            .checked_mul(quantity as i128)
-            .unwrap_or_else(|| panic!("cost_overflow"));
-
-        // Process single payment transfer
-        let token_client = token::Client::new(&env, &raffle.payment_token);
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&buyer, &contract_address, &total_cost);
-
-        // Add tickets to storage
-        let mut tickets = read_tickets(&env, raffle_id);
-        for _ in 0..quantity {
-            tickets.push_back(buyer.clone());
-        }
-        write_tickets(&env, raffle_id, &tickets);
-
-        // Update raffle state
-        raffle.tickets_sold += quantity;
-        write_ticket_count(&env, raffle_id, &buyer, current_count + quantity);
-        write_raffle(&env, &raffle);
-
-        raffle.tickets_sold
-    }
 
 
     pub fn finalize_raffle(env: Env, raffle_id: u64) -> Address {
@@ -403,6 +525,7 @@ impl Contract {
         raffle.is_active = false;
         raffle.winner = Some(winner.clone());
         write_raffle(&env, &raffle);
+        remove_active_raffle(&env, raffle_id);
         winner
     }
 
@@ -433,7 +556,7 @@ impl Contract {
         }
 
         let gross_amount = raffle.prize_amount;
-        let platform_fee = 0i128; 
+        let platform_fee = 0i128;
         let net_amount = gross_amount - platform_fee;
         let claimed_at = env.ledger().timestamp();
 
@@ -442,15 +565,14 @@ impl Contract {
         token_client.transfer(&contract_address, &winner, &net_amount);
 
         env.events().publish(
-            (Symbol::new(&env, "PrizeClaimed"), raffle_id),
-            PrizeClaimed {
-                raffle_id,
-                winner: winner.clone(),
+            (symbol_short!("prize"), raffle_id),
+            (
+                winner.clone(),
                 gross_amount,
                 net_amount,
                 platform_fee,
                 claimed_at,
-            },
+            ),
         );
 
         raffle.prize_claimed = true;
@@ -570,15 +692,89 @@ impl Contract {
         result
     }
 
-    /// Retrieves all ticket buyers for a raffle.
+    /// Retrieves all tickets for a raffle as Ticket structs.
     ///
     /// # Arguments
     /// * `raffle_id` - The ID of the raffle
     ///
     /// # Returns
-    /// * `Vec<Address>` - Vector of addresses representing ticket buyers
-    pub fn get_tickets(env: Env, raffle_id: u64) -> Vec<Address> {
-        read_tickets(&env, raffle_id)
+    /// * `Vec<Ticket>` - Vector of Ticket structs with full metadata
+    pub fn get_tickets(env: Env, raffle_id: u64) -> Vec<Ticket> {
+        let raffle = read_raffle(&env, raffle_id);
+        let mut tickets = Vec::new(&env);
+        
+        // Read all tickets based on tickets_sold count
+        for ticket_num in 1..=raffle.tickets_sold {
+            if let Some(ticket) = read_ticket(&env, raffle_id, ticket_num) {
+                tickets.push_back(ticket);
+            }
+        }
+        
+        tickets
+    }
+
+    /// Retrieves a specific ticket by its ID.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    /// * `ticket_id` - The ID of the ticket to retrieve
+    ///
+    /// # Returns
+    /// * `Option<Ticket>` - The ticket if found, None otherwise
+    pub fn get_ticket(env: Env, raffle_id: u64, ticket_id: u32) -> Option<Ticket> {
+        read_ticket(&env, raffle_id, ticket_id)
+    }
+
+    /// Retrieves all tickets purchased by a specific buyer for a raffle.
+    ///
+    /// # Arguments
+    /// * `raffle_id` - The ID of the raffle
+    /// * `buyer` - The address of the buyer
+    ///
+    /// # Returns
+    /// * `Vec<Ticket>` - Vector of Ticket structs purchased by the buyer
+    pub fn get_tickets_by_buyer(env: Env, raffle_id: u64, buyer: Address) -> Vec<Ticket> {
+        let raffle = read_raffle(&env, raffle_id);
+        let mut buyer_tickets = Vec::new(&env);
+        
+        // Iterate through all tickets and filter by buyer
+        for ticket_num in 1..=raffle.tickets_sold {
+            if let Some(ticket) = read_ticket(&env, raffle_id, ticket_num) {
+                if ticket.buyer == buyer {
+                    buyer_tickets.push_back(ticket);
+                }
+            }
+        }
+        
+        buyer_tickets
+    }
+
+    pub fn get_active_raffle_ids(env: Env, offset: u32, limit: u32) -> Vec<u64> {
+        let capped_limit = if limit > 100 { 100 } else { limit };
+        let all_active = read_active_raffles(&env);
+        let current_time = env.ledger().timestamp();
+        let mut result = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..all_active.len() {
+            if count >= capped_limit {
+                break;
+            }
+            let raffle_id = all_active.get(i).unwrap();
+            let raffle = read_raffle(&env, raffle_id);
+
+            if raffle.is_active && raffle.end_time > current_time {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                result.push_back(raffle_id);
+                count += 1;
+            }
+        }
+
+        result
     }
 }
 
