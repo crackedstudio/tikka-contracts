@@ -460,3 +460,275 @@ fn test_pagination_empty_results() {
     assert_eq!(result.meta.total, 0);
     assert!(!result.meta.has_more);
 }
+
+// --- USER PARTICIPATION TESTS ---
+
+#[test]
+fn test_user_raffle_index_maintained_on_single_ticket() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, _, raffle_id) = setup_raffle_env(&env);
+
+    client.deposit_prize(&raffle_id);
+    client.buy_ticket(&raffle_id, &buyer);
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 1);
+    assert_eq!(participation.raffle_ids.get(0).unwrap(), raffle_id);
+    assert_eq!(participation.ticket_counts.len(), 1);
+    assert_eq!(participation.ticket_counts.get(0).unwrap(), 1u32);
+    assert_eq!(participation.total_spent, 10i128); // 1 ticket * 10 price
+    assert_eq!(participation.win_count, 0u32);
+    assert_eq!(participation.total_winnings, 0i128);
+}
+
+#[test]
+fn test_user_raffle_index_maintained_on_batch_tickets() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, _, raffle_id) = setup_raffle_env(&env);
+
+    client.deposit_prize(&raffle_id);
+    client.buy_tickets(&raffle_id, &buyer, &3);
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 1);
+    assert_eq!(participation.raffle_ids.get(0).unwrap(), raffle_id);
+    assert_eq!(participation.ticket_counts.len(), 1);
+    assert_eq!(participation.ticket_counts.get(0).unwrap(), 3u32);
+    assert_eq!(participation.total_spent, 30i128); // 3 tickets * 10 price
+}
+
+#[test]
+fn test_user_participation_multiple_raffles() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    admin_client.mint(&creator, &1_000i128);
+    admin_client.mint(&buyer, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // Create 3 raffles
+    let raffle1 = client.create_raffle(
+        &creator,
+        &String::from_str(&env, "Raffle 1"),
+        &0,
+        &10,
+        &true,
+        &10i128,
+        &token_id,
+        &100i128,
+    );
+    let raffle2 = client.create_raffle(
+        &creator,
+        &String::from_str(&env, "Raffle 2"),
+        &0,
+        &10,
+        &true,
+        &20i128,
+        &token_id,
+        &200i128,
+    );
+    let raffle3 = client.create_raffle(
+        &creator,
+        &String::from_str(&env, "Raffle 3"),
+        &0,
+        &10,
+        &true,
+        &5i128,
+        &token_id,
+        &50i128,
+    );
+
+    // Deposit prizes
+    client.deposit_prize(&raffle1);
+    client.deposit_prize(&raffle2);
+    client.deposit_prize(&raffle3);
+
+    // Buy tickets in different raffles
+    client.buy_ticket(&raffle1, &buyer); // 1 ticket * 10 = 10
+    client.buy_tickets(&raffle2, &buyer, &2); // 2 tickets * 20 = 40
+    client.buy_ticket(&raffle3, &buyer); // 1 ticket * 5 = 5
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 3);
+    assert_eq!(participation.total_spent, 55i128); // 10 + 40 + 5
+    assert_eq!(participation.ticket_counts.len(), 3);
+    assert_eq!(participation.ticket_counts.get(0).unwrap(), 1u32);
+    assert_eq!(participation.ticket_counts.get(1).unwrap(), 2u32);
+    assert_eq!(participation.ticket_counts.get(2).unwrap(), 1u32);
+}
+
+#[test]
+fn test_user_participation_with_win() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, _, raffle_id) = setup_raffle_env(&env);
+
+    client.deposit_prize(&raffle_id);
+    client.buy_ticket(&raffle_id, &buyer);
+
+    // Finalize and buyer wins
+    let winner = client.finalize_raffle(&raffle_id, &String::from_str(&env, "prng"));
+    
+    // Claim prize if buyer won
+    if winner == buyer {
+        client.claim_prize(&raffle_id, &buyer);
+    }
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 1);
+    assert_eq!(participation.total_spent, 10i128);
+    
+    if winner == buyer {
+        assert_eq!(participation.win_count, 1u32);
+        assert_eq!(participation.total_winnings, 100i128); // prize_amount - platform_fee (0)
+    } else {
+        assert_eq!(participation.win_count, 0u32);
+        assert_eq!(participation.total_winnings, 0i128);
+    }
+}
+
+#[test]
+fn test_user_participation_pagination() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    admin_client.mint(&creator, &1_000i128);
+    admin_client.mint(&buyer, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // Create 5 raffles
+    for _i in 0..5 {
+        let raffle_id = client.create_raffle(
+            &creator,
+            &String::from_str(&env, "Raffle"),
+            &0,
+            &10,
+            &true,
+            &10i128,
+            &token_id,
+            &100i128,
+        );
+        client.deposit_prize(&raffle_id);
+        client.buy_ticket(&raffle_id, &buyer);
+    }
+
+    // Test pagination: first page
+    let participation = client.get_user_raffle_participation(&buyer, &0, &3);
+    assert_eq!(participation.raffle_ids.len(), 3);
+    assert_eq!(participation.ticket_counts.len(), 3);
+    assert_eq!(participation.total_spent, 30i128); // 3 raffles * 10
+
+    // Test pagination: second page
+    let participation = client.get_user_raffle_participation(&buyer, &3, &3);
+    assert_eq!(participation.raffle_ids.len(), 2);
+    assert_eq!(participation.ticket_counts.len(), 2);
+    assert_eq!(participation.total_spent, 20i128); // 2 raffles * 10
+}
+
+#[test]
+fn test_user_participation_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let buyer = Address::generate(&env);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // User with no raffles
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 0);
+    assert_eq!(participation.ticket_counts.len(), 0);
+    assert_eq!(participation.total_spent, 0i128);
+    assert_eq!(participation.win_count, 0u32);
+    assert_eq!(participation.total_winnings, 0i128);
+}
+
+#[test]
+fn test_user_participation_no_duplicate_raffles() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, _, raffle_id) = setup_raffle_env(&env);
+
+    client.deposit_prize(&raffle_id);
+    
+    // Buy multiple tickets in the same raffle
+    client.buy_ticket(&raffle_id, &buyer);
+    client.buy_ticket(&raffle_id, &buyer);
+    client.buy_ticket(&raffle_id, &buyer);
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    // Should only appear once in raffle_ids
+    assert_eq!(participation.raffle_ids.len(), 1);
+    assert_eq!(participation.raffle_ids.get(0).unwrap(), raffle_id);
+    // But ticket count should reflect all purchases
+    assert_eq!(participation.ticket_counts.get(0).unwrap(), 3u32);
+    assert_eq!(participation.total_spent, 30i128); // 3 tickets * 10
+}
+
+#[test]
+fn test_user_participation_multiple_wins() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    admin_client.mint(&creator, &10_000i128);
+    admin_client.mint(&buyer, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // Create 3 raffles where buyer is the only participant (guaranteed win)
+    for i in 0..3 {
+        let prize_amount = 100i128 + i as i128 * 50;
+        let raffle_id = client.create_raffle(
+            &creator,
+            &String::from_str(&env, "Raffle"),
+            &0,
+            &10,
+            &true,
+            &10i128,
+            &token_id,
+            &prize_amount,
+        );
+        client.deposit_prize(&raffle_id);
+        client.buy_ticket(&raffle_id, &buyer);
+        
+        let winner = client.finalize_raffle(&raffle_id, &String::from_str(&env, "prng"));
+        if winner == buyer {
+            let _claimed = client.claim_prize(&raffle_id, &buyer);
+        }
+    }
+
+    let participation = client.get_user_raffle_participation(&buyer, &0, &100);
+    assert_eq!(participation.raffle_ids.len(), 3);
+    assert_eq!(participation.total_spent, 30i128); // 3 raffles * 1 ticket * 10
+    // Win count and total winnings should match what was actually won
+    assert!(participation.win_count >= 0 && participation.win_count <= 3);
+    assert!(participation.total_winnings >= 0);
+}

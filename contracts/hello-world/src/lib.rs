@@ -118,6 +118,7 @@ pub enum DataKey {
     ActiveRaffles,
     Ticket(u64, u32),
     NextTicketId(u64),
+    UserRaffles(Address),
 }
 
 // --- Error Types ---
@@ -203,6 +204,17 @@ pub struct PaginatedRaffleIds {
 pub struct PaginatedTickets {
     pub data: Vec<Address>,
     pub meta: PaginationMeta,
+}
+
+/// User participation data for raffles
+#[derive(Clone)]
+#[contracttype]
+pub struct UserParticipation {
+    pub raffle_ids: Vec<u64>,
+    pub ticket_counts: Vec<u32>,
+    pub total_spent: i128,
+    pub win_count: u32,
+    pub total_winnings: i128,
 }
 
 const MAX_PAGE_LIMIT: u32 = 100;
@@ -343,6 +355,35 @@ fn read_ticket(env: &Env, raffle_id: u64, ticket_id: u32) -> Option<Ticket> {
         .get(&DataKey::Ticket(raffle_id, ticket_id))
 }
 
+fn read_user_raffles(env: &Env, user: &Address) -> Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UserRaffles(user.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn write_user_raffles(env: &Env, user: &Address, raffle_ids: &Vec<u64>) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserRaffles(user.clone()), raffle_ids);
+}
+
+fn add_user_raffle(env: &Env, user: &Address, raffle_id: u64) {
+    let mut user_raffles = read_user_raffles(env, user);
+    // Check if raffle_id is already in the list
+    let mut found = false;
+    for i in 0..user_raffles.len() {
+        if user_raffles.get(i).unwrap() == raffle_id {
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        user_raffles.push_back(raffle_id);
+        write_user_raffles(env, user, &user_raffles);
+    }
+}
+
 // --- Contract Implementation ---
 
 #[contractimpl]
@@ -467,6 +508,7 @@ impl Contract {
         raffle.tickets_sold += 1;
         write_ticket_count(&env, raffle_id, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
+        add_user_raffle(&env, &buyer, raffle_id);
 
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
@@ -571,6 +613,7 @@ impl Contract {
         raffle.tickets_sold += quantity;
         write_ticket_count(&env, raffle_id, &buyer, current_count + quantity);
         write_raffle(&env, &raffle);
+        add_user_raffle(&env, &buyer, raffle_id);
 
         // Emit TicketPurchased event with all ticket IDs
         TicketPurchased {
@@ -870,4 +913,89 @@ impl Contract {
             },
         }
     }
+
+    /// Retrieves comprehensive participation data for a user across all raffles with pagination.
+    ///
+    /// # Arguments
+    /// * `user` - The address of the user
+    /// * `offset` - The starting index within the user's raffle list
+    /// * `limit` - Maximum number of results (capped at 100)
+    ///
+    /// # Returns
+    /// * `UserParticipation` - Complete participation data including statistics
+    pub fn get_user_raffle_participation(
+        env: Env,
+        user: Address,
+        offset: u32,
+        limit: u32,
+    ) -> UserParticipation {
+        let capped_limit = min(limit, MAX_PAGE_LIMIT);
+        let all_user_raffles = read_user_raffles(&env, &user);
+        let total = all_user_raffles.len() as u32;
+
+        let mut raffle_ids = Vec::new(&env);
+        let mut ticket_counts = Vec::new(&env);
+        let mut total_spent = 0i128;
+        let mut win_count = 0u32;
+        let mut total_winnings = 0i128;
+
+        if capped_limit == 0 || total == 0 || offset >= total {
+            return UserParticipation {
+                raffle_ids,
+                ticket_counts,
+                total_spent,
+                win_count,
+                total_winnings,
+            };
+        }
+
+        let end = min(offset + capped_limit, total);
+        for i in offset..end {
+            let raffle_id = all_user_raffles.get(i as u32).unwrap();
+            
+            // Read raffle to get ticket price and check if user won
+            if let Ok(raffle) = read_raffle(&env, raffle_id) {
+                let ticket_count = read_ticket_count(&env, raffle_id, &user);
+                
+                // Calculate total spent for this raffle
+                let spent_for_raffle = raffle
+                    .ticket_price
+                    .checked_mul(ticket_count as i128)
+                    .unwrap_or(0i128);
+                total_spent = total_spent
+                    .checked_add(spent_for_raffle)
+                    .unwrap_or(total_spent);
+
+                // Check if user won this raffle
+                if let Some(winner) = raffle.winner {
+                    if winner == user {
+                        win_count += 1;
+                        // Calculate net winnings (prize amount minus platform fee)
+                        let platform_fee = 0i128; // Currently no platform fee
+                        let net_winnings = raffle
+                            .prize_amount
+                            .checked_sub(platform_fee)
+                            .unwrap_or(0i128);
+                        total_winnings = total_winnings
+                            .checked_add(net_winnings)
+                            .unwrap_or(total_winnings);
+                    }
+                }
+
+                raffle_ids.push_back(raffle_id);
+                ticket_counts.push_back(ticket_count);
+            }
+        }
+
+        UserParticipation {
+            raffle_ids,
+            ticket_counts,
+            total_spent,
+            win_count,
+            total_winnings,
+        }
+    }
 }
+
+#[cfg(test)]
+mod test;
