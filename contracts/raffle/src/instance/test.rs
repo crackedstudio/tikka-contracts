@@ -11,6 +11,8 @@ fn setup_raffle_env(
     env: &Env,
     source: RandomnessSource,
     oracle: Option<Address>,
+    fee_bp: u32,
+    treasury: Option<Address>,
 ) -> (
     ContractClient<'_>,
     Address,
@@ -43,6 +45,8 @@ fn setup_raffle_env(
         prize_amount: 100i128,
         randomness_source: source,
         oracle_address: oracle,
+        protocol_fee_bp: fee_bp,
+        treasury_address: treasury,
     };
 
     client.init(&factory, &creator, &config);
@@ -57,7 +61,7 @@ fn test_basic_internal_raffle_flow() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, creator, _buyer, admin_client, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None);
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
     let token_client = token::Client::new(&env, &admin_client.address);
 
     client.deposit_prize();
@@ -79,20 +83,53 @@ fn test_basic_internal_raffle_flow() {
 }
 
 #[test]
+fn test_protocol_fees() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let (client, _creator, _buyer, admin_client, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        500,
+        Some(treasury.clone()),
+    ); // 5% fee
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+    client.claim_prize(&winner);
+
+    // Prize: 100, Fee: 5% = 5, Winner: 95
+    assert_eq!(token_client.balance(&winner), 95i128);
+    assert_eq!(token_client.balance(&treasury), 5i128);
+}
+
+#[test]
 fn test_vrf_raffle_flow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    // Create a NEW environment for the contract to ensure we don't have lingering state
-    // Actually, just register the oracle as a dummy contract
     #[contract]
     pub struct DummyOracle;
     #[contractimpl]
     impl DummyOracle {}
     let oracle = env.register(DummyOracle, ());
 
-    let (client, _, _buyer, admin_client, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()));
+    let (client, _, _buyer, admin_client, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
 
@@ -113,7 +150,6 @@ fn test_vrf_raffle_flow() {
     let expected_winner_idx = (seed % 5) as u32;
     let expected_winner = buyers.get(expected_winner_idx).unwrap();
 
-    // Instead of as_contract, call via the client to simulate cross-contract call from oracle
     env.as_contract(&oracle, || {
         client.provide_randomness(&seed);
     });
@@ -135,7 +171,8 @@ fn test_raffle_finalized_event_audit() {
         l.timestamp = expected_timestamp;
     });
 
-    let (client, _, _, admin_client, _) = setup_raffle_env(&env, RandomnessSource::Internal, None);
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -163,7 +200,8 @@ fn test_single_ticket_purchase_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, buyer, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None);
+    let (client, _, buyer, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
 
@@ -182,7 +220,7 @@ fn test_raffle_cancellation() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, creator, buyer, admin_client, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None);
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
     let token_client = token::Client::new(&env, &admin_client.address);
 
     client.deposit_prize();

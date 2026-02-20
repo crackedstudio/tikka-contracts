@@ -42,6 +42,8 @@ pub struct Raffle {
     pub winner: Option<Address>,
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub treasury_address: Option<Address>,
 }
 
 #[derive(Clone)]
@@ -56,6 +58,8 @@ pub struct RaffleConfig {
     pub prize_amount: i128,
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub treasury_address: Option<Address>,
 }
 
 #[derive(Clone)]
@@ -262,6 +266,8 @@ impl Contract {
             winner: None,
             randomness_source: config.randomness_source.clone(),
             oracle_address: config.oracle_address,
+            protocol_fee_bp: config.protocol_fee_bp,
+            treasury_address: config.treasury_address,
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
@@ -504,12 +510,27 @@ impl Contract {
             return Err(Error::PrizeNotDeposited);
         }
 
-        let net_amount = raffle.prize_amount;
+        let mut platform_fee = 0i128;
+        if raffle.protocol_fee_bp > 0 {
+            platform_fee = (raffle.prize_amount * raffle.protocol_fee_bp as i128) / 10000;
+        }
+        let net_amount = raffle.prize_amount - platform_fee;
         let claimed_at = env.ledger().timestamp();
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
+
+        // Transfer net prize to winner
         token_client.transfer(&contract_address, &winner, &net_amount);
+
+        // Transfer fee to treasury if applicable
+        if platform_fee > 0 && raffle.treasury_address.is_some() {
+            token_client.transfer(
+                &contract_address,
+                &raffle.treasury_address.clone().unwrap(),
+                &platform_fee,
+            );
+        }
 
         raffle.status = RaffleStatus::Claimed;
         write_raffle(&env, &raffle);
@@ -518,7 +539,7 @@ impl Contract {
             winner: winner.clone(),
             gross_amount: raffle.prize_amount,
             net_amount,
-            platform_fee: 0,
+            platform_fee,
             claimed_at,
         }
         .publish(&env);

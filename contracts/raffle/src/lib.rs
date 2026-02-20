@@ -15,11 +15,19 @@ pub enum DataKey {
     Admin,
     RaffleInstances,
     InstanceWasmHash,
+    ProtocolFeeBP,
+    Treasury,
 }
 
 #[contractimpl]
 impl RaffleFactory {
-    pub fn init(env: Env, admin: Address, wasm_hash: Bytes) {
+    pub fn init(
+        env: Env,
+        admin: Address,
+        wasm_hash: Bytes,
+        protocol_fee_bp: u32,
+        treasury: Address,
+    ) {
         if env.storage().persistent().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -30,6 +38,23 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &Vec::<Address>::new(&env));
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Treasury, &treasury);
+    }
+
+    pub fn set_config(env: Env, protocol_fee_bp: u32, treasury: Address) {
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Treasury, &treasury);
     }
 
     pub fn create_raffle(
@@ -53,14 +78,18 @@ impl RaffleFactory {
             .get(&DataKey::InstanceWasmHash)
             .unwrap();
 
+        let protocol_fee_bp: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolFeeBP)
+            .unwrap_or(0);
+        let treasury: Address = env.storage().persistent().get(&DataKey::Treasury).unwrap();
+
         let mut _salt_src = Vec::new(&env);
         _salt_src.push_back(creator.clone());
         let _salt = env.crypto().sha256(&creator.clone().to_xdr(&env));
 
         // Deployment logic placeholder
-        // let client = instance::ContractClient::new(&env, &instance_address);
-        // let config = RaffleConfig { ... };
-        // client.init(&env.current_contract_address(), &creator, &config);
 
         let mut instances: Vec<Address> = env
             .storage()
@@ -79,6 +108,8 @@ impl RaffleFactory {
             prize_amount,
             randomness_source,
             oracle_address,
+            protocol_fee_bp,
+            treasury_address: Some(treasury),
         };
 
         instances.push_back(creator.clone());
