@@ -3,6 +3,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String, Vec,
 };
 
+mod events;
 mod instance;
 use instance::{RaffleConfig, RandomnessSource};
 

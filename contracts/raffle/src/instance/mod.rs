@@ -1,7 +1,12 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env,
-    String, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    String, Symbol, Vec,
+};
+
+use crate::events::{
+    DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated,
+    RaffleFinalized, RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
 };
 
 #[contract]
@@ -71,63 +76,15 @@ pub struct Ticket {
     pub ticket_number: u32,
 }
 
-// --- Events ---
-
-#[contractevent(topics = ["PrizeClaimed"])]
-#[derive(Clone)]
-pub struct PrizeClaimed {
-    pub winner: Address,
-    pub gross_amount: i128,
-    pub net_amount: i128,
-    pub platform_fee: i128,
-    pub claimed_at: u64,
-}
-
-#[contractevent(topics = ["RaffleInitialized"])]
-#[derive(Clone)]
-pub struct RaffleInitialized {
-    pub creator: Address,
-    pub end_time: u64,
-    pub max_tickets: u32,
-    pub ticket_price: i128,
-    pub payment_token: Address,
-    pub description: String,
-    pub randomness_source: RandomnessSource,
-}
-
-#[contractevent(topics = ["RaffleFinalized"])]
-#[derive(Clone, Debug)]
-pub struct RaffleFinalized {
-    pub winner: Address,
-    pub winning_ticket_id: u32,
-    pub total_tickets_sold: u32,
-    pub randomness_source: RandomnessSource,
-    pub finalized_at: u64,
-}
-
-#[contractevent(topics = ["TicketPurchased"])]
-#[derive(Clone)]
-pub struct TicketPurchased {
-    pub buyer: Address,
-    pub ticket_ids: Vec<u32>,
-    pub quantity: u32,
-    pub total_paid: i128,
-    pub timestamp: u64,
-}
-
-#[contractevent(topics = ["StatusChanged"])]
-#[derive(Clone)]
-pub struct StatusChanged {
-    pub old_status: RaffleStatus,
-    pub new_status: RaffleStatus,
-    pub timestamp: u64,
-}
-
-#[contractevent(topics = ["RandomnessRequested"])]
-#[derive(Clone)]
-pub struct RandomnessRequested {
-    pub oracle: Address,
-    pub timestamp: u64,
+// Helper function to publish events with standardized topics
+fn publish_event<T>(env: &Env, event_name: &str, event: T)
+where
+    T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
+{
+    env.events().publish(
+        (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
+        event,
+    );
 }
 
 #[derive(Clone)]
@@ -272,16 +229,20 @@ impl Contract {
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
 
-        RaffleInitialized {
-            creator,
-            end_time: config.end_time,
-            max_tickets: config.max_tickets,
-            ticket_price: config.ticket_price,
-            payment_token: config.payment_token,
-            description: config.description,
-            randomness_source: config.randomness_source,
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "raffle_created",
+            RaffleCreated {
+                creator,
+                end_time: config.end_time,
+                max_tickets: config.max_tickets,
+                ticket_price: config.ticket_price,
+                payment_token: config.payment_token,
+                prize_amount: config.prize_amount,
+                description: config.description,
+                randomness_source: config.randomness_source,
+            },
+        );
 
         Ok(())
     }
@@ -305,12 +266,26 @@ impl Contract {
         raffle.status = RaffleStatus::Active;
         write_raffle(&env, &raffle);
 
-        StatusChanged {
-            old_status: RaffleStatus::Proposed,
-            new_status: RaffleStatus::Active,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "prize_deposited",
+            PrizeDeposited {
+                creator: raffle.creator.clone(),
+                amount: raffle.prize_amount,
+                token: raffle.payment_token.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        publish_event(
+            &env,
+            "status_changed",
+            StatusChanged {
+                old_status: RaffleStatus::Proposed,
+                new_status: RaffleStatus::Active,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -357,12 +332,15 @@ impl Contract {
 
         if raffle.tickets_sold >= raffle.max_tickets {
             raffle.status = RaffleStatus::Drawing;
-            StatusChanged {
-                old_status: RaffleStatus::Active,
-                new_status: RaffleStatus::Drawing,
-                timestamp: env.ledger().timestamp(),
-            }
-            .publish(&env);
+            publish_event(
+                &env,
+                "status_changed",
+                StatusChanged {
+                    old_status: RaffleStatus::Active,
+                    new_status: RaffleStatus::Drawing,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
         }
 
         write_ticket_count(&env, &buyer, current_count + 1);
@@ -371,14 +349,17 @@ impl Contract {
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
 
-        TicketPurchased {
-            buyer,
-            ticket_ids,
-            quantity: 1u32,
-            total_paid: raffle.ticket_price,
-            timestamp,
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "ticket_purchased",
+            TicketPurchased {
+                buyer,
+                ticket_ids,
+                quantity: 1u32,
+                total_paid: raffle.ticket_price,
+                timestamp,
+            },
+        );
 
         Ok(raffle.tickets_sold)
     }
@@ -392,12 +373,15 @@ impl Contract {
                 || raffle.tickets_sold >= raffle.max_tickets
             {
                 raffle.status = RaffleStatus::Drawing;
-                StatusChanged {
-                    old_status: RaffleStatus::Active,
-                    new_status: RaffleStatus::Drawing,
-                    timestamp: env.ledger().timestamp(),
-                }
-                .publish(&env);
+                publish_event(
+                    &env,
+                    "status_changed",
+                    StatusChanged {
+                        old_status: RaffleStatus::Active,
+                        new_status: RaffleStatus::Drawing,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
             }
         }
 
@@ -409,17 +393,30 @@ impl Contract {
             return Err(Error::NoTicketsSold);
         }
 
+        publish_event(
+            &env,
+            "draw_triggered",
+            DrawTriggered {
+                triggered_by: raffle.creator.clone(),
+                total_tickets_sold: raffle.tickets_sold,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         if raffle.randomness_source == RandomnessSource::External {
             let oracle = raffle
                 .oracle_address
                 .as_ref()
                 .expect("Oracle missing")
                 .clone();
-            RandomnessRequested {
-                oracle,
-                timestamp: env.ledger().timestamp(),
-            }
-            .publish(&env);
+            publish_event(
+                &env,
+                "randomness_requested",
+                RandomnessRequested {
+                    oracle,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
             return Ok(());
         }
 
@@ -432,21 +429,27 @@ impl Contract {
         raffle.winner = Some(winner.clone());
         write_raffle(&env, &raffle);
 
-        RaffleFinalized {
-            winner: winner.clone(),
-            winning_ticket_id: winner_index,
-            total_tickets_sold: raffle.tickets_sold,
-            randomness_source: RandomnessSource::Internal,
-            finalized_at: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "raffle_finalized",
+            RaffleFinalized {
+                winner: winner.clone(),
+                winning_ticket_id: winner_index,
+                total_tickets_sold: raffle.tickets_sold,
+                randomness_source: RandomnessSource::Internal,
+                finalized_at: env.ledger().timestamp(),
+            },
+        );
 
-        StatusChanged {
-            old_status: RaffleStatus::Drawing,
-            new_status: RaffleStatus::Finalized,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "status_changed",
+            StatusChanged {
+                old_status: RaffleStatus::Drawing,
+                new_status: RaffleStatus::Finalized,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -477,21 +480,37 @@ impl Contract {
         raffle.winner = Some(winner.clone());
         write_raffle(&env, &raffle);
 
-        RaffleFinalized {
-            winner: winner.clone(),
-            winning_ticket_id: winner_index,
-            total_tickets_sold: raffle.tickets_sold,
-            randomness_source: RandomnessSource::External,
-            finalized_at: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "randomness_received",
+            RandomnessReceived {
+                oracle: raffle.oracle_address.clone().unwrap(),
+                seed: random_seed,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
-        StatusChanged {
-            old_status: RaffleStatus::Drawing,
-            new_status: RaffleStatus::Finalized,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "raffle_finalized",
+            RaffleFinalized {
+                winner: winner.clone(),
+                winning_ticket_id: winner_index,
+                total_tickets_sold: raffle.tickets_sold,
+                randomness_source: RandomnessSource::External,
+                finalized_at: env.ledger().timestamp(),
+            },
+        );
+
+        publish_event(
+            &env,
+            "status_changed",
+            StatusChanged {
+                old_status: RaffleStatus::Drawing,
+                new_status: RaffleStatus::Finalized,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(winner)
     }
@@ -535,21 +554,27 @@ impl Contract {
         raffle.status = RaffleStatus::Claimed;
         write_raffle(&env, &raffle);
 
-        PrizeClaimed {
-            winner: winner.clone(),
-            gross_amount: raffle.prize_amount,
-            net_amount,
-            platform_fee,
-            claimed_at,
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "prize_claimed",
+            PrizeClaimed {
+                winner: winner.clone(),
+                gross_amount: raffle.prize_amount,
+                net_amount,
+                platform_fee,
+                claimed_at,
+            },
+        );
 
-        StatusChanged {
-            old_status: RaffleStatus::Finalized,
-            new_status: RaffleStatus::Claimed,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "status_changed",
+            StatusChanged {
+                old_status: RaffleStatus::Finalized,
+                new_status: RaffleStatus::Claimed,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(net_amount)
     }
@@ -577,12 +602,26 @@ impl Contract {
 
         write_raffle(&env, &raffle);
 
-        StatusChanged {
-            old_status,
-            new_status: RaffleStatus::Cancelled,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
+        publish_event(
+            &env,
+            "raffle_cancelled",
+            RaffleCancelled {
+                creator: raffle.creator.clone(),
+                reason: String::from_str(&env, "Creator cancelled"),
+                tickets_sold: raffle.tickets_sold,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        publish_event(
+            &env,
+            "status_changed",
+            StatusChanged {
+                old_status,
+                new_status: RaffleStatus::Cancelled,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
