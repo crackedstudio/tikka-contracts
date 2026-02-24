@@ -1,0 +1,42 @@
+name: Deploy to Testnet
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    name: Build and Deploy to Testnet
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: wasm32-unknown-unknown
+
+    - name: Install Stellar CLI
+      run: |
+        curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-linux-amd64.tar.gz | tar -xz
+        sudo mv stellar-cli /usr/local/bin/stellar
+        stellar --version
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Build Contracts
+      run: cargo build --target wasm32-unknown-unknown --release
+
+    - name: Deploy Contract
+      env:
+        DEPLOYER_SECRET_KEY: ${{ secrets.DEPLOYER_SECRET_KEY }}
+      run: |
+        chmod +x ./scripts/deploy-testnet.sh
+        ./scripts/deploy-testnet.sh
