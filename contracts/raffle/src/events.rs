@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
 
-use crate::instance::{RandomnessSource, RaffleStatus};
+use crate::instance::{CancelReason, RandomnessSource, RaffleStatus};
 
 // ============================================================================
 // LIFECYCLE EVENTS
@@ -83,7 +83,7 @@ pub struct RaffleFinalized {
 #[contracttype]
 pub struct RaffleCancelled {
     pub creator: Address,
-    pub reason: String,
+    pub reason: CancelReason,
     pub tickets_sold: u32,
     pub timestamp: u64,
 }

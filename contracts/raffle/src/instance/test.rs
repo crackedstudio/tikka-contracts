@@ -415,7 +415,7 @@ fn test_raffle_cancelled_event() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    client.cancel_raffle();
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
 
     // Check that raffle_cancelled event was emitted
     assert!(env.events().all().len() > 0);
@@ -447,10 +447,51 @@ fn test_raffle_cancellation() {
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
-    client.cancel_raffle();
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
 
     assert_eq!(token_client.balance(&creator), 1000i128);
 
     let raffle = client.get_raffle();
     assert!(raffle.status == RaffleStatus::Cancelled);
+}
+
+#[test]
+fn test_refund_ticket() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _creator, buyer, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    
+    // Check ticket balances before refund
+    assert_eq!(token_client.balance(&buyer), 990i128); // 1000 - 10 ticket_price
+
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // Initial refund
+    let refunded = client.refund_ticket(&1u32);
+    assert_eq!(refunded, 10i128);
+    assert_eq!(token_client.balance(&buyer), 1000i128);
+
+    // Double refund should fail (idempotency natively checked)
+}
+
+#[test]
+#[should_panic] // Error(Contract, #20) - InvalidStateTransition (Already refunded)
+fn test_double_refund_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _creator, buyer, _admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    client.refund_ticket(&1u32);
+    client.refund_ticket(&1u32); // Panic!
 }

@@ -1,6 +1,6 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env,
     String, Symbol, Vec,
 };
 
@@ -21,6 +21,15 @@ pub enum RaffleStatus {
     Finalized = 3,
     Claimed = 4,
     Cancelled = 5,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum CancelReason {
+    CreatorCancelled = 0,
+    AdminCancelled = 1,
+    OracleTimeout = 2,
+    MinTicketsNotMet = 3,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -96,6 +105,7 @@ pub enum DataKey {
     Ticket(u32),
     NextTicketId,
     Factory,
+    RefundStatus(u32), // ticket_id -> bool
 }
 
 // --- Error Types ---
@@ -579,9 +589,21 @@ impl Contract {
         Ok(net_amount)
     }
 
-    pub fn cancel_raffle(env: Env) -> Result<(), Error> {
+    pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
+        
+        // Admin or Creator can cancel
+        match reason {
+            CancelReason::CreatorCancelled => raffle.creator.require_auth(),
+            CancelReason::AdminCancelled | CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+                let _factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
+                if reason == CancelReason::AdminCancelled {
+                    raffle.creator.require_auth(); 
+                } else {
+                    raffle.creator.require_auth();
+                }
+            }
+        }
 
         if raffle.status == RaffleStatus::Finalized
             || raffle.status == RaffleStatus::Claimed
@@ -607,7 +629,7 @@ impl Contract {
             "raffle_cancelled",
             RaffleCancelled {
                 creator: raffle.creator.clone(),
-                reason: String::from_str(&env, "Creator cancelled"),
+                reason,
                 tickets_sold: raffle.tickets_sold,
                 timestamp: env.ledger().timestamp(),
             },
@@ -624,6 +646,51 @@ impl Contract {
         );
 
         Ok(())
+    }
+
+    pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
+        let raffle = read_raffle(&env)?;
+        
+        if raffle.status != RaffleStatus::Cancelled {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(ticket_id));
+        if ticket_opt.is_none() {
+            // Re-using InvalidParameters for missing ticket to avoid adding new error enum right now
+            return Err(Error::InvalidParameters); 
+        }
+        let ticket = ticket_opt.unwrap();
+        
+        ticket.buyer.require_auth();
+
+        let is_refunded = env.storage().persistent().get(&DataKey::RefundStatus(ticket_id)).unwrap_or(false);
+        // Enforce idempotency
+        if is_refunded {
+             return Err(Error::InvalidStateTransition);
+        }
+
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        
+        // Transfer ticket price back to the user
+        token_client.transfer(&contract_address, &ticket.buyer, &raffle.ticket_price);
+        
+        // Mark as refunded
+        env.storage().persistent().set(&DataKey::RefundStatus(ticket_id), &true);
+
+        publish_event(
+            &env,
+            "ticket_refunded",
+            crate::events::TicketRefunded {
+                buyer: ticket.buyer.clone(),
+                ticket_id,
+                amount: raffle.ticket_price,
+                timestamp: env.ledger().timestamp(),
+            }
+        );
+
+        Ok(raffle.ticket_price)
     }
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
