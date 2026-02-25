@@ -1,56 +1,72 @@
-# Development Guide
+# Tikka Development Guide
 
-This guide helps developers build and test the Soroban raffle contract locally.
+Welcome to the `tikka-contracts` development guide! This document covers setting up your local environment, building, testing, deploying, and verifying the Soroban smart contracts.
 
-## Project Layout
+## 🛠 Prerequisites
 
--   `contracts/hello-world/src/lib.rs`: Soroban raffle contract
--   `contracts/hello-world/src/test.rs`: Contract tests
--   `README.md`: Project overview
+1.  **Rust Toolchain**: Install via [rustup](https://rustup.rs/).
+2.  **WebAssembly Target**: Add the `wasm32-unknown-unknown` target:
+    ```bash
+    rustup target add wasm32-unknown-unknown
+    ```
+3.  **Stellar CLI**: Install the official Stellar CLI:
+    ```bash
+    cargo install --locked stellar-cli --features opt
+    ```
 
-## Prerequisites
+## 🏗 Build & Test
 
--   Rust toolchain (stable)
--   Cargo (bundled with Rust)
--   Stellar CLI (optional, for deployment)
-
-## Build
-
+### Build the Contract
+To compile the Soroban contract into WebAssembly (`.wasm`):
 ```bash
-cargo build -p hello-world
+cargo build --target wasm32-unknown-unknown --release
+```
+The compiled WASM binary will be located at `target/wasm32-unknown-unknown/release/hello_world.wasm`.
+
+### Run Unit Tests
+To execute the contract's standard Rust unit tests:
+```bash
+cargo test
 ```
 
-## Test
+## 🚀 Deployment
 
+The project provides automated shell scripts in the `scripts/` directory to facilitate deployment and interactions.
+
+### 1. Environment Configuration
+Copy the `.env.example` file to create your own local `.env`:
 ```bash
-cargo test -p hello-world
+cp .env.example .env
+```
+Fill out the required variables including `DEPLOYER_SECRET_KEY` and `RAFFLE_CONTRACT_ADDRESS`.
+
+### 2. Fund Your Testnet Account
+Ensure your deployer account has Testnet Lumens (XLM):
+```bash
+./scripts/fund-testnet.sh <YOUR_PUBLIC_KEY>
 ```
 
-## Notes
+### 3. Deploy to Testnet
+Deploy the compiled WASM binary directly to the Stellar testnet:
+```bash
+./scripts/deploy-testnet.sh
+```
+This script automatically compiles the contract (if needed), deploys it using the `DEPLOYER_SECRET_KEY` from your `.env`, and outputs the resulting `C...` contract address.
 
--   The contract uses Soroban SDK v23 from the workspace.
--   Network access is required the first time dependencies are fetched.
+## 🔎 Verifying Deployed Contracts
 
-## Recent Contributions
+It is essential to verify that the deployed contract logic matches your local build to ensure trust.
 
-### TicketPurchased Event System (Issue #2)
+```bash
+./scripts/verify.sh
+```
+This script downloads the remote WASM bytecode associated with `RAFFLE_CONTRACT_ADDRESS` on the active `STELLAR_NETWORK` and compares its SHA256 checksum to your locally compiled binary. It outputs `Match: YES` to guarantee parity.
 
-**What was added:**
-- `TicketPurchased` event struct with 6 fields: `raffle_id`, `buyer`, `ticket_ids`, `quantity`, `total_paid`, `timestamp`
-- Event emission in `buy_ticket()` for single purchases
-- New `buy_tickets()` function for batch purchases with event emission
-- Comprehensive test coverage (4 tests, all passing)
+## 🕹 Invoking Contract Functions
 
-**Test Data & Mock Examples:**
-- All test data is in `contracts/hello-world/src/test.rs`
-- Tests use `env.mock_all_auths()` and `Address::generate()` for mock addresses
-- Token mints: 1,000 tokens per test participant
-- Test raffles: 10 max tickets, 10 token price, 100 token prize
-- Event retrieval pattern: `env.events().all()` → filter by `try_into_val<TicketPurchased>`
-
-**Handoff Notes:**
-- Events use topic `"TktPurch"` (symbol_short! max 9 chars)
-- Event emission happens after state updates, before function return
-- For multiple transactions: retrieve events after each transaction separately
-- Ticket IDs are 1-indexed (first ticket = ID 1)
-- Batch purchases emit single event with all ticket IDs in `ticket_ids` Vec
+Use the `invoke.sh` script to interact with your deployed contract smoothly:
+```bash
+./scripts/invoke.sh <function_name> [args...]
+# Example:
+./scripts/invoke.sh buy_ticket --amount 10
+```

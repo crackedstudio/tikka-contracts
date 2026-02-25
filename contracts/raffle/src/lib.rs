@@ -22,7 +22,7 @@ pub enum DataKey {
 
 #[contractimpl]
 impl RaffleFactory {
-    pub fn init(
+    pub fn init_factory(
         env: Env,
         admin: Address,
         wasm_hash: Bytes,

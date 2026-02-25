@@ -157,7 +157,7 @@ pub struct Raffle {
 
 ### **Stellar Testnet**
 
--   **Contract Address**: _TBD_
+-   **Contract Address**: `CCTCPMI66REXIJQPVOPNTNUZBCMSRM7TZLMIPQROZIID44XNP2P2MKFZ`
 
 ## 🚀 Getting Started
 
