@@ -748,3 +748,107 @@ fn test_factory_create_raffle_blocked_when_paused() {
         &None::<Address>,
     );
 }
+
+// --- FACTORY TWO-STEP ADMIN TRANSFER TESTS ---
+
+#[test]
+fn test_factory_admin_transfer_happy_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    assert_eq!(factory_client.get_admin(), factory_admin);
+
+    factory_client.transfer_admin(&new_admin);
+    assert_eq!(factory_client.get_admin(), factory_admin);
+
+    factory_client.accept_admin();
+    assert_eq!(factory_client.get_admin(), new_admin);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_factory_accept_admin_no_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    factory_client.accept_admin();
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_factory_transfer_admin_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let new_admin1 = Address::generate(&env);
+    let new_admin2 = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    factory_client.transfer_admin(&new_admin1);
+    factory_client.transfer_admin(&new_admin2);
+}
+
+#[test]
+fn test_factory_self_transfer_cancels_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    factory_client.transfer_admin(&new_admin);
+    factory_client.transfer_admin(&factory_admin);
+
+    assert_eq!(factory_client.get_admin(), factory_admin);
+
+    factory_client.transfer_admin(&new_admin);
+}

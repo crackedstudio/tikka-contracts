@@ -220,4 +220,60 @@ impl RaffleFactory {
             .get(&DataKey::Paused)
             .unwrap_or(false)
     }
+
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+
+        // Self-transfer cancels any pending transfer
+        if new_admin == admin {
+            env.storage().persistent().remove(&DataKey::PendingAdmin);
+            return Ok(());
+        }
+
+        if env.storage().persistent().has(&DataKey::PendingAdmin) {
+            return Err(ContractError::AdminTransferPending);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+
+        publish_factory_event(
+            &env,
+            "admin_transfer_proposed",
+            events::AdminTransferProposed {
+                current_admin: admin,
+                proposed_admin: new_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn accept_admin(env: Env) -> Result<(), ContractError> {
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingTransfer)?;
+        pending.require_auth();
+
+        let old_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+
+        env.storage().persistent().set(&DataKey::Admin, &pending);
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+
+        publish_factory_event(
+            &env,
+            "admin_transfer_accepted",
+            events::AdminTransferAccepted {
+                old_admin,
+                new_admin: pending,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
 }
