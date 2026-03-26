@@ -73,9 +73,9 @@ impl RaffleFactory {
         wasm_hash: Bytes,
         protocol_fee_bp: u32,
         treasury: Address,
-    ) {
+    ) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
@@ -90,17 +90,18 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+        Ok(())
     }
 
-    pub fn set_config(env: Env, protocol_fee_bp: u32, treasury: Address) {
-        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
+    pub fn set_config(env: Env, protocol_fee_bp: u32, treasury: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+        Ok(())
     }
 
     pub fn create_raffle(
@@ -115,8 +116,9 @@ impl RaffleFactory {
         prize_amount: i128,
         randomness_source: RandomnessSource,
         oracle_address: Option<Address>,
-    ) -> Address {
+    ) -> Result<Address, ContractError> {
         creator.require_auth();
+        require_factory_not_paused(&env)?;
 
         let _wasm_hash: Bytes = env
             .storage()
@@ -163,7 +165,14 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
 
-        creator
+        Ok(creator)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotAuthorized)
     }
 
     pub fn get_raffles(env: Env) -> Vec<Address> {
