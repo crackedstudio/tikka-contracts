@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String,
+    Symbol, Vec,
 };
 
 mod events;
@@ -18,6 +19,50 @@ pub enum DataKey {
     InstanceWasmHash,
     ProtocolFeeBP,
     Treasury,
+    Paused,
+    PendingAdmin,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum ContractError {
+    AlreadyInitialized = 1,
+    NotAuthorized = 2,
+    ContractPaused = 3,
+    AdminTransferPending = 4,
+    NoPendingTransfer = 5,
+}
+
+fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
+where
+    T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
+{
+    env.events().publish(
+        (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
+        event,
+    );
+}
+
+fn require_factory_admin(env: &Env) -> Result<Address, ContractError> {
+    let admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Admin)
+        .ok_or(ContractError::NotAuthorized)?;
+    admin.require_auth();
+    Ok(admin)
+}
+
+fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
+    if env
+        .storage()
+        .persistent()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+    {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
 }
 
 #[contractimpl]
