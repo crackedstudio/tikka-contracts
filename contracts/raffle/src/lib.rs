@@ -181,4 +181,43 @@ impl RaffleFactory {
             .get(&DataKey::RaffleInstances)
             .unwrap_or_else(|| Vec::new(&env))
     }
+
+    pub fn pause(env: Env) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        env.storage().persistent().set(&DataKey::Paused, &true);
+
+        publish_factory_event(
+            &env,
+            "contract_paused",
+            events::ContractPaused {
+                paused_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn unpause(env: Env) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        env.storage().persistent().set(&DataKey::Paused, &false);
+
+        publish_factory_event(
+            &env,
+            "contract_unpaused",
+            events::ContractUnpaused {
+                unpaused_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
 }

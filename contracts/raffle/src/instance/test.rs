@@ -3,8 +3,9 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal, String, Symbol,
+    token, Address, Bytes, Env, IntoVal, String, Symbol,
 };
+use crate::{RaffleFactory, RaffleFactoryClient, ContractError};
 
 /// HELPER: Standardized environment setup
 fn setup_raffle_env(
@@ -677,4 +678,73 @@ fn test_set_admin_rejected_from_non_factory() {
     env.as_contract(&stranger, || {
         client.set_admin(&new_admin);
     });
+}
+
+// --- FACTORY PAUSE/UNPAUSE TESTS ---
+
+#[test]
+fn test_factory_pause_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    assert!(!factory_client.is_paused());
+
+    factory_client.pause();
+    assert!(factory_client.is_paused());
+
+    factory_client.unpause();
+    assert!(!factory_client.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_factory_create_raffle_blocked_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let creator = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    factory_client.pause();
+
+    factory_client.create_raffle(
+        &creator,
+        &String::from_str(&env, "Test"),
+        &0u64,
+        &5u32,
+        &false,
+        &10i128,
+        &token_id,
+        &100i128,
+        &RandomnessSource::Internal,
+        &None::<Address>,
+    );
 }
