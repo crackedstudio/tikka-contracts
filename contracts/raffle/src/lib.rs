@@ -276,4 +276,25 @@ impl RaffleFactory {
 
         Ok(())
     }
+
+    pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.set_admin(&admin);
+        Ok(())
+    }
+
+    pub fn pause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.pause();
+        Ok(())
+    }
+
+    pub fn unpause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.unpause();
+        Ok(())
+    }
 }

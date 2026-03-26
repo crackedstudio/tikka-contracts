@@ -852,3 +852,117 @@ fn test_factory_self_transfer_cancels_pending() {
 
     factory_client.transfer_admin(&new_admin);
 }
+
+// --- FACTORY RELAY FUNCTION TESTS ---
+
+#[test]
+fn test_sync_admin_updates_instance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    let creator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
+    token_admin_client.mint(&creator, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let instance_client = ContractClient::new(&env, &contract_id);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Test"),
+        end_time: 0,
+        max_tickets: 5,
+        allow_multiple: false,
+        ticket_price: 10i128,
+        payment_token: token_id,
+        prize_amount: 100i128,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+    };
+
+    instance_client.init(&factory_id, &factory_admin, &creator, &config);
+
+    let new_admin = Address::generate(&env);
+    factory_client.transfer_admin(&new_admin);
+    factory_client.accept_admin();
+    assert_eq!(factory_client.get_admin(), new_admin);
+
+    factory_client.sync_admin(&contract_id);
+
+    factory_client.pause_instance(&contract_id);
+    assert!(instance_client.is_paused());
+}
+
+#[test]
+fn test_factory_pause_unpause_instance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let factory_id = env.register(RaffleFactory, ());
+    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
+
+    factory_client.init_factory(
+        &factory_admin,
+        &Bytes::from_slice(&env, &[0u8; 32]),
+        &0u32,
+        &treasury,
+    );
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
+    token_admin_client.mint(&creator, &1_000i128);
+    token_admin_client.mint(&buyer, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let instance_client = ContractClient::new(&env, &contract_id);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Test"),
+        end_time: 0,
+        max_tickets: 5,
+        allow_multiple: false,
+        ticket_price: 10i128,
+        payment_token: token_id,
+        prize_amount: 100i128,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+    };
+
+    instance_client.init(&factory_id, &factory_admin, &creator, &config);
+    instance_client.deposit_prize();
+
+    factory_client.pause_instance(&contract_id);
+    assert!(instance_client.is_paused());
+
+    factory_client.unpause_instance(&contract_id);
+    assert!(!instance_client.is_paused());
+
+    let sold = instance_client.buy_ticket(&buyer);
+    assert_eq!(sold, 1);
+}
