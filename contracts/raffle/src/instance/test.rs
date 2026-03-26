@@ -24,8 +24,14 @@ fn setup_raffle_env(
     let creator = Address::generate(env);
     let buyer = Address::generate(env);
     let admin = Address::generate(env);
-    let factory = Address::generate(env);
     let factory_admin = Address::generate(env);
+
+    // Register factory as a dummy contract so env.as_contract works
+    #[contract]
+    pub struct DummyFactory;
+    #[contractimpl]
+    impl DummyFactory {}
+    let factory = env.register(DummyFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -498,3 +504,146 @@ fn test_double_refund_rejected() {
     client.refund_ticket(&1u32);
     client.refund_ticket(&1u32); // Panic!
 }
+
+// --- PAUSE/UNPAUSE TESTS ---
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_buy_ticket_blocked_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    client.buy_ticket(&buyer);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_deposit_prize_blocked_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    client.deposit_prize();
+}
+
+#[test]
+fn test_claim_prize_succeeds_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    let winner = client.get_raffle().winner.unwrap();
+    let result = client.claim_prize(&winner);
+    assert!(result > 0);
+}
+
+#[test]
+fn test_refund_ticket_succeeds_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    let refunded = client.refund_ticket(&1u32);
+    assert_eq!(refunded, 10i128);
+}
+
+#[test]
+fn test_cancel_raffle_succeeds_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Cancelled);
+}
+
+#[test]
+fn test_finalize_raffle_succeeds_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+
+    client.finalize_raffle();
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Finalized);
+}
+
+#[test]
+fn test_unpause_restores_buy_ticket() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, factory, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+
+    env.as_contract(&factory, || {
+        client.pause();
+    });
+    assert!(client.is_paused());
+
+    env.as_contract(&factory, || {
+        client.unpause();
+    });
+    assert!(!client.is_paused());
+
+    let tickets_sold = client.buy_ticket(&buyer);
+    assert_eq!(tickets_sold, 1);
+}
+
