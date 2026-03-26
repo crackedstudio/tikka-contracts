@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
 
-use crate::instance::{CancelReason, RandomnessSource, RaffleStatus};
+use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
 
 // ============================================================================
 // LIFECYCLE EVENTS

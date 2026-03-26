@@ -1,12 +1,11 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
 };
 
 use crate::events::{
-    DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated,
-    RaffleFinalized, RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
+    DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
+    RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
 };
 
 #[contract]
@@ -106,6 +105,7 @@ pub enum DataKey {
     NextTicketId,
     Factory,
     RefundStatus(u32), // ticket_id -> bool
+    ReentrancyGuard,
 }
 
 // --- Error Types ---
@@ -133,6 +133,7 @@ pub enum Error {
     AlreadyInitialized = 18,
     NotInitialized = 19,
     InvalidStateTransition = 20,
+    Reentrancy = 21,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -185,6 +186,20 @@ fn write_ticket(env: &Env, ticket: &Ticket) {
     env.storage()
         .persistent()
         .set(&DataKey::Ticket(ticket.id), ticket);
+}
+
+fn acquire_guard(env: &Env) -> Result<(), Error> {
+    if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+        return Err(Error::Reentrancy);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::ReentrancyGuard, &true);
+    Ok(())
+}
+
+fn release_guard(env: &Env) {
+    env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
 #[contractimpl]
@@ -268,13 +283,15 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
-        let token_client = token::Client::new(&env, &raffle.payment_token);
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&raffle.creator, &contract_address, &raffle.prize_amount);
-
+        // Effects: update state BEFORE external call (CEI pattern)
         raffle.prize_deposited = true;
         raffle.status = RaffleStatus::Active;
         write_raffle(&env, &raffle);
+
+        // Interaction: external token transfer
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&raffle.creator, &contract_address, &raffle.prize_amount);
 
         publish_event(
             &env,
@@ -319,10 +336,7 @@ impl Contract {
             return Err(Error::MultipleTicketsNotAllowed);
         }
 
-        let token_client = token::Client::new(&env, &raffle.payment_token);
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&buyer, &contract_address, &raffle.ticket_price);
-
+        // Effects: update ALL state BEFORE external call (CEI pattern)
         let ticket_id = next_ticket_id(&env);
         let timestamp = env.ledger().timestamp();
 
@@ -355,6 +369,11 @@ impl Contract {
 
         write_ticket_count(&env, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
+
+        // Interaction: external token transfer
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&buyer, &contract_address, &raffle.ticket_price);
 
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
@@ -529,6 +548,7 @@ impl Contract {
         winner.require_auth();
         let mut raffle = read_raffle(&env)?;
 
+        // Checks
         if raffle.status != RaffleStatus::Finalized {
             return Err(Error::InvalidStateTransition);
         }
@@ -539,6 +559,9 @@ impl Contract {
             return Err(Error::PrizeNotDeposited);
         }
 
+        // Reentrancy guard
+        acquire_guard(&env)?;
+
         let mut platform_fee = 0i128;
         if raffle.protocol_fee_bp > 0 {
             platform_fee = (raffle.prize_amount * raffle.protocol_fee_bp as i128) / 10000;
@@ -546,13 +569,16 @@ impl Contract {
         let net_amount = raffle.prize_amount - platform_fee;
         let claimed_at = env.ledger().timestamp();
 
+        // Effects: update state BEFORE external calls (CEI pattern)
+        raffle.status = RaffleStatus::Claimed;
+        write_raffle(&env, &raffle);
+
+        // Interactions: external token transfers
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
 
-        // Transfer net prize to winner
         token_client.transfer(&contract_address, &winner, &net_amount);
 
-        // Transfer fee to treasury if applicable
         if platform_fee > 0 && raffle.treasury_address.is_some() {
             token_client.transfer(
                 &contract_address,
@@ -561,8 +587,7 @@ impl Contract {
             );
         }
 
-        raffle.status = RaffleStatus::Claimed;
-        write_raffle(&env, &raffle);
+        release_guard(&env);
 
         publish_event(
             &env,
@@ -591,14 +616,16 @@ impl Contract {
 
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
-        
+
         // Admin or Creator can cancel
         match reason {
             CancelReason::CreatorCancelled => raffle.creator.require_auth(),
-            CancelReason::AdminCancelled | CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+            CancelReason::AdminCancelled
+            | CancelReason::OracleTimeout
+            | CancelReason::MinTicketsNotMet => {
                 let _factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
                 if reason == CancelReason::AdminCancelled {
-                    raffle.creator.require_auth(); 
+                    raffle.creator.require_auth();
                 } else {
                     raffle.creator.require_auth();
                 }
@@ -615,14 +642,19 @@ impl Contract {
         let old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
 
-        if raffle.prize_deposited {
+        // Effects: persist state BEFORE external call (CEI pattern)
+        let should_refund_prize = raffle.prize_deposited;
+        if should_refund_prize {
+            raffle.prize_deposited = false;
+        }
+        write_raffle(&env, &raffle);
+
+        // Interaction: external token transfer
+        if should_refund_prize {
             let token_client = token::Client::new(&env, &raffle.payment_token);
             let contract_address = env.current_contract_address();
             token_client.transfer(&contract_address, &raffle.creator, &raffle.prize_amount);
-            raffle.prize_deposited = false;
         }
-
-        write_raffle(&env, &raffle);
 
         publish_event(
             &env,
@@ -650,34 +682,47 @@ impl Contract {
 
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
         let raffle = read_raffle(&env)?;
-        
+
         if raffle.status != RaffleStatus::Cancelled {
             return Err(Error::InvalidStateTransition);
         }
 
-        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(ticket_id));
+        let ticket_opt = env
+            .storage()
+            .persistent()
+            .get::<_, Ticket>(&DataKey::Ticket(ticket_id));
         if ticket_opt.is_none() {
             // Re-using InvalidParameters for missing ticket to avoid adding new error enum right now
-            return Err(Error::InvalidParameters); 
+            return Err(Error::InvalidParameters);
         }
         let ticket = ticket_opt.unwrap();
-        
+
         ticket.buyer.require_auth();
 
-        let is_refunded = env.storage().persistent().get(&DataKey::RefundStatus(ticket_id)).unwrap_or(false);
+        let is_refunded = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RefundStatus(ticket_id))
+            .unwrap_or(false);
         // Enforce idempotency
         if is_refunded {
-             return Err(Error::InvalidStateTransition);
+            return Err(Error::InvalidStateTransition);
         }
 
+        // Reentrancy guard
+        acquire_guard(&env)?;
+
+        // Effects: mark refunded BEFORE external call (CEI pattern)
+        env.storage()
+            .persistent()
+            .set(&DataKey::RefundStatus(ticket_id), &true);
+
+        // Interaction: external token transfer
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        
-        // Transfer ticket price back to the user
         token_client.transfer(&contract_address, &ticket.buyer, &raffle.ticket_price);
-        
-        // Mark as refunded
-        env.storage().persistent().set(&DataKey::RefundStatus(ticket_id), &true);
+
+        release_guard(&env);
 
         publish_event(
             &env,
@@ -687,7 +732,7 @@ impl Contract {
                 ticket_id,
                 amount: raffle.ticket_price,
                 timestamp: env.ledger().timestamp(),
-            }
+            },
         );
 
         Ok(raffle.ticket_price)

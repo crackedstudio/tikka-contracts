@@ -240,8 +240,7 @@ fn test_raffle_created_event() {
 fn test_prize_deposited_event() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let (client, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
 
@@ -465,7 +464,7 @@ fn test_refund_ticket() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    
+
     // Check ticket balances before refund
     assert_eq!(token_client.balance(&buyer), 990i128); // 1000 - 10 ticket_price
 
@@ -489,9 +488,279 @@ fn test_double_refund_rejected() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    
+
     client.cancel_raffle(&CancelReason::CreatorCancelled);
 
     client.refund_ticket(&1u32);
     client.refund_ticket(&1u32); // Panic!
+}
+
+// --- 5. REENTRANCY PROTECTION & STORAGE GUARDRAIL TESTS ---
+
+#[test]
+fn test_claim_prize_guard_released_after_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+    client.claim_prize(&winner);
+
+    // Guard must be released after successful claim
+    env.as_contract(&client.address, || {
+        assert!(
+            !env.storage().instance().has(&DataKey::ReentrancyGuard),
+            "ReentrancyGuard should be removed after claim_prize completes"
+        );
+    });
+}
+
+#[test]
+fn test_refund_guard_released_after_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.refund_ticket(&1u32);
+
+    // Guard must be released after successful refund
+    env.as_contract(&client.address, || {
+        assert!(
+            !env.storage().instance().has(&DataKey::ReentrancyGuard),
+            "ReentrancyGuard should be removed after refund_ticket completes"
+        );
+    });
+}
+
+#[test]
+fn test_sequential_refunds_succeed_guard_properly_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+
+    // Two different buyers purchase tickets
+    client.buy_ticket(&buyer);
+    let buyer2 = Address::generate(&env);
+    admin_client.mint(&buyer2, &10i128);
+    client.buy_ticket(&buyer2);
+
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // Sequential refunds must both succeed (guard released between calls)
+    let refund1 = client.refund_ticket(&1u32);
+    assert_eq!(refund1, 10i128);
+    let refund2 = client.refund_ticket(&2u32);
+    assert_eq!(refund2, 10i128);
+
+    // Both buyers fully refunded
+    assert_eq!(token_client.balance(&buyer), 1000i128);
+    assert_eq!(token_client.balance(&buyer2), 10i128);
+}
+
+#[test]
+#[should_panic] // Error(Contract, #21) - Reentrancy
+fn test_claim_prize_blocked_by_active_reentrancy_guard() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+
+    // Simulate reentrancy: set guard before external call returns
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+    });
+
+    client.claim_prize(&winner); // Must panic with Reentrancy
+}
+
+#[test]
+#[should_panic] // Error(Contract, #21) - Reentrancy
+fn test_refund_blocked_by_active_reentrancy_guard() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // Simulate reentrancy: set guard before refund call
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+    });
+
+    client.refund_ticket(&1u32); // Must panic with Reentrancy
+}
+
+#[test]
+fn test_claim_with_protocol_fee_guard_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let (client, _, _, admin_client, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        500,
+        Some(treasury.clone()),
+    );
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+
+    let winner = client.get_raffle().winner.unwrap();
+    let claimed = client.claim_prize(&winner);
+    assert_eq!(claimed, 95i128);
+
+    // Guard released even when fee transfer path is taken
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::ReentrancyGuard));
+    });
+
+    assert_eq!(token_client.balance(&winner), 95i128);
+    assert_eq!(token_client.balance(&treasury), 5i128);
+}
+
+// --- 6. CEI PATTERN VALIDATION TESTS ---
+
+#[test]
+fn test_deposit_prize_cei_state_active_after_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+
+    let raffle = client.get_raffle();
+    assert!(raffle.status == RaffleStatus::Active);
+    assert!(raffle.prize_deposited);
+}
+
+#[test]
+fn test_buy_ticket_cei_state_incremented_correctly() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+
+    let buyer1 = Address::generate(&env);
+    admin_client.mint(&buyer1, &10i128);
+    let sold_count = client.buy_ticket(&buyer1);
+    assert_eq!(sold_count, 1);
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.tickets_sold, 1);
+
+    let buyer2 = Address::generate(&env);
+    admin_client.mint(&buyer2, &10i128);
+    let sold_count2 = client.buy_ticket(&buyer2);
+    assert_eq!(sold_count2, 2);
+
+    let raffle2 = client.get_raffle();
+    assert_eq!(raffle2.tickets_sold, 2);
+}
+
+#[test]
+fn test_claim_prize_cei_status_transitions_to_claimed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+
+    let raffle_before = client.get_raffle();
+    assert!(raffle_before.status == RaffleStatus::Finalized);
+
+    let winner = raffle_before.winner.unwrap();
+    client.claim_prize(&winner);
+
+    let raffle_after = client.get_raffle();
+    assert!(raffle_after.status == RaffleStatus::Claimed);
+}
+
+#[test]
+#[should_panic] // Error(Contract, #20) - InvalidStateTransition (status already Claimed)
+fn test_double_claim_rejected_after_cei_state_transition() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+
+    client.claim_prize(&winner);
+    client.claim_prize(&winner); // Must panic: status is Claimed, not Finalized
+}
+
+#[test]
+fn test_cancel_raffle_cei_state_cancelled_before_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // CEI: status is Cancelled and prize refunded to creator
+    let raffle = client.get_raffle();
+    assert!(raffle.status == RaffleStatus::Cancelled);
+    assert!(!raffle.prize_deposited);
+    assert_eq!(token_client.balance(&creator), 1000i128);
 }
