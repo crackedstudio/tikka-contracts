@@ -3,6 +3,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
 };
 
+use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
+
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
     RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
