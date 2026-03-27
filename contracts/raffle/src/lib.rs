@@ -107,15 +107,7 @@ impl RaffleFactory {
     pub fn create_raffle(
         env: Env,
         creator: Address,
-        description: String,
-        end_time: u64,
-        max_tickets: u32,
-        allow_multiple: bool,
-        ticket_price: i128,
-        payment_token: Address,
-        prize_amount: i128,
-        randomness_source: RandomnessSource,
-        oracle_address: Option<Address>,
+        config: RaffleConfig,
     ) -> Result<Address, ContractError> {
         creator.require_auth();
         require_factory_not_paused(&env)?;
@@ -146,19 +138,9 @@ impl RaffleFactory {
             .unwrap();
 
         // Use parameters to avoid warnings
-        let _ = RaffleConfig {
-            description,
-            end_time,
-            max_tickets,
-            allow_multiple,
-            ticket_price,
-            payment_token,
-            prize_amount,
-            randomness_source,
-            oracle_address,
-            protocol_fee_bp,
-            treasury_address: Some(treasury),
-        };
+        let mut final_config = config;
+        final_config.protocol_fee_bp = protocol_fee_bp;
+        final_config.treasury_address = Some(treasury);
 
         instances.push_back(creator.clone());
         env.storage()
