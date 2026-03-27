@@ -191,14 +191,7 @@ impl RaffleFactory {
             .ok_or(ContractError::NotAuthorized)
     }
 
-    pub fn get_raffles(env: Env) -> Vec<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::RaffleInstances)
-            .unwrap_or_else(|| Vec::new(&env))
-    }
-
-    pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResult_Raffles {
+    pub fn get_raffles(env: Env, params: PaginationParams) -> PageResult_Raffles {
         let all: Vec<Address> = env
             .storage()
             .persistent()

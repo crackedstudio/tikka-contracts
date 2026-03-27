@@ -835,3 +835,172 @@ fn test_cancel_raffle_cei_state_cancelled_before_refund() {
     assert!(!raffle.prize_deposited);
     assert_eq!(token_client.balance(&creator), 1000i128);
 }
+
+// --- 8. PAGINATED QUERY SYSTEM TESTS ---
+
+fn page(limit: u32, offset: u32) -> crate::types::PaginationParams {
+    crate::types::PaginationParams { limit, offset }
+}
+
+// ---- get_tickets ----
+
+#[test]
+fn test_get_tickets_empty_returns_empty_page() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let result = client.get_tickets(&page(10, 0));
+    assert_eq!(result.total, 0u32);
+    assert_eq!(result.items.len(), 0u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_tickets_first_page_has_more_true() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..3 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    let result = client.get_tickets(&page(2, 0));
+    assert_eq!(result.total, 3u32);
+    assert_eq!(result.items.len(), 2u32);
+    assert!(result.has_more);
+}
+
+#[test]
+fn test_get_tickets_second_page_no_more() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..3 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    let result = client.get_tickets(&page(2, 2));
+    assert_eq!(result.total, 3u32);
+    assert_eq!(result.items.len(), 1u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_tickets_offset_at_total_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..3 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    // offset == total => empty page, has_more false
+    let result = client.get_tickets(&page(10, 3));
+    assert_eq!(result.total, 3u32);
+    assert_eq!(result.items.len(), 0u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_tickets_zero_limit_uses_default() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..3 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    // limit=0 => effective_limit returns DEFAULT_PAGE_LIMIT (100), all 3 returned
+    let result = client.get_tickets(&page(0, 0));
+    assert_eq!(result.total, 3u32);
+    assert_eq!(result.items.len(), 3u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_tickets_has_more_false_on_exact_fit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..4 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    // 4 tickets sold, request exactly 4 — has_more must be false
+    let result = client.get_tickets(&page(4, 0));
+    assert_eq!(result.total, 4u32);
+    assert_eq!(result.items.len(), 4u32);
+    assert!(!result.has_more);
+}
+
+// ---- get_raffles (Factory) ----
+
+#[test]
+fn test_get_raffles_empty_factory() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (factory, _admin) = setup_factory(&env);
+
+    let result = factory.get_raffles(&page(10, 0));
+    assert_eq!(result.total, 0u32);
+    assert_eq!(result.items.len(), 0u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_raffles_offset_beyond_total() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (factory, _admin) = setup_factory(&env);
+
+    let result = factory.get_raffles(&page(10, 99));
+    assert_eq!(result.total, 0u32);
+    assert_eq!(result.items.len(), 0u32);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_get_raffles_limit_exceeds_max_is_capped() {
+    // Confirms that requesting more than MAX_PAGE_LIMIT is capped,
+    // preventing out-of-gas attacks on get_tickets and get_raffles_page.
+    let limit_above_max = crate::types::MAX_PAGE_LIMIT + 1;
+    let effective = crate::types::effective_limit(limit_above_max);
+    assert_eq!(effective, crate::types::MAX_PAGE_LIMIT);
+}
+
+#[test]
+fn test_get_raffles_has_more_false_for_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (factory, _admin) = setup_factory(&env);
+
+    let result = factory.get_raffles(&page(1, 0));
+    assert!(!result.has_more);
+}

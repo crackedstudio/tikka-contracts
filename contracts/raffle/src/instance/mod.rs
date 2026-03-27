@@ -3,6 +3,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
 };
 
+use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
+
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
     RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
@@ -753,6 +755,45 @@ impl Contract {
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
         read_raffle(&env)
+    }
+
+    pub fn get_tickets(env: Env, params: PaginationParams) -> PageResult_Tickets {
+        let raffle = match read_raffle(&env) {
+            Ok(r) => r,
+            Err(_) => {
+                return PageResult_Tickets {
+                    items: Vec::new(&env),
+                    total: 0,
+                    has_more: false,
+                }
+            }
+        };
+        let total = raffle.tickets_sold;
+        let lim = effective_limit(params.limit);
+        let offset = params.offset;
+
+        if offset >= total {
+            return PageResult_Tickets {
+                items: Vec::new(&env),
+                total,
+                has_more: false,
+            };
+        }
+
+        let end = (offset + lim).min(total);
+        let mut items = Vec::new(&env);
+        for i in offset..end {
+            let ticket_id = i + 1; // ticket ids are 1-based
+            let ticket: Ticket = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Ticket(ticket_id))
+                .expect("ticket missing");
+            items.push_back(ticket);
+        }
+
+        let has_more = (offset + items.len()) < total;
+        PageResult_Tickets { items, total, has_more }
     }
 
     pub fn pause(env: Env) -> Result<(), Error> {
