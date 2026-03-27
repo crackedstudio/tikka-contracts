@@ -787,38 +787,98 @@ fn test_cancel_raffle_cei_state_cancelled_before_refund() {
     assert_eq!(token_client.balance(&creator), 1000i128);
 }
 
-// --- 7. VERIFICATION DELAY TESTS ---
+// --- 8. NFT INTERFACE TESTS ---
 
 #[test]
-#[should_panic] // Error(Contract, #22) - ClaimTooEarly
-fn test_claim_prize_rejected_too_early() {
+fn test_nft_metadata() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    client.deposit_prize();
-    for _ in 0..5 {
-        let b = Address::generate(&env);
-        admin_client.mint(&b, &10i128);
-        client.buy_ticket(&b);
-    }
-    client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
-
-    // Attempt claim immediately -> panics with ClaimTooEarly
-    client.claim_prize(&winner);
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
+    assert_eq!(client.name(), String::from_str(&env, "Tikka Raffle Ticket"));
+    assert_eq!(client.symbol(), String::from_str(&env, "TIKKA_TKT"));
+    assert_eq!(client.token_uri(&1u32), String::from_str(&env, "https://tikka.app/api/ticket"));
 }
 
 #[test]
-fn test_claim_prize_accepted_after_one_hour() {
+fn test_nft_transfer_and_balance() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
+    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
     client.deposit_prize();
-    for _ in 0..5 {
+    client.buy_ticket(&buyer);
+    
+    assert_eq!(client.balance(&buyer), 1);
+    assert_eq!(client.owner_of(&1u32), buyer);
+
+    let new_owner = Address::generate(&env);
+    client.transfer(&buyer, &new_owner, &1u32);
+
+    assert_eq!(client.balance(&buyer), 0);
+    assert_eq!(client.balance(&new_owner), 1);
+    assert_eq!(client.owner_of(&1u32), new_owner);
+    
+    // Attempting unauthorized transfer
+    let hacker = Address::generate(&env);
+    let res = client.try_transfer(&hacker, &new_owner, &1u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_nft_approvals_and_transfer_from() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+
+    let operator = Address::generate(&env);
+    let receiver = Address::generate(&env);
+
+    client.approve(&buyer, &Some(operator.clone()), &1u32);
+    assert_eq!(client.get_approved(&1u32), Some(operator.clone()));
+
+    // Operator transfers to receiver
+    client.transfer_from(&operator, &buyer, &receiver, &1u32);
+
+    assert_eq!(client.owner_of(&1u32), receiver);
+    assert_eq!(client.get_approved(&1u32), None); // Approval clears on transfer
+}
+
+#[test]
+fn test_nft_set_approval_for_all() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+
+    let operator = Address::generate(&env);
+    let receiver = Address::generate(&env);
+
+    client.set_approval_for_all(&buyer, &operator, &true);
+    assert!(client.is_approved_for_all(&buyer, &operator));
+
+    client.transfer_from(&operator, &buyer, &receiver, &1u32);
+    assert_eq!(client.owner_of(&1u32), receiver);
+}
+
+#[test]
+fn test_nft_winner_after_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+
+    let secondary_buyer = Address::generate(&env);
+    client.transfer(&buyer, &secondary_buyer, &1u32);
+
+    for _ in 0..4 {
         let b = Address::generate(&env);
         admin_client.mint(&b, &10i128);
         client.buy_ticket(&b);
