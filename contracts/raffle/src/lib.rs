@@ -107,13 +107,43 @@ impl RaffleFactory {
         protocol_fee_bp: u32,
         treasury: Address,
     ) -> Result<(), ContractError> {
-        require_factory_admin(&env)?;
+        let admin = require_factory_admin(&env)?;
+        let old_fee_bp: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolFeeBP)
+            .unwrap_or(0);
+        let old_treasury: Option<Address> = env.storage().persistent().get(&DataKey::Treasury);
+
         env.storage()
             .persistent()
             .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+
+        publish_factory_event(
+            &env,
+            "fee_updated",
+            events::FeeUpdated {
+                old_fee_bp,
+                new_fee_bp: protocol_fee_bp,
+                updated_by: admin.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        publish_factory_event(
+            &env,
+            "treasury_updated",
+            events::TreasuryUpdated {
+                old_treasury,
+                new_treasury: treasury,
+                updated_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         Ok(())
     }
 
@@ -296,6 +326,10 @@ impl RaffleFactory {
         Ok(())
     }
 
+    pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), ContractError> {
+        Self::transfer_admin(env, new_owner)
+    }
+
     pub fn accept_admin(env: Env) -> Result<(), ContractError> {
         let pending: Address = env
             .storage()
@@ -320,6 +354,10 @@ impl RaffleFactory {
         );
 
         Ok(())
+    }
+
+    pub fn accept_ownership(env: Env) -> Result<(), ContractError> {
+        Self::accept_admin(env)
     }
 
     pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
@@ -701,5 +739,59 @@ mod tests {
 
         factory_client.pause_instance(&instance_client.address);
         assert!(instance_client.is_paused());
+    }
+
+    // =========================================================================
+    // 13. set_config emits FeeUpdated and TreasuryUpdated events
+    // =========================================================================
+    #[test]
+    fn test_set_config_emits_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, _) = setup_factory(&env);
+
+        let new_treasury = Address::generate(&env);
+        let new_fee = 500u32;
+
+        client.set_config(&new_fee, &new_treasury);
+
+        let events = env.events().all();
+        let mut found_fee = false;
+        let mut found_treasury = false;
+
+        for event in events.iter() {
+            let topics = event.0;
+            if topics.get(1).unwrap() == Symbol::new(&env, "fee_updated") {
+                found_fee = true;
+            }
+            if topics.get(1).unwrap() == Symbol::new(&env, "treasury_updated") {
+                found_treasury = true;
+            }
+        }
+
+        assert!(found_fee, "FeeUpdated event not found");
+        assert!(found_treasury, "TreasuryUpdated event not found");
+    }
+
+    // =========================================================================
+    // 14. transfer_ownership and accept_ownership work (aliases)
+    // =========================================================================
+    #[test]
+    fn test_ownership_transfer_aliases() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, _) = setup_factory(&env);
+
+        let new_owner = Address::generate(&env);
+
+        // Propose
+        client.transfer_ownership(&new_owner);
+
+        // Accept
+        env.as_contract(&new_owner, || {
+            client.accept_ownership();
+        });
+
+        assert_eq!(client.get_admin(), new_owner);
     }
 }

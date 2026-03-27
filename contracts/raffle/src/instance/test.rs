@@ -1046,3 +1046,71 @@ fn test_tiered_prizes() {
     let raffle_final = client.get_raffle();
     assert!(raffle_final.status == RaffleStatus::Claimed);
 }
+
+// --- 9. GOVERNANCE TESTS ---
+
+#[test]
+fn test_instance_ownership_transfer_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, factory_admin) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let new_owner = Address::generate(&env);
+
+    // Propose
+    env.as_contract(&factory_admin, || {
+        client.transfer_ownership(&new_owner);
+    });
+
+    // Verify pending
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get::<_, Address>(&DataKey::PendingAdmin),
+            Some(new_owner.clone())
+        );
+    });
+
+    // Accept
+    env.as_contract(&new_owner, || {
+        client.accept_ownership();
+    });
+
+    // Verify new admin
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get::<_, Address>(&DataKey::Admin),
+            Some(new_owner.clone())
+        );
+        assert!(!env.storage().instance().has(&DataKey::PendingAdmin));
+    });
+}
+
+#[test]
+#[should_panic] // Error(Contract, #5) - NotAuthorized
+fn test_instance_transfer_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let stranger = Address::generate(&env);
+    let new_owner = Address::generate(&env);
+
+    env.as_contract(&stranger, || {
+        client.transfer_ownership(&new_owner);
+    });
+}
+
+#[test]
+#[should_panic] // Error(Contract, #52) - NoPendingTransfer
+fn test_instance_accept_without_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let stranger = Address::generate(&env);
+
+    env.as_contract(&stranger, || {
+        client.accept_ownership();
+    });
+}
