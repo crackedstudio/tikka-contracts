@@ -109,6 +109,17 @@ pub struct PrizeClaimed {
     pub claimed_at: u64,
 }
 
+/// Emitted when platform fees are automatically swapped and burned
+#[derive(Clone)]
+#[contracttype]
+pub struct BuybackAndBurnExecuted {
+    pub router: Address,
+    pub tikka_token: Address,
+    pub amount_in: i128,
+    pub amount_out: i128,
+    pub timestamp: u64,
+}
+
 // ============================================================================
 // ADMIN EVENTS
 // ============================================================================

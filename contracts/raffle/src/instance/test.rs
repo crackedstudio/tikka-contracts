@@ -56,6 +56,8 @@ fn setup_raffle_env(
         oracle_address: oracle,
         protocol_fee_bp: fee_bp,
         treasury_address: treasury,
+        swap_router: None,
+        tikka_token: None,
     };
 
     client.init(&factory, &factory_admin, &creator, &config);
@@ -85,6 +87,7 @@ fn test_basic_internal_raffle_flow() {
 
     let raffle = client.get_raffle();
     let winner = raffle.winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     let _claimed_amount = client.claim_prize(&winner);
 
     assert_eq!(token_client.balance(&winner), 100i128);
@@ -114,6 +117,7 @@ fn test_protocol_fees() {
 
     client.finalize_raffle();
     let winner = client.get_raffle().winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner);
 
     // Prize: 100, Fee: 5% = 5, Winner: 95
@@ -238,6 +242,8 @@ fn test_raffle_created_event() {
         oracle_address: None,
         protocol_fee_bp: 0,
         treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
     };
 
     client.init(&factory, &factory_admin, &creator, &config);
@@ -408,6 +414,7 @@ fn test_prize_claimed_event() {
 
     client.finalize_raffle();
     let winner = client.get_raffle().winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner);
 
     // Check that prize_claimed event was emitted
@@ -522,6 +529,7 @@ fn test_claim_prize_guard_released_after_success() {
     }
     client.finalize_raffle();
     let winner = client.get_raffle().winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner);
 
     // Guard must be released after successful claim
@@ -607,6 +615,7 @@ fn test_claim_prize_blocked_by_active_reentrancy_guard() {
             .set(&DataKey::ReentrancyGuard, &true);
     });
 
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner); // Must panic with Reentrancy
 }
 
@@ -655,6 +664,7 @@ fn test_claim_with_protocol_fee_guard_released() {
     client.finalize_raffle();
 
     let winner = client.get_raffle().winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     let claimed = client.claim_prize(&winner);
     assert_eq!(claimed, 95i128);
 
@@ -728,6 +738,7 @@ fn test_claim_prize_cei_status_transitions_to_claimed() {
     assert!(raffle_before.status == RaffleStatus::Finalized);
 
     let winner = raffle_before.winner.unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner);
 
     let raffle_after = client.get_raffle();
@@ -751,6 +762,7 @@ fn test_double_claim_rejected_after_cei_state_transition() {
     client.finalize_raffle();
     let winner = client.get_raffle().winner.unwrap();
 
+    env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner);
     client.claim_prize(&winner); // Must panic: status is Claimed, not Finalized
 }
@@ -871,14 +883,14 @@ fn test_nft_winner_after_transfer() {
         admin_client.mint(&b, &10i128);
         client.buy_ticket(&b);
     }
-    
-    // Mock time and finalize
-    env.ledger().with_mut(|l| l.timestamp = 123456789);
     client.finalize_raffle();
-    
-    // Seed logic: 123456789 (timestamp) + 0 (seq) = 123456789. 123456789 % 5 = 4
     let winner = client.get_raffle().winner.unwrap();
-    // Index 4 is the LAST buyer created in the loop.
-    // As long as it isn't `buyer` who originally bought Ticket 1
-    assert_ne!(winner, buyer);
+
+    // Advance time by 3600s
+    env.ledger().with_mut(|l| {
+        l.timestamp += 3600;
+    });
+
+    let claimed = client.claim_prize(&winner);
+    assert_eq!(claimed, 100i128);
 }

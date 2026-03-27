@@ -57,6 +57,7 @@ pub struct Raffle {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    pub finalized_at: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -73,6 +74,8 @@ pub struct RaffleConfig {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
 }
 
 #[derive(Clone)]
@@ -138,6 +141,7 @@ pub enum Error {
     NotInitialized = 19,
     InvalidStateTransition = 20,
     Reentrancy = 21,
+    ClaimTooEarly = 22,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -289,6 +293,7 @@ impl Contract {
             oracle_address: config.oracle_address,
             protocol_fee_bp: config.protocol_fee_bp,
             treasury_address: config.treasury_address,
+            finalized_at: None,
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
@@ -498,6 +503,7 @@ impl Contract {
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
+        raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
         publish_event(
@@ -549,6 +555,7 @@ impl Contract {
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
+        raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
         publish_event(
@@ -601,6 +608,10 @@ impl Contract {
             return Err(Error::PrizeNotDeposited);
         }
 
+        if env.ledger().timestamp() < raffle.finalized_at.unwrap_or(0) + 3600 {
+            return Err(Error::ClaimTooEarly);
+        }
+
         // Reentrancy guard
         acquire_guard(&env)?;
 
@@ -621,12 +632,67 @@ impl Contract {
 
         token_client.transfer(&contract_address, &winner, &net_amount);
 
-        if platform_fee > 0 && raffle.treasury_address.is_some() {
-            token_client.transfer(
-                &contract_address,
-                &raffle.treasury_address.clone().unwrap(),
-                &platform_fee,
-            );
+        if platform_fee > 0 {
+            if let (Some(router), Some(tikka)) = (&raffle.swap_router, &raffle.tikka_token) {
+                if raffle.payment_token != *tikka {
+                    // Approve router
+                    token_client.approve(
+                        &contract_address,
+                        router,
+                        &platform_fee,
+                        &(env.ledger().sequence() + 100),
+                    );
+
+                    let mut path = Vec::new(&env);
+                    path.push_back(raffle.payment_token.clone());
+                    path.push_back(tikka.clone());
+
+                    let router_client = SoroswapRouterClient::new(&env, router);
+                    let amount_out = router_client.swap_exact_tokens_for_tokens(
+                        &platform_fee,
+                        &0i128,
+                        &path,
+                        &contract_address,
+                        &(env.ledger().timestamp() + 300),
+                    );
+
+                    let tikka_client = token::Client::new(&env, tikka);
+                    tikka_client.burn(&contract_address, &amount_out);
+
+                    publish_event(
+                        &env,
+                        "buyback_and_burn_executed",
+                        crate::events::BuybackAndBurnExecuted {
+                            router: router.clone(),
+                            tikka_token: tikka.clone(),
+                            amount_in: platform_fee,
+                            amount_out,
+                            timestamp: env.ledger().timestamp(),
+                        },
+                    );
+                } else {
+                    let tikka_client = token::Client::new(&env, tikka);
+                    tikka_client.burn(&contract_address, &platform_fee);
+
+                    publish_event(
+                        &env,
+                        "buyback_and_burn_executed",
+                        crate::events::BuybackAndBurnExecuted {
+                            router: contract_address.clone(),
+                            tikka_token: tikka.clone(),
+                            amount_in: platform_fee,
+                            amount_out: platform_fee,
+                            timestamp: env.ledger().timestamp(),
+                        },
+                    );
+                }
+            } else if raffle.treasury_address.is_some() {
+                token_client.transfer(
+                    &contract_address,
+                    &raffle.treasury_address.clone().unwrap(),
+                    &platform_fee,
+                );
+            }
         }
 
         release_guard(&env);
