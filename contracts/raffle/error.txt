@@ -1,0 +1,141 @@
+    Checking hello-world v0.0.0 (C:\Users\HP\Desktop\tikka-contracts\contracts\raffle)
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+  --> contracts\raffle\src\instance\mod.rs:92:18
+   |
+92 |     env.events().publish(
+   |                  ^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+  --> contracts\raffle\src\lib.rs:40:18
+   |
+40 |     env.events().publish(
+   |                  ^^^^^^^
+
+warning: struct `Contract` is never constructed
+  --> contracts\raffle\src\instance\mod.rs:12:12
+   |
+12 | pub struct Contract;
+   |            ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `publish_event` is never used
+  --> contracts\raffle\src\instance\mod.rs:88:4
+   |
+88 | fn publish_event<T>(env: &Env, event_name: &str, event: T)
+   |    ^^^^^^^^^^^^^
+
+warning: function `read_raffle` is never used
+   --> contracts\raffle\src\instance\mod.rs:141:4
+    |
+141 | fn read_raffle(env: &Env) -> Result<Raffle, Error> {
+    |    ^^^^^^^^^^^
+
+warning: function `write_raffle` is never used
+   --> contracts\raffle\src\instance\mod.rs:148:4
+    |
+148 | fn write_raffle(env: &Env, raffle: &Raffle) {
+    |    ^^^^^^^^^^^^
+
+warning: function `require_not_paused` is never used
+   --> contracts\raffle\src\instance\mod.rs:152:4
+    |
+152 | fn require_not_paused(env: &Env) -> Result<(), Error> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `read_tickets` is never used
+   --> contracts\raffle\src\instance\mod.rs:159:4
+    |
+159 | fn read_tickets(env: &Env) -> Vec<Address> {
+    |    ^^^^^^^^^^^^
+
+warning: function `write_tickets` is never used
+   --> contracts\raffle\src\instance\mod.rs:166:4
+    |
+166 | fn write_tickets(env: &Env, tickets: &Vec<Address>) {
+    |    ^^^^^^^^^^^^^
+
+warning: function `read_ticket_count` is never used
+   --> contracts\raffle\src\instance\mod.rs:170:4
+    |
+170 | fn read_ticket_count(env: &Env, buyer: &Address) -> u32 {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `write_ticket_count` is never used
+   --> contracts\raffle\src\instance\mod.rs:177:4
+    |
+177 | fn write_ticket_count(env: &Env, buyer: &Address, count: u32) {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `next_ticket_id` is never used
+   --> contracts\raffle\src\instance\mod.rs:183:4
+    |
+183 | fn next_ticket_id(env: &Env) -> u32 {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `write_ticket` is never used
+   --> contracts\raffle\src\instance\mod.rs:194:4
+    |
+194 | fn write_ticket(env: &Env, ticket: &Ticket) {
+    |    ^^^^^^^^^^^^
+
+warning: function `acquire_guard` is never used
+   --> contracts\raffle\src\instance\mod.rs:200:4
+    |
+200 | fn acquire_guard(env: &Env) -> Result<(), Error> {
+    |    ^^^^^^^^^^^^^
+
+warning: function `release_guard` is never used
+   --> contracts\raffle\src\instance\mod.rs:210:4
+    |
+210 | fn release_guard(env: &Env) {
+    |    ^^^^^^^^^^^^^
+
+warning: multiple associated functions are never used
+   --> contracts\raffle\src\instance\mod.rs:216:12
+    |
+215 | impl Contract {
+    | ------------- associated functions in this implementation
+216 |     pub fn init(
+    |            ^^^^
+...
+286 |     pub fn deposit_prize(env: Env) -> Result<(), Error> {
+    |            ^^^^^^^^^^^^^
+...
+332 |     pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
+    |            ^^^^^^^^^^
+...
+409 |     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
+    |            ^^^^^^^^^^^^^^^
+...
+499 |     pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+560 |     pub fn claim_prize(env: Env, winner: Address) -> Result<i128, Error> {
+    |            ^^^^^^^^^^^
+...
+630 |     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
+    |            ^^^^^^^^^^^^^
+...
+696 |     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
+    |            ^^^^^^^^^^^^^
+...
+754 |     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
+    |            ^^^^^^^^^^
+...
+758 |     pub fn pause(env: Env) -> Result<(), Error> {
+    |            ^^^^^
+...
+779 |     pub fn unpause(env: Env) -> Result<(), Error> {
+    |            ^^^^^^^
+...
+800 |     pub fn is_paused(env: Env) -> bool {
+    |            ^^^^^^^^^
+...
+807 |     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+    |            ^^^^^^^^^
+
+warning: `hello-world` (lib) generated 16 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.54s
