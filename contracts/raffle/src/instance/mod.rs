@@ -196,6 +196,13 @@ fn write_ticket(env: &Env, ticket: &Ticket) {
         .set(&DataKey::Ticket(ticket.id), ticket);
 }
 
+fn require_not_paused(env: &Env) -> Result<(), Error> {
+    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        return Err(Error::ContractPaused);
+    }
+    Ok(())
+}
+
 fn acquire_guard(env: &Env) -> Result<(), Error> {
     if env.storage().instance().has(&DataKey::ReentrancyGuard) {
         return Err(Error::Reentrancy);
@@ -364,8 +371,8 @@ impl Contract {
     }
 
     pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
-        buyer.require_auth();
         require_not_paused(&env)?;
+        buyer.require_auth();
         let mut raffle = read_raffle(&env)?;
 
         if raffle.status != RaffleStatus::Active {

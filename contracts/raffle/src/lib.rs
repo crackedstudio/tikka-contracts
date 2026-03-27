@@ -298,3 +298,337 @@ impl RaffleFactory {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        Address, Bytes, Env, String,
+    };
+
+    // -------------------------------------------------------------------------
+    // Helper: initialise a RaffleFactory with mock_all_auths active.
+    // Returns (client, admin, treasury).
+    // -------------------------------------------------------------------------
+    fn setup_factory(env: &Env) -> (RaffleFactoryClient<'_>, Address, Address) {
+        let admin = Address::generate(env);
+        let treasury = Address::generate(env);
+        let wasm_hash = Bytes::from_slice(env, &[0u8; 32]);
+
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(env, &contract_id);
+        client.init_factory(&admin, &wasm_hash, &0u32, &treasury);
+
+        (client, admin, treasury)
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper: build minimal create_raffle arguments
+    // -------------------------------------------------------------------------
+    fn make_raffle_args(env: &Env) -> (Address, String, u64, u32, bool, i128, Address, i128) {
+        let token_admin = Address::generate(env);
+        let token_contract = env.register_stellar_asset_contract_v2(token_admin);
+        let payment_token = token_contract.address();
+        let creator = Address::generate(env);
+        (
+            creator,
+            String::from_str(env, "Test Raffle"),
+            0u64,
+            10u32,
+            false,
+            10i128,
+            payment_token,
+            100i128,
+        )
+    }
+
+    // =========================================================================
+    // 1. is_paused returns false on a freshly initialised factory (absent key)
+    //    Validates: Requirement 1.5, 7.3
+    // =========================================================================
+    #[test]
+    fn test_is_paused_default_false() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        assert!(!client.is_paused());
+    }
+
+    // =========================================================================
+    // 2. pause sets flag to true and emits ContractPaused event
+    //    Validates: Requirement 1.2
+    // =========================================================================
+    #[test]
+    fn test_pause_sets_flag_and_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        client.pause();
+
+        assert!(client.is_paused());
+        assert!(!env.events().all().is_empty());
+    }
+
+    // =========================================================================
+    // 3. unpause sets flag to false and emits ContractUnpaused event
+    //    Validates: Requirement 1.3
+    // =========================================================================
+    #[test]
+    fn test_unpause_sets_flag_and_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        client.pause();
+        assert!(client.is_paused());
+
+        client.unpause();
+        assert!(!client.is_paused());
+        assert!(!env.events().all().is_empty());
+    }
+
+    // =========================================================================
+    // 4. create_raffle returns ContractPaused when factory is paused
+    //    Validates: Requirement 2.1
+    // =========================================================================
+    #[test]
+    fn test_create_raffle_blocked_when_paused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        client.pause();
+
+        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
+            make_raffle_args(&env);
+
+        let result = client.try_create_raffle(
+            &creator,
+            &desc,
+            &end_time,
+            &max_tickets,
+            &allow_multiple,
+            &ticket_price,
+            &payment_token,
+            &prize_amount,
+            &instance::RandomnessSource::Internal,
+            &None,
+        );
+
+        assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+    }
+
+    // =========================================================================
+    // 5. create_raffle succeeds when factory is unpaused
+    //    Validates: Requirement 2.2
+    // =========================================================================
+    #[test]
+    fn test_create_raffle_succeeds_when_unpaused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        assert!(!client.is_paused());
+
+        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
+            make_raffle_args(&env);
+
+        let result = client.try_create_raffle(
+            &creator,
+            &desc,
+            &end_time,
+            &max_tickets,
+            &allow_multiple,
+            &ticket_price,
+            &payment_token,
+            &prize_amount,
+            &instance::RandomnessSource::Internal,
+            &None,
+        );
+
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // 6. Non-admin caller on pause panics (require_auth fails / NotAuthorized)
+    //    Validates: Requirement 1.4
+    // =========================================================================
+    #[test]
+    #[should_panic] // NotAuthorized — admin key absent, client panics on Err
+    fn test_pause_by_non_admin_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        // Register factory without init → admin key absent → NotAuthorized
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+        client.pause(); // panics because try_pause would return Err(NotAuthorized)
+    }
+
+    // =========================================================================
+    // 6b. Non-admin: pause returns NotAuthorized when admin key is absent
+    //     Validates: Requirement 1.4
+    // =========================================================================
+    #[test]
+    fn test_pause_returns_not_authorized_when_no_admin_stored() {
+        let env = Env::default();
+        env.mock_all_auths();
+        // Register factory but do NOT call init_factory → admin key absent
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        let result = client.try_pause();
+        assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
+    }
+
+    // =========================================================================
+    // 7. unpause returns NotAuthorized when admin key is absent
+    //    Validates: Requirement 1.4
+    // =========================================================================
+    #[test]
+    fn test_unpause_returns_not_authorized_when_no_admin_stored() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        let result = client.try_unpause();
+        assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
+    }
+
+    // =========================================================================
+    // 8. pause_instance returns NotAuthorized when admin key is absent
+    //    Validates: Requirement 6.3
+    // =========================================================================
+    #[test]
+    fn test_pause_instance_returns_not_authorized_when_no_admin_stored() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+        let dummy_instance = Address::generate(&env);
+
+        let result = client.try_pause_instance(&dummy_instance);
+        assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
+    }
+
+    // =========================================================================
+    // 9. unpause_instance returns NotAuthorized when admin key is absent
+    //    Validates: Requirement 6.3
+    // =========================================================================
+    #[test]
+    fn test_unpause_instance_returns_not_authorized_when_no_admin_stored() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+        let dummy_instance = Address::generate(&env);
+
+        let result = client.try_unpause_instance(&dummy_instance);
+        assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
+    }
+
+    // =========================================================================
+    // Helper: register a RaffleInstance and initialise it with the given factory
+    // address. Returns the instance client.
+    // =========================================================================
+    fn setup_instance<'a>(
+        env: &'a Env,
+        factory_addr: &Address,
+    ) -> instance::ContractClient<'a> {
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token_contract = env.register_stellar_asset_contract_v2(token_admin);
+        let payment_token = token_contract.address();
+
+        let instance_id = env.register(instance::Contract, ());
+        let instance_client = instance::ContractClient::new(env, &instance_id);
+
+        let config = instance::RaffleConfig {
+            description: String::from_str(env, "Delegation Test Raffle"),
+            end_time: 0u64,
+            max_tickets: 10u32,
+            allow_multiple: false,
+            ticket_price: 10i128,
+            payment_token,
+            prize_amount: 100i128,
+            randomness_source: instance::RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0u32,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+        };
+
+        instance_client.init(factory_addr, &admin, &creator, &config);
+        instance_client
+    }
+
+    // =========================================================================
+    // 10. pause_instance causes the target instance's is_paused() to return true
+    //     Validates: Requirement 6.1
+    // =========================================================================
+    #[test]
+    fn test_pause_instance_propagates_pause_to_instance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (factory_client, _, _) = setup_factory(&env);
+
+        let instance_client = setup_instance(&env, &factory_client.address);
+
+        assert!(!instance_client.is_paused());
+
+        factory_client.pause_instance(&instance_client.address);
+
+        assert!(instance_client.is_paused());
+    }
+
+    // =========================================================================
+    // 11. unpause_instance causes the target instance's is_paused() to return false
+    //     Validates: Requirement 6.2
+    // =========================================================================
+    #[test]
+    fn test_unpause_instance_propagates_unpause_to_instance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (factory_client, _, _) = setup_factory(&env);
+
+        let instance_client = setup_instance(&env, &factory_client.address);
+
+        // Pause first via factory delegation
+        factory_client.pause_instance(&instance_client.address);
+        assert!(instance_client.is_paused());
+
+        // Now unpause via factory delegation
+        factory_client.unpause_instance(&instance_client.address);
+        assert!(!instance_client.is_paused());
+    }
+
+    // =========================================================================
+    // 12. pause_instance / unpause_instance round-trip: multiple toggles
+    //     Validates: Requirements 6.1, 6.2
+    // =========================================================================
+    #[test]
+    fn test_delegation_pause_unpause_round_trip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (factory_client, _, _) = setup_factory(&env);
+
+        let instance_client = setup_instance(&env, &factory_client.address);
+
+        // Start unpaused
+        assert!(!instance_client.is_paused());
+
+        factory_client.pause_instance(&instance_client.address);
+        assert!(instance_client.is_paused());
+
+        factory_client.unpause_instance(&instance_client.address);
+        assert!(!instance_client.is_paused());
+
+        factory_client.pause_instance(&instance_client.address);
+        assert!(instance_client.is_paused());
+    }
+}
