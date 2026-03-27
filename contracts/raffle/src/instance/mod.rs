@@ -57,6 +57,7 @@ pub struct Raffle {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    pub finalized_at: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -73,13 +74,15 @@ pub struct RaffleConfig {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
 }
 
 #[derive(Clone)]
 #[contracttype]
 pub struct Ticket {
     pub id: u32,
-    pub buyer: Address,
+    pub owner: Address,
     pub purchase_time: u64,
     pub ticket_number: u32,
 }
@@ -106,8 +109,10 @@ pub enum DataKey {
     Factory,
     RefundStatus(u32), // ticket_id -> bool
     ReentrancyGuard,
-    Admin,
+    Approved(u32), // ticket_id -> Address
+    ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
+    Admin,
 }
 
 // --- Error Types ---
@@ -136,6 +141,7 @@ pub enum Error {
     NotInitialized = 19,
     InvalidStateTransition = 20,
     Reentrancy = 21,
+    ClaimTooEarly = 22,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -211,6 +217,40 @@ fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
+fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+    let mut ticket = env
+        .storage()
+        .persistent()
+        .get::<_, Ticket>(&DataKey::Ticket(token_id))
+        .ok_or(Error::InvalidParameters)?;
+
+    if ticket.owner != from {
+        return Err(Error::NotAuthorized);
+    }
+
+    let raffle = read_raffle(env)?;
+    let to_count = read_ticket_count(env, &to);
+    if !raffle.allow_multiple && to_count > 0 {
+        return Err(Error::MultipleTicketsNotAllowed);
+    }
+
+    let from_count = read_ticket_count(env, &from);
+    write_ticket_count(env, &from, from_count.saturating_sub(1));
+    write_ticket_count(env, &to, to_count + 1);
+
+    ticket.owner = to.clone();
+    write_ticket(env, &ticket);
+
+    let mut all_tickets = read_tickets(env);
+    let index = ticket.ticket_number.saturating_sub(1) as u32;
+    all_tickets.set(index, to.clone());
+    write_tickets(env, &all_tickets);
+
+    env.storage().persistent().remove(&DataKey::Approved(token_id));
+
+    Ok(())
+}
+
 #[contractimpl]
 impl Contract {
     pub fn init(
@@ -260,6 +300,7 @@ impl Contract {
             oracle_address: config.oracle_address,
             protocol_fee_bp: config.protocol_fee_bp,
             treasury_address: config.treasury_address,
+            finalized_at: None,
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
@@ -355,7 +396,7 @@ impl Contract {
 
         let ticket = Ticket {
             id: ticket_id,
-            buyer: buyer.clone(),
+            owner: buyer.clone(),
             purchase_time: timestamp,
             ticket_number: raffle.tickets_sold + 1,
         };
@@ -469,6 +510,7 @@ impl Contract {
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
+        raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
         publish_event(
@@ -520,6 +562,7 @@ impl Contract {
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
+        raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
         publish_event(
@@ -572,6 +615,10 @@ impl Contract {
             return Err(Error::PrizeNotDeposited);
         }
 
+        if env.ledger().timestamp() < raffle.finalized_at.unwrap_or(0) + 3600 {
+            return Err(Error::ClaimTooEarly);
+        }
+
         // Reentrancy guard
         acquire_guard(&env)?;
 
@@ -592,12 +639,67 @@ impl Contract {
 
         token_client.transfer(&contract_address, &winner, &net_amount);
 
-        if platform_fee > 0 && raffle.treasury_address.is_some() {
-            token_client.transfer(
-                &contract_address,
-                &raffle.treasury_address.clone().unwrap(),
-                &platform_fee,
-            );
+        if platform_fee > 0 {
+            if let (Some(router), Some(tikka)) = (&raffle.swap_router, &raffle.tikka_token) {
+                if raffle.payment_token != *tikka {
+                    // Approve router
+                    token_client.approve(
+                        &contract_address,
+                        router,
+                        &platform_fee,
+                        &(env.ledger().sequence() + 100),
+                    );
+
+                    let mut path = Vec::new(&env);
+                    path.push_back(raffle.payment_token.clone());
+                    path.push_back(tikka.clone());
+
+                    let router_client = SoroswapRouterClient::new(&env, router);
+                    let amount_out = router_client.swap_exact_tokens_for_tokens(
+                        &platform_fee,
+                        &0i128,
+                        &path,
+                        &contract_address,
+                        &(env.ledger().timestamp() + 300),
+                    );
+
+                    let tikka_client = token::Client::new(&env, tikka);
+                    tikka_client.burn(&contract_address, &amount_out);
+
+                    publish_event(
+                        &env,
+                        "buyback_and_burn_executed",
+                        crate::events::BuybackAndBurnExecuted {
+                            router: router.clone(),
+                            tikka_token: tikka.clone(),
+                            amount_in: platform_fee,
+                            amount_out,
+                            timestamp: env.ledger().timestamp(),
+                        },
+                    );
+                } else {
+                    let tikka_client = token::Client::new(&env, tikka);
+                    tikka_client.burn(&contract_address, &platform_fee);
+
+                    publish_event(
+                        &env,
+                        "buyback_and_burn_executed",
+                        crate::events::BuybackAndBurnExecuted {
+                            router: contract_address.clone(),
+                            tikka_token: tikka.clone(),
+                            amount_in: platform_fee,
+                            amount_out: platform_fee,
+                            timestamp: env.ledger().timestamp(),
+                        },
+                    );
+                }
+            } else if raffle.treasury_address.is_some() {
+                token_client.transfer(
+                    &contract_address,
+                    &raffle.treasury_address.clone().unwrap(),
+                    &platform_fee,
+                );
+            }
         }
 
         release_guard(&env);
@@ -710,7 +812,7 @@ impl Contract {
         }
         let ticket = ticket_opt.unwrap();
 
-        ticket.buyer.require_auth();
+        ticket.owner.require_auth();
 
         let is_refunded = env
             .storage()
@@ -733,7 +835,7 @@ impl Contract {
         // Interaction: external token transfer
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, &ticket.buyer, &raffle.ticket_price);
+        token_client.transfer(&contract_address, &ticket.owner, &raffle.ticket_price);
 
         release_guard(&env);
 
@@ -741,7 +843,7 @@ impl Contract {
             &env,
             "ticket_refunded",
             crate::events::TicketRefunded {
-                buyer: ticket.buyer.clone(),
+                buyer: ticket.owner.clone(),
                 ticket_id,
                 amount: raffle.ticket_price,
                 timestamp: env.ledger().timestamp(),
@@ -749,6 +851,80 @@ impl Contract {
         );
 
         Ok(raffle.ticket_price)
+    }
+
+    // --- NFT Interface ---
+    pub fn name(env: Env) -> String {
+        String::from_str(&env, "Tikka Raffle Ticket")
+    }
+
+    pub fn symbol(env: Env) -> String {
+        String::from_str(&env, "TIKKA_TKT")
+    }
+
+    pub fn token_uri(env: Env, _token_id: u32) -> String {
+        String::from_str(&env, "https://tikka.app/api/ticket")
+    }
+
+    pub fn balance(env: Env, owner: Address) -> u32 {
+        read_ticket_count(&env, &owner)
+    }
+
+    pub fn owner_of(env: Env, token_id: u32) -> Result<Address, Error> {
+        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(token_id));
+        if let Some(ticket) = ticket_opt {
+            Ok(ticket.owner)
+        } else {
+            Err(Error::InvalidParameters)
+        }
+    }
+
+    pub fn approve(env: Env, caller: Address, operator: Option<Address>, token_id: u32) -> Result<(), Error> {
+        caller.require_auth();
+        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(token_id));
+        let owner = ticket_opt.ok_or(Error::InvalidParameters)?.owner;
+        
+        let is_approved_for_all = env.storage().persistent().get::<_, bool>(&DataKey::ApprovedForAll(owner.clone(), caller.clone())).unwrap_or(false);
+        if caller != owner && !is_approved_for_all {
+            return Err(Error::NotAuthorized);
+        }
+
+        if let Some(op) = operator {
+            env.storage().persistent().set(&DataKey::Approved(token_id), &op);
+        } else {
+            env.storage().persistent().remove(&DataKey::Approved(token_id));
+        }
+        Ok(())
+    }
+
+    pub fn set_approval_for_all(env: Env, caller: Address, operator: Address, approved: bool) -> Result<(), Error> {
+        caller.require_auth();
+        env.storage().persistent().set(&DataKey::ApprovedForAll(caller, operator), &approved);
+        Ok(())
+    }
+
+    pub fn get_approved(env: Env, token_id: u32) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::Approved(token_id))
+    }
+
+    pub fn is_approved_for_all(env: Env, owner: Address, operator: Address) -> bool {
+        env.storage().persistent().get(&DataKey::ApprovedForAll(owner, operator)).unwrap_or(false)
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+        from.require_auth();
+        do_transfer(&env, from, to, token_id)
+    }
+
+    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+        spender.require_auth();
+        let is_approved_for_all = env.storage().persistent().get::<_, bool>(&DataKey::ApprovedForAll(from.clone(), spender.clone())).unwrap_or(false);
+        let individual_approval = env.storage().persistent().get::<_, Address>(&DataKey::Approved(token_id));
+        
+        if spender != from && !is_approved_for_all && individual_approval != Some(spender.clone()) {
+            return Err(Error::NotAuthorized);
+        }
+        do_transfer(&env, from, to, token_id)
     }
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {

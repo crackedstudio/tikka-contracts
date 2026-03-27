@@ -1,0 +1,27 @@
+[package]
+name    = "raffle-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# ── cargo-fuzz targets ──────────────────────────────────────────────────────
+[[bin]]
+name = "fuzz_buy_ticket"
+path = "fuzz_targets/fuzz_buy_ticket.rs"
+test = false
+
+[[bin]]
+name = "fuzz_finalize_raffle"
+path = "fuzz_targets/fuzz_finalize_raffle.rs"
+test = false
+
+[dependencies]
+# libfuzzer-sys wires rust code to LLVM libFuzzer
+libfuzzer-sys = "0.4"
+# Derives arbitrary byte→type conversion for fuzzer inputs
+arbitrary     = { version = "1", features = ["derive"] }
+
+[profile.release]
+# Optimisation level useful for fuzzing; debug info helps with crash reports
+opt-level = 3
+debug     = false
