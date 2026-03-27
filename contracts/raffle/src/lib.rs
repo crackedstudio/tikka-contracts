@@ -26,11 +26,16 @@ pub enum DataKey {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ContractError {
+    // General errors (1-10)
     AlreadyInitialized = 1,
     NotAuthorized = 2,
     ContractPaused = 3,
-    AdminTransferPending = 4,
-    NoPendingTransfer = 5,
+    InvalidParameters = 4,
+    RaffleNotFound = 5,
+    
+    // Admin errors (11-20)
+    AdminTransferPending = 11,
+    NoPendingTransfer = 12,
 }
 
 fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
