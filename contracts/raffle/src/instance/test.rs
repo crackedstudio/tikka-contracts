@@ -3,8 +3,9 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal, String, Symbol,
+    token, Address, Bytes, Env, IntoVal, String, Symbol,
 };
+use crate::{RaffleFactory, RaffleFactoryClient, ContractError};
 
 /// HELPER: Standardized environment setup
 fn setup_raffle_env(
@@ -19,11 +20,19 @@ fn setup_raffle_env(
     Address,
     token::StellarAssetClient<'_>,
     Address,
+    Address,
 ) {
     let creator = Address::generate(env);
     let buyer = Address::generate(env);
     let admin = Address::generate(env);
-    let factory = Address::generate(env);
+    let factory_admin = Address::generate(env);
+
+    // Register factory as a dummy contract so env.as_contract works
+    #[contract]
+    pub struct DummyFactory;
+    #[contractimpl]
+    impl DummyFactory {}
+    let factory = env.register(DummyFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -49,9 +58,9 @@ fn setup_raffle_env(
         treasury_address: treasury,
     };
 
-    client.init(&factory, &creator, &config);
+    client.init(&factory, &factory_admin, &creator, &config);
 
-    (client, creator, buyer, admin_client, factory)
+    (client, creator, buyer, admin_client, factory, factory_admin)
 }
 
 // --- 1. FUNCTIONAL FLOW TESTS ---
@@ -60,7 +69,7 @@ fn setup_raffle_env(
 fn test_basic_internal_raffle_flow() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, creator, _buyer, admin_client, _) =
+    let (client, creator, _buyer, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
     let token_client = token::Client::new(&env, &admin_client.address);
 
@@ -87,7 +96,7 @@ fn test_protocol_fees() {
     let env = Env::default();
     env.mock_all_auths();
     let treasury = Address::generate(&env);
-    let (client, _creator, _buyer, admin_client, _) = setup_raffle_env(
+    let (client, _creator, _buyer, admin_client, _, _) = setup_raffle_env(
         &env,
         RandomnessSource::Internal,
         None,
@@ -123,7 +132,7 @@ fn test_vrf_raffle_flow() {
     impl DummyOracle {}
     let oracle = env.register(DummyOracle, ());
 
-    let (client, _, _buyer, admin_client, _) = setup_raffle_env(
+    let (client, _, _buyer, admin_client, _, _) = setup_raffle_env(
         &env,
         RandomnessSource::External,
         Some(oracle.clone()),
@@ -166,7 +175,7 @@ fn test_vrf_raffle_flow() {
 fn test_unauthorized_deposit() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     let stranger = Address::generate(&env);
     env.as_contract(&stranger, || {
@@ -179,7 +188,7 @@ fn test_unauthorized_deposit() {
 fn test_invalid_state_transition_buy_before_deposit() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, _) =
+    let (client, _, buyer, _, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.buy_ticket(&buyer);
@@ -190,7 +199,7 @@ fn test_invalid_state_transition_buy_before_deposit() {
 fn test_multiple_tickets_prohibited() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, admin_client, _) =
+    let (client, _, buyer, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -209,6 +218,7 @@ fn test_raffle_created_event() {
     let creator = Address::generate(&env);
     let factory = Address::generate(&env);
     let admin = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -230,7 +240,7 @@ fn test_raffle_created_event() {
         treasury_address: None,
     };
 
-    client.init(&factory, &creator, &config);
+    client.init(&factory, &factory_admin, &creator, &config);
 
     // Check that raffle_created event was emitted
     assert!(env.events().all().len() > 0);
@@ -258,7 +268,7 @@ fn test_raffle_finalized_event_audit() {
         l.timestamp = expected_timestamp;
     });
 
-    let (client, _, _, admin_client, _) =
+    let (client, _, _, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -279,7 +289,7 @@ fn test_single_ticket_purchase_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, buyer, _, _) =
+    let (client, _, buyer, _, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -297,7 +307,7 @@ fn test_draw_triggered_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, _, admin_client, _) =
+    let (client, _, _, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -324,7 +334,7 @@ fn test_randomness_requested_event() {
     impl DummyOracle {}
     let oracle = env.register(DummyOracle, ());
 
-    let (client, _, _, admin_client, _) = setup_raffle_env(
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
         &env,
         RandomnessSource::External,
         Some(oracle.clone()),
@@ -356,7 +366,7 @@ fn test_randomness_received_event() {
     impl DummyOracle {}
     let oracle = env.register(DummyOracle, ());
 
-    let (client, _, _, admin_client, _) = setup_raffle_env(
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
         &env,
         RandomnessSource::External,
         Some(oracle.clone()),
@@ -386,7 +396,7 @@ fn test_prize_claimed_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, _, admin_client, _) =
+    let (client, _, _, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -409,7 +419,7 @@ fn test_raffle_cancelled_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, buyer, _, _) =
+    let (client, _, buyer, _, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -425,7 +435,7 @@ fn test_status_changed_events() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, _, admin_client, _) =
+    let (client, _, _, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -439,7 +449,7 @@ fn test_status_changed_events() {
 fn test_raffle_cancellation() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, creator, buyer, admin_client, _) =
+    let (client, creator, buyer, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
     let token_client = token::Client::new(&env, &admin_client.address);
 
@@ -458,7 +468,7 @@ fn test_raffle_cancellation() {
 fn test_refund_ticket() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _creator, buyer, admin_client, _) =
+    let (client, _creator, buyer, admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
     let token_client = token::Client::new(&env, &admin_client.address);
 
@@ -483,7 +493,7 @@ fn test_refund_ticket() {
 fn test_double_refund_rejected() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _creator, buyer, _admin_client, _) =
+    let (client, _creator, buyer, _admin_client, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();

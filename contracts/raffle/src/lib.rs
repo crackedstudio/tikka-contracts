@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String,
+    Symbol, Vec,
 };
 
 mod events;
@@ -18,6 +19,50 @@ pub enum DataKey {
     InstanceWasmHash,
     ProtocolFeeBP,
     Treasury,
+    Paused,
+    PendingAdmin,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum ContractError {
+    AlreadyInitialized = 1,
+    NotAuthorized = 2,
+    ContractPaused = 3,
+    AdminTransferPending = 4,
+    NoPendingTransfer = 5,
+}
+
+fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
+where
+    T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
+{
+    env.events().publish(
+        (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
+        event,
+    );
+}
+
+fn require_factory_admin(env: &Env) -> Result<Address, ContractError> {
+    let admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Admin)
+        .ok_or(ContractError::NotAuthorized)?;
+    admin.require_auth();
+    Ok(admin)
+}
+
+fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
+    if env
+        .storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+    {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
 }
 
 #[contractimpl]
@@ -28,9 +73,9 @@ impl RaffleFactory {
         wasm_hash: Bytes,
         protocol_fee_bp: u32,
         treasury: Address,
-    ) {
+    ) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
@@ -45,17 +90,18 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+        Ok(())
     }
 
-    pub fn set_config(env: Env, protocol_fee_bp: u32, treasury: Address) {
-        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
+    pub fn set_config(env: Env, protocol_fee_bp: u32, treasury: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+        Ok(())
     }
 
     pub fn create_raffle(
@@ -70,8 +116,9 @@ impl RaffleFactory {
         prize_amount: i128,
         randomness_source: RandomnessSource,
         oracle_address: Option<Address>,
-    ) -> Address {
+    ) -> Result<Address, ContractError> {
         creator.require_auth();
+        require_factory_not_paused(&env)?;
 
         let _wasm_hash: Bytes = env
             .storage()
@@ -118,7 +165,14 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
 
-        creator
+        Ok(creator)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotAuthorized)
     }
 
     pub fn get_raffles(env: Env) -> Vec<Address> {
@@ -126,5 +180,121 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::RaffleInstances)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn pause(env: Env) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        env.storage().instance().set(&DataKey::Paused, &true);
+
+        publish_factory_event(
+            &env,
+            "contract_paused",
+            events::ContractPaused {
+                paused_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn unpause(env: Env) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        env.storage().instance().set(&DataKey::Paused, &false);
+
+        publish_factory_event(
+            &env,
+            "contract_unpaused",
+            events::ContractUnpaused {
+                unpaused_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+
+        // Self-transfer cancels any pending transfer
+        if new_admin == admin {
+            env.storage().persistent().remove(&DataKey::PendingAdmin);
+            return Ok(());
+        }
+
+        if env.storage().persistent().has(&DataKey::PendingAdmin) {
+            return Err(ContractError::AdminTransferPending);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+
+        publish_factory_event(
+            &env,
+            "admin_transfer_proposed",
+            events::AdminTransferProposed {
+                current_admin: admin,
+                proposed_admin: new_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn accept_admin(env: Env) -> Result<(), ContractError> {
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingTransfer)?;
+        pending.require_auth();
+
+        let old_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+
+        env.storage().persistent().set(&DataKey::Admin, &pending);
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+
+        publish_factory_event(
+            &env,
+            "admin_transfer_accepted",
+            events::AdminTransferAccepted {
+                old_admin,
+                new_admin: pending,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        let admin = require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.set_admin(&admin);
+        Ok(())
+    }
+
+    pub fn pause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.pause();
+        Ok(())
+    }
+
+    pub fn unpause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.unpause();
+        Ok(())
     }
 }

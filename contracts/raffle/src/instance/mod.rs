@@ -207,6 +207,7 @@ impl Contract {
     pub fn init(
         env: Env,
         factory: Address,
+        admin: Address,
         creator: Address,
         config: RaffleConfig,
     ) -> Result<(), Error> {
@@ -253,6 +254,7 @@ impl Contract {
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
+        env.storage().instance().set(&DataKey::Admin, &admin);
 
         publish_event(
             &env,
@@ -273,6 +275,7 @@ impl Contract {
     }
 
     pub fn deposit_prize(env: Env) -> Result<(), Error> {
+        require_not_paused(&env)?;
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
@@ -319,6 +322,7 @@ impl Contract {
 
     pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
         buyer.require_auth();
+        require_not_paused(&env)?;
         let mut raffle = read_raffle(&env)?;
 
         if raffle.status != RaffleStatus::Active {
@@ -740,6 +744,66 @@ impl Contract {
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
         read_raffle(&env)
+    }
+
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(Error::NotAuthorized)?;
+        factory.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+
+        publish_event(
+            &env,
+            "contract_paused",
+            crate::events::ContractPaused {
+                paused_by: factory,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(Error::NotAuthorized)?;
+        factory.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+
+        publish_event(
+            &env,
+            "contract_unpaused",
+            crate::events::ContractUnpaused {
+                unpaused_by: factory,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(Error::NotAuthorized)?;
+        factory.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
     }
 }
 
