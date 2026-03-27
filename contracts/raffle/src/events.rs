@@ -1,6 +1,7 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
 
 use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
+use crate::AdminOp;
 
 // ============================================================================
 // LIFECYCLE EVENTS
@@ -196,6 +197,39 @@ pub struct AdminTransferAccepted {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
+}
+
+// ============================================================================
+// TIME-LOCKED ADMIN OPERATION EVENTS
+// ============================================================================
+
+/// Emitted when an admin operation is proposed
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpProposed {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub effective_timestamp: u64,
+    pub proposed_by: Address,
+}
+
+/// Emitted when an admin operation is executed
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpExecuted {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub executed_by: Address,
+    pub executed_at: u64,
+}
+
+/// Emitted when an admin operation is cancelled
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpCancelled {
+    pub op_id: u32,
+    pub cancelled_by: Address,
+    pub cancelled_at: u64,
 }
 
 // ============================================================================
