@@ -1,0 +1,267 @@
+﻿cargo : warning: use of 
+deprecated method `soroban_sd
+k::events::Events::publish`: 
+use the #[contractevent] 
+macro on a contract event 
+type
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File check_out.txt 
+-Encoding UTF8; Get-Content 
+...
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (warning  
+  : use of...ract event ty   
+ pe:String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+  --> contracts\raffle\src\in
+stance\mod.rs:94:18
+   |
+94 |     
+env.events().publish(
+   |                  ^^^^^^^
+   |
+   = note: 
+`#[warn(deprecated)]` on by 
+default
+
+warning: use of deprecated 
+method `soroban_sdk::events::
+Events::publish`: use the 
+#[contractevent] macro on a 
+contract event type
+  --> contracts\raffle\src\li
+b.rs:44:18
+   |
+44 |     
+env.events().publish(
+   |                  ^^^^^^^
+
+warning: struct `Contract` 
+is never constructed
+  --> contracts\raffle\src\in
+stance\mod.rs:14:12
+   |
+14 | pub struct Contract;
+   |            ^^^^^^^^
+   |
+   = note: 
+`#[warn(dead_code)]` (part 
+of `#[warn(unused)]`) on by 
+default
+
+warning: function 
+`publish_event` is never used
+  --> contracts\raffle\src\in
+stance\mod.rs:90:4
+   |
+90 | fn 
+publish_event<T>(env: &Env, 
+event_name: &str, event: T)
+   |    ^^^^^^^^^^^^^
+
+warning: function 
+`read_raffle` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:143:4
+    |
+143 | fn read_raffle(env: 
+&Env) -> Result<Raffle, 
+Error> {
+    |    ^^^^^^^^^^^
+
+warning: function 
+`write_raffle` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:150:4
+    |
+150 | fn write_raffle(env: 
+&Env, raffle: &Raffle) {
+    |    ^^^^^^^^^^^^
+
+warning: function 
+`require_not_paused` is 
+never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:154:4
+    |
+154 | fn 
+require_not_paused(env: 
+&Env) -> Result<(), Error> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function 
+`read_tickets` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:161:4
+    |
+161 | fn read_tickets(env: 
+&Env) -> Vec<Address> {
+    |    ^^^^^^^^^^^^
+
+warning: function 
+`write_tickets` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:168:4
+    |
+168 | fn write_tickets(env: 
+&Env, tickets: 
+&Vec<Address>) {
+    |    ^^^^^^^^^^^^^
+
+warning: function 
+`read_ticket_count` is never 
+used
+   --> contracts\raffle\src\i
+nstance\mod.rs:172:4
+    |
+172 | fn 
+read_ticket_count(env: &Env, 
+buyer: &Address) -> u32 {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function 
+`write_ticket_count` is 
+never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:179:4
+    |
+179 | fn 
+write_ticket_count(env: 
+&Env, buyer: &Address, 
+count: u32) {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function 
+`next_ticket_id` is never 
+used
+   --> contracts\raffle\src\i
+nstance\mod.rs:185:4
+    |
+185 | fn next_ticket_id(env: 
+&Env) -> u32 {
+    |    ^^^^^^^^^^^^^^
+
+warning: function 
+`write_ticket` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:196:4
+    |
+196 | fn write_ticket(env: 
+&Env, ticket: &Ticket) {
+    |    ^^^^^^^^^^^^
+
+warning: function 
+`acquire_guard` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:202:4
+    |
+202 | fn acquire_guard(env: 
+&Env) -> Result<(), Error> {
+    |    ^^^^^^^^^^^^^
+
+warning: function 
+`release_guard` is never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:212:4
+    |
+212 | fn release_guard(env: 
+&Env) {
+    |    ^^^^^^^^^^^^^
+
+warning: multiple associated 
+functions are never used
+   --> contracts\raffle\src\i
+nstance\mod.rs:218:12
+    |
+217 | impl Contract {
+    | ------------- 
+associated functions in this 
+implementation
+218 |     pub fn init(
+    |            ^^^^
+...
+288 |     pub fn 
+deposit_prize(env: Env) -> 
+Result<(), Error> {
+    |            
+^^^^^^^^^^^^^
+...
+334 |     pub fn 
+buy_ticket(env: Env, buyer: 
+Address) -> Result<u32, 
+Error> {
+    |            ^^^^^^^^^^
+...
+411 |     pub fn 
+finalize_raffle(env: Env) -> 
+Result<(), Error> {
+    |            
+^^^^^^^^^^^^^^^
+...
+501 |     pub fn 
+provide_randomness(env: Env, 
+random_seed: u64) -> 
+Result<Address, Error> {
+    |            
+^^^^^^^^^^^^^^^^^^
+...
+562 |     pub fn 
+claim_prize(env: Env, 
+winner: Address) -> 
+Result<i128, Error> {
+    |            ^^^^^^^^^^^
+...
+632 |     pub fn 
+cancel_raffle(env: Env, 
+reason: CancelReason) -> 
+Result<(), Error> {
+    |            
+^^^^^^^^^^^^^
+...
+698 |     pub fn 
+refund_ticket(env: Env, 
+ticket_id: u32) -> 
+Result<i128, Error> {
+    |            
+^^^^^^^^^^^^^
+...
+756 |     pub fn 
+get_raffle(env: Env) -> 
+Result<Raffle, Error> {
+    |            ^^^^^^^^^^
+...
+760 |     pub fn 
+get_tickets(env: Env, 
+params: PaginationParams) -> 
+PageResult_Tickets {
+    |            ^^^^^^^^^^^
+...
+799 |     pub fn pause(env: 
+Env) -> Result<(), Error> {
+    |            ^^^^^
+...
+820 |     pub fn 
+unpause(env: Env) -> 
+Result<(), Error> {
+    |            ^^^^^^^
+...
+841 |     pub fn 
+is_paused(env: Env) -> bool {
+    |            ^^^^^^^^^
+...
+848 |     pub fn 
+set_admin(env: Env, 
+new_admin: Address) -> 
+Result<(), Error> {
+    |            ^^^^^^^^^
+
+warning: `hello-world` (lib) 
+generated 16 warnings
+    Finished `dev` profile 
+[unoptimized + debuginfo] 
+target(s) in 0.80s
