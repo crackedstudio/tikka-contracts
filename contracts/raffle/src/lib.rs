@@ -120,15 +120,7 @@ impl RaffleFactory {
     pub fn create_raffle(
         env: Env,
         creator: Address,
-        description: String,
-        end_time: u64,
-        max_tickets: u32,
-        allow_multiple: bool,
-        ticket_price: i128,
-        payment_token: Address,
-        prize_amount: i128,
-        randomness_source: RandomnessSource,
-        oracle_address: Option<Address>,
+        config: RaffleConfig,
     ) -> Result<Address, ContractError> {
         creator.require_auth();
         require_factory_not_paused(&env)?;
@@ -152,29 +144,10 @@ impl RaffleFactory {
             .get(&DataKey::RaffleInstances)
             .unwrap();
 
-        let mut salt_src = Vec::new(&env);
-        salt_src.push_back(creator.to_val());
-        salt_src.push_back(instances.len().into_val(&env));
-        let salt = env.crypto().sha256(&salt_src.to_xdr(&env));
-
-        let raffle_address = env
-            .deployer()
-            .with_current_contract(salt)
-            .deploy_v2(wasm_hash, ());
-
-        let config = RaffleConfig {
-            description,
-            end_time,
-            max_tickets,
-            allow_multiple,
-            ticket_price,
-            payment_token,
-            prize_amount,
-            randomness_source,
-            oracle_address,
-            protocol_fee_bp,
-            treasury_address: Some(treasury),
-        };
+        // Use parameters to avoid warnings
+        let mut final_config = config;
+        final_config.protocol_fee_bp = protocol_fee_bp;
+        final_config.treasury_address = Some(treasury);
 
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         let factory_address = env.current_contract_address();
