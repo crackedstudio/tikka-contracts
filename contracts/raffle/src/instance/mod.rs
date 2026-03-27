@@ -102,7 +102,6 @@ where
 #[contracttype]
 pub enum DataKey {
     Raffle,
-    Tickets,
     TicketCount(Address),
     Ticket(u32),
     NextTicketId,
@@ -113,6 +112,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    TicketOwner(u32), // ticket_number -> Address
 }
 
 // --- Error Types ---
@@ -155,15 +155,16 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn read_tickets(env: &Env) -> Vec<Address> {
+fn write_ticket_owner(env: &Env, ticket_number: u32, owner: &Address) {
     env.storage()
-        .instance()
-        .get(&DataKey::Tickets)
-        .unwrap_or_else(|| Vec::new(env))
+        .persistent()
+        .set(&DataKey::TicketOwner(ticket_number), owner);
 }
 
-fn write_tickets(env: &Env, tickets: &Vec<Address>) {
-    env.storage().instance().set(&DataKey::Tickets, tickets);
+fn read_ticket_owner(env: &Env, ticket_number: u32) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::TicketOwner(ticket_number))
 }
 
 fn read_ticket_count(env: &Env, buyer: &Address) -> u32 {
@@ -240,11 +241,7 @@ fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(
 
     ticket.owner = to.clone();
     write_ticket(env, &ticket);
-
-    let mut all_tickets = read_tickets(env);
-    let index = ticket.ticket_number.saturating_sub(1) as u32;
-    all_tickets.set(index, to.clone());
-    write_tickets(env, &all_tickets);
+    write_ticket_owner(env, ticket.ticket_number, &to);
 
     env.storage().persistent().remove(&DataKey::Approved(token_id));
 
@@ -401,10 +398,7 @@ impl Contract {
             ticket_number: raffle.tickets_sold + 1,
         };
         write_ticket(&env, &ticket);
-
-        let mut tickets = read_tickets(&env);
-        tickets.push_back(buyer.clone());
-        write_tickets(&env, &tickets);
+        write_ticket_owner(&env, ticket.ticket_number, &buyer);
 
         raffle.tickets_sold += 1;
 
@@ -503,10 +497,9 @@ impl Contract {
             return Ok(());
         }
 
-        let tickets = read_tickets(&env);
         let seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
-        let winner_index = (seed % tickets.len() as u64) as u32;
-        let winner = tickets.get(winner_index).expect("Ticket out of bounds");
+        let winner_index = (seed % raffle.tickets_sold as u64) as u32 + 1; // 1-indexed ticket_number
+        let winner = read_ticket_owner(&env, winner_index).expect("Ticket owner not found");
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
@@ -538,7 +531,7 @@ impl Contract {
         Ok(())
     }
 
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {(env: Env, random_seed: u64) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
         match &raffle.oracle_address {
             Some(oracle) => oracle.require_auth(),
@@ -551,14 +544,13 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
+        let tickets_sold = raffle.tickets_sold;
+        if tickets_sold == 0 {
             return Err(Error::NoTicketsSold);
         }
-        let winner_index = (random_seed % tickets.len() as u64) as u32;
-        let winner = tickets
-            .get(winner_index)
-            .expect("Ticket out of bounds callback");
+        let winner_index = (random_seed % tickets_sold as u64) as u32 + 1; // 1-indexed
+        let winner = read_ticket_owner(&env, winner_index)
+            .expect("Ticket owner not found callback");
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winner = Some(winner.clone());
