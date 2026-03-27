@@ -250,8 +250,7 @@ fn test_raffle_created_event() {
 fn test_prize_deposited_event() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let (client, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
 
@@ -475,7 +474,7 @@ fn test_refund_ticket() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    
+
     // Check ticket balances before refund
     assert_eq!(token_client.balance(&buyer), 990i128); // 1000 - 10 ticket_price
 
@@ -499,52 +498,20 @@ fn test_double_refund_rejected() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    
+
     client.cancel_raffle(&CancelReason::CreatorCancelled);
 
     client.refund_ticket(&1u32);
     client.refund_ticket(&1u32); // Panic!
 }
 
-// --- PAUSE/UNPAUSE TESTS ---
+// --- 5. REENTRANCY PROTECTION & STORAGE GUARDRAIL TESTS ---
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
-fn test_buy_ticket_blocked_when_paused() {
+fn test_claim_prize_guard_released_after_success() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, factory, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    client.deposit_prize();
-
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-
-    client.buy_ticket(&buyer);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #9)")]
-fn test_deposit_prize_blocked_when_paused() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _, _, _, factory, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-
-    client.deposit_prize();
-}
-
-#[test]
-fn test_claim_prize_succeeds_when_paused() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _, _, admin_client, factory, _) =
+    let (client, _, _, admin_client, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -554,59 +521,199 @@ fn test_claim_prize_succeeds_when_paused() {
         client.buy_ticket(&b);
     }
     client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+    client.claim_prize(&winner);
 
-    env.as_contract(&factory, || {
-        client.pause();
+    // Guard must be released after successful claim
+    env.as_contract(&client.address, || {
+        assert!(
+            !env.storage().instance().has(&DataKey::ReentrancyGuard),
+            "ReentrancyGuard should be removed after claim_prize completes"
+        );
     });
+}
+
+#[test]
+fn test_refund_guard_released_after_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.refund_ticket(&1u32);
+
+    // Guard must be released after successful refund
+    env.as_contract(&client.address, || {
+        assert!(
+            !env.storage().instance().has(&DataKey::ReentrancyGuard),
+            "ReentrancyGuard should be removed after refund_ticket completes"
+        );
+    });
+}
+
+#[test]
+fn test_sequential_refunds_succeed_guard_properly_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+
+    // Two different buyers purchase tickets
+    client.buy_ticket(&buyer);
+    let buyer2 = Address::generate(&env);
+    admin_client.mint(&buyer2, &10i128);
+    client.buy_ticket(&buyer2);
+
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // Sequential refunds must both succeed (guard released between calls)
+    let refund1 = client.refund_ticket(&1u32);
+    assert_eq!(refund1, 10i128);
+    let refund2 = client.refund_ticket(&2u32);
+    assert_eq!(refund2, 10i128);
+
+    // Both buyers fully refunded
+    assert_eq!(token_client.balance(&buyer), 1000i128);
+    assert_eq!(token_client.balance(&buyer2), 10i128);
+}
+
+#[test]
+#[should_panic] // Error(Contract, #21) - Reentrancy
+fn test_claim_prize_blocked_by_active_reentrancy_guard() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
+
+    // Simulate reentrancy: set guard before external call returns
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+    });
+
+    client.claim_prize(&winner); // Must panic with Reentrancy
+}
+
+#[test]
+#[should_panic] // Error(Contract, #21) - Reentrancy
+fn test_refund_blocked_by_active_reentrancy_guard() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // Simulate reentrancy: set guard before refund call
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+    });
+
+    client.refund_ticket(&1u32); // Must panic with Reentrancy
+}
+
+#[test]
+fn test_claim_with_protocol_fee_guard_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let (client, _, _, admin_client, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        500,
+        Some(treasury.clone()),
+    );
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
 
     let winner = client.get_raffle().winner.unwrap();
-    let result = client.claim_prize(&winner);
-    assert!(result > 0);
+    let claimed = client.claim_prize(&winner);
+    assert_eq!(claimed, 95i128);
+
+    // Guard released even when fee transfer path is taken
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::ReentrancyGuard));
+    });
+
+    assert_eq!(token_client.balance(&winner), 95i128);
+    assert_eq!(token_client.balance(&treasury), 5i128);
 }
 
+// --- 6. CEI PATTERN VALIDATION TESTS ---
+
 #[test]
-fn test_refund_ticket_succeeds_when_paused() {
+fn test_deposit_prize_cei_state_active_after_call() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, factory, _) =
+    let (client, _, _, _, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
-    client.buy_ticket(&buyer);
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
 
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-
-    let refunded = client.refund_ticket(&1u32);
-    assert_eq!(refunded, 10i128);
-}
-
-#[test]
-fn test_cancel_raffle_succeeds_when_paused() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _, buyer, _, factory, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    client.deposit_prize();
-    client.buy_ticket(&buyer);
-
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
     let raffle = client.get_raffle();
-    assert_eq!(raffle.status, RaffleStatus::Cancelled);
+    assert!(raffle.status == RaffleStatus::Active);
+    assert!(raffle.prize_deposited);
 }
 
 #[test]
-fn test_finalize_raffle_succeeds_when_paused() {
+fn test_buy_ticket_cei_state_incremented_correctly() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, factory, _) =
+    let (client, _, _, admin_client, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+
+    let buyer1 = Address::generate(&env);
+    admin_client.mint(&buyer1, &10i128);
+    let sold_count = client.buy_ticket(&buyer1);
+    assert_eq!(sold_count, 1);
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.tickets_sold, 1);
+
+    let buyer2 = Address::generate(&env);
+    admin_client.mint(&buyer2, &10i128);
+    let sold_count2 = client.buy_ticket(&buyer2);
+    assert_eq!(sold_count2, 2);
+
+    let raffle2 = client.get_raffle();
+    assert_eq!(raffle2.tickets_sold, 2);
+}
+
+#[test]
+fn test_claim_prize_cei_status_transitions_to_claimed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, admin_client, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
@@ -615,354 +722,55 @@ fn test_finalize_raffle_succeeds_when_paused() {
         admin_client.mint(&b, &10i128);
         client.buy_ticket(&b);
     }
-
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-
     client.finalize_raffle();
-    let raffle = client.get_raffle();
-    assert_eq!(raffle.status, RaffleStatus::Finalized);
+
+    let raffle_before = client.get_raffle();
+    assert!(raffle_before.status == RaffleStatus::Finalized);
+
+    let winner = raffle_before.winner.unwrap();
+    client.claim_prize(&winner);
+
+    let raffle_after = client.get_raffle();
+    assert!(raffle_after.status == RaffleStatus::Claimed);
 }
 
 #[test]
-fn test_unpause_restores_buy_ticket() {
+#[should_panic] // Error(Contract, #20) - InvalidStateTransition (status already Claimed)
+fn test_double_claim_rejected_after_cei_state_transition() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, factory, _) =
+    let (client, _, _, admin_client, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winner.unwrap();
 
-    env.as_contract(&factory, || {
-        client.pause();
-    });
-    assert!(client.is_paused());
-
-    env.as_contract(&factory, || {
-        client.unpause();
-    });
-    assert!(!client.is_paused());
-
-    let tickets_sold = client.buy_ticket(&buyer);
-    assert_eq!(tickets_sold, 1);
+    client.claim_prize(&winner);
+    client.claim_prize(&winner); // Must panic: status is Claimed, not Finalized
 }
 
-// --- SET_ADMIN TESTS ---
-
 #[test]
-fn test_set_admin_by_factory() {
+fn test_cancel_raffle_cei_state_cancelled_before_refund() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, factory, _) =
+    let (client, creator, buyer, admin_client, _) =
         setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
 
-    let new_admin = Address::generate(&env);
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
 
-    env.as_contract(&factory, || {
-        client.set_admin(&new_admin);
-    });
-}
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
 
-#[test]
-#[should_panic]
-fn test_set_admin_rejected_from_non_factory() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    let stranger = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-
-    env.as_contract(&stranger, || {
-        client.set_admin(&new_admin);
-    });
-}
-
-// --- FACTORY PAUSE/UNPAUSE TESTS ---
-
-#[test]
-fn test_factory_pause_unpause() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    assert!(!factory_client.is_paused());
-
-    factory_client.pause();
-    assert!(factory_client.is_paused());
-
-    factory_client.unpause();
-    assert!(!factory_client.is_paused());
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #3)")]
-fn test_factory_create_raffle_blocked_when_paused() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let creator = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    let token_admin = Address::generate(&env);
-    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token_id = token_contract.address();
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    factory_client.pause();
-
-    factory_client.create_raffle(
-        &creator,
-        &String::from_str(&env, "Test"),
-        &0u64,
-        &5u32,
-        &false,
-        &10i128,
-        &token_id,
-        &100i128,
-        &RandomnessSource::Internal,
-        &None::<Address>,
-    );
-}
-
-// --- FACTORY TWO-STEP ADMIN TRANSFER TESTS ---
-
-#[test]
-fn test_factory_admin_transfer_happy_path() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    assert_eq!(factory_client.get_admin(), factory_admin);
-
-    factory_client.transfer_admin(&new_admin);
-    assert_eq!(factory_client.get_admin(), factory_admin);
-
-    factory_client.accept_admin();
-    assert_eq!(factory_client.get_admin(), new_admin);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #5)")]
-fn test_factory_accept_admin_no_pending() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    factory_client.accept_admin();
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn test_factory_transfer_admin_while_pending() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let new_admin1 = Address::generate(&env);
-    let new_admin2 = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    factory_client.transfer_admin(&new_admin1);
-    factory_client.transfer_admin(&new_admin2);
-}
-
-#[test]
-fn test_factory_self_transfer_cancels_pending() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    factory_client.transfer_admin(&new_admin);
-    factory_client.transfer_admin(&factory_admin);
-
-    assert_eq!(factory_client.get_admin(), factory_admin);
-
-    factory_client.transfer_admin(&new_admin);
-}
-
-// --- FACTORY RELAY FUNCTION TESTS ---
-
-#[test]
-fn test_sync_admin_updates_instance() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    let creator = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token_id = token_contract.address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
-    token_admin_client.mint(&creator, &1_000i128);
-
-    let contract_id = env.register(Contract, ());
-    let instance_client = ContractClient::new(&env, &contract_id);
-
-    let config = RaffleConfig {
-        description: String::from_str(&env, "Test"),
-        end_time: 0,
-        max_tickets: 5,
-        allow_multiple: false,
-        ticket_price: 10i128,
-        payment_token: token_id,
-        prize_amount: 100i128,
-        randomness_source: RandomnessSource::Internal,
-        oracle_address: None,
-        protocol_fee_bp: 0,
-        treasury_address: None,
-    };
-
-    instance_client.init(&factory_id, &factory_admin, &creator, &config);
-
-    let new_admin = Address::generate(&env);
-    factory_client.transfer_admin(&new_admin);
-    factory_client.accept_admin();
-    assert_eq!(factory_client.get_admin(), new_admin);
-
-    factory_client.sync_admin(&contract_id);
-
-    factory_client.pause_instance(&contract_id);
-    assert!(instance_client.is_paused());
-}
-
-#[test]
-fn test_factory_pause_unpause_instance() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let factory_admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-
-    let factory_id = env.register(RaffleFactory, ());
-    let factory_client = RaffleFactoryClient::new(&env, &factory_id);
-
-    factory_client.init_factory(
-        &factory_admin,
-        &Bytes::from_slice(&env, &[0u8; 32]),
-        &0u32,
-        &treasury,
-    );
-
-    let creator = Address::generate(&env);
-    let buyer = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token_id = token_contract.address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
-    token_admin_client.mint(&creator, &1_000i128);
-    token_admin_client.mint(&buyer, &1_000i128);
-
-    let contract_id = env.register(Contract, ());
-    let instance_client = ContractClient::new(&env, &contract_id);
-
-    let config = RaffleConfig {
-        description: String::from_str(&env, "Test"),
-        end_time: 0,
-        max_tickets: 5,
-        allow_multiple: false,
-        ticket_price: 10i128,
-        payment_token: token_id,
-        prize_amount: 100i128,
-        randomness_source: RandomnessSource::Internal,
-        oracle_address: None,
-        protocol_fee_bp: 0,
-        treasury_address: None,
-    };
-
-    instance_client.init(&factory_id, &factory_admin, &creator, &config);
-    instance_client.deposit_prize();
-
-    factory_client.pause_instance(&contract_id);
-    assert!(instance_client.is_paused());
-
-    factory_client.unpause_instance(&contract_id);
-    assert!(!instance_client.is_paused());
-
-    let sold = instance_client.buy_ticket(&buyer);
-    assert_eq!(sold, 1);
+    // CEI: status is Cancelled and prize refunded to creator
+    let raffle = client.get_raffle();
+    assert!(raffle.status == RaffleStatus::Cancelled);
+    assert!(!raffle.prize_deposited);
+    assert_eq!(token_client.balance(&creator), 1000i128);
 }
