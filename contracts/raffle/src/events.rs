@@ -188,6 +188,20 @@ pub struct AdminTransferAccepted {
 }
 
 // ============================================================================
+// CLEANUP EVENT
+// ============================================================================
+
+/// Emitted when an old raffle's storage is wiped by the factory admin
+#[derive(Clone)]
+#[contracttype]
+pub struct RaffleCleanedUp {
+    pub raffle_address: Address,
+    pub cleaned_by: Address,
+    pub finish_time: u64,
+    pub cleaned_at: u64,
+}
+
+// ============================================================================
 // INTERNAL STATE CHANGE EVENT
 // ============================================================================
 
