@@ -10,7 +10,7 @@ use soroban_sdk::{
 mod events;
 mod instance;
 pub mod types;
-pub use types::{PaginationParams, PageResult_Raffles, PageResult_Tickets, effective_limit};
+pub use types::{FairnessData, PaginationParams, PageResult_Raffles, PageResult_Tickets, effective_limit};
 use instance::{RaffleConfig, RandomnessSource};
 
 #[contract]
@@ -647,6 +647,11 @@ impl RaffleFactory {
             .unwrap_or(0)
     }
 
+    /// Get fairness proof data for a finalized raffle
+    /// Returns all data used to select the winner for transparency
+    pub fn get_fairness_proof(env: Env, instance_address: Address) -> Result<FairnessData, ContractError> {
+        let instance_client = instance::ContractClient::new(&env, &instance_address);
+        instance_client.get_fairness_proof().map_err(|_| ContractError::RaffleNotFound)
     // rate
     pub fn set_creation_delay(env: Env, delay_seconds: u64) -> Result<(), ContractError> {
         require_factory_admin(&env)?;

@@ -4,7 +4,7 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
-use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
+use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
@@ -123,6 +123,17 @@ pub struct Ticket {
     pub ticket_number: u32,
 }
 
+/// Metadata stored after draw to enable fairness verification
+#[derive(Clone)]
+#[contracttype]
+pub struct FairnessMetadata {
+    pub seed: u64,
+    pub randomness_source: RandomnessSource,
+    pub winning_ticket_indices: Vec<u32>,
+    pub draw_timestamp: u64,
+    pub draw_sequence: u32,
+}
+
 // Helper function to publish events with standardized topics
 fn publish_event<T>(env: &Env, event_name: &str, event: T)
 where
@@ -148,6 +159,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    RandomnessSeed, // Stored after draw for fairness proof
     RandomnessRequested,    // bool  - true when oracle request is pending
     RandomnessRequestLedger, // u32  - ledger sequence when the request was made
     TicketOwner(u32), // ticket_number -> Address
@@ -655,6 +667,16 @@ impl Contract {
             claimed_winners.push_back(false);
         }
 
+        // Store fairness metadata for transparency
+        let fairness_metadata = FairnessMetadata {
+            seed: current_seed,
+            randomness_source: raffle.randomness_source.clone(),
+            winning_ticket_indices: winning_ticket_ids.clone(),
+            draw_timestamp: env.ledger().timestamp(),
+            draw_sequence: env.ledger().sequence(),
+        };
+        env.storage().instance().set(&DataKey::RandomnessSeed, &fairness_metadata);
+
         raffle.status = RaffleStatus::Finalized;
         raffle.winners = winners.clone();
         raffle.claimed_winners = claimed_winners;
@@ -849,6 +871,16 @@ impl Contract {
         for _ in 0..raffle.prizes.len() {
             claimed_winners.push_back(false);
         }
+
+        // Store fairness metadata for transparency
+        let fairness_metadata = FairnessMetadata {
+            seed: random_seed,
+            randomness_source: raffle.randomness_source.clone(),
+            winning_ticket_indices: winning_ticket_ids.clone(),
+            draw_timestamp: env.ledger().timestamp(),
+            draw_sequence: env.ledger().sequence(),
+        };
+        env.storage().instance().set(&DataKey::RandomnessSeed, &fairness_metadata);
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winners = winners.clone();
@@ -1426,6 +1458,37 @@ impl Contract {
     /// Get total ticket count
     pub fn get_ticket_count(env: Env) -> u32 {
         get_ticket_count(&env)
+    }
+
+    /// Get fairness proof data for a finalized raffle
+    /// Returns all data used to select the winner for transparency
+    pub fn get_fairness_proof(env: Env) -> Result<FairnessData, Error> {
+        let raffle = read_raffle(&env)?;
+        
+        if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        let fairness_metadata: FairnessMetadata = env
+            .storage()
+            .instance()
+            .get(&DataKey::RandomnessSeed)
+            .ok_or(Error::InvalidStateTransition)?;
+
+        let tickets = read_tickets(&env);
+        let mut ticket_ids = Vec::new(&env);
+        for ticket in tickets.iter() {
+            ticket_ids.push_back(ticket.id);
+        }
+
+        Ok(FairnessData {
+            seed: fairness_metadata.seed,
+            randomness_source: fairness_metadata.randomness_source,
+            ticket_ids,
+            winning_ticket_indices: fairness_metadata.winning_ticket_indices,
+            draw_timestamp: fairness_metadata.draw_timestamp,
+            draw_sequence: fairness_metadata.draw_sequence,
+        })
     }
 
     pub fn pause(env: Env) -> Result<(), Error> {
