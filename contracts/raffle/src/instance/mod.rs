@@ -188,14 +188,7 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if Contract::is_paused(env.clone()) {
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
-}
-
-fn read_tickets(env: &Env) -> Vec<Address> {
+fn read_tickets(env: &Env) -> Vec<Ticket> {
     env.storage()
         .instance()
         .get(&DataKey::Tickets)
@@ -257,11 +250,20 @@ fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
+fn require_admin(env: &Env) -> Result<Address, Error> {
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotAuthorized)?;
+    admin.require_auth();
+    Ok(admin)
+}
+
+fn require_creator(env: &Env) -> Result<Address, Error> {
+    let raffle = read_raffle(env)?;
+    raffle.creator.require_auth();
+    Ok(raffle.creator)
 }
 
 fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
@@ -390,8 +392,8 @@ impl Contract {
 
     pub fn deposit_prize(env: Env) -> Result<(), Error> {
         require_not_paused(&env)?;
+        require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
 
         if raffle.status != RaffleStatus::Proposed {
             return Err(Error::InvalidStateTransition);
@@ -443,7 +445,7 @@ impl Contract {
             return Err(Error::RaffleInactive);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
-            return Err(Error::RaffleEnded);
+            return Err(Error::RaffleExpired);
         }
         if raffle.tickets_sold >= raffle.max_tickets {
             return Err(Error::TicketsSoldOut);
@@ -512,8 +514,8 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
+        require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
 
         if raffle.status == RaffleStatus::Active {
             if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
@@ -574,8 +576,8 @@ impl Contract {
 
         for _ in 0..raffle.prizes.len() {
             let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner = tickets.get(winner_index).expect("Ticket out of bounds");
-            winners.push_back(winner);
+            let winner_ticket = tickets.get(winner_index).expect("Ticket out of bounds");
+            winners.push_back(winner_ticket.owner.clone());
             winning_ticket_ids.push_back(winner_index);
             // Change seed for the next winner
             current_seed = current_seed.wrapping_add(1);
@@ -641,10 +643,10 @@ impl Contract {
 
         for _ in 0..raffle.prizes.len() {
             let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner = tickets
+            let winner_ticket = tickets
                 .get(winner_index)
                 .expect("Ticket out of bounds callback");
-            winners.push_back(winner);
+            winners.push_back(winner_ticket.owner.clone());
             winning_ticket_ids.push_back(winner_index);
             // Change seed for the next winner
             current_seed = current_seed.wrapping_add(1);
@@ -861,16 +863,15 @@ impl Contract {
 
         // Admin or Creator can cancel
         match reason {
-            CancelReason::CreatorCancelled => raffle.creator.require_auth(),
-            CancelReason::AdminCancelled
-            | CancelReason::OracleTimeout
-            | CancelReason::MinTicketsNotMet => {
-                let _factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
-                if reason == CancelReason::AdminCancelled {
-                    raffle.creator.require_auth();
-                } else {
-                    raffle.creator.require_auth();
-                }
+            CancelReason::CreatorCancelled => { require_creator(&env)?; }
+            CancelReason::AdminCancelled => { require_admin(&env)?; }
+            CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+                let factory: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Factory)
+                    .ok_or(Error::NotAuthorized)?;
+                factory.require_auth();
             }
         }
 
