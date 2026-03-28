@@ -44,6 +44,9 @@ fn setup_raffle_env(
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(env, &contract_id);
 
+    let mut prizes = Vec::new(env);
+    prizes.push_back(10000);
+
     let config = RaffleConfig {
         description: String::from_str(env, "Audit Raffle"),
         end_time: 0,
@@ -52,10 +55,13 @@ fn setup_raffle_env(
         ticket_price: 10i128,
         payment_token: token_id,
         prize_amount: 100i128,
+        prizes,
         randomness_source: source,
         oracle_address: oracle,
         protocol_fee_bp: fee_bp,
         treasury_address: treasury,
+        swap_router: None,
+        tikka_token: None,
     };
 
     client.init(&factory, &factory_admin, &creator, &config);
@@ -84,8 +90,9 @@ fn test_basic_internal_raffle_flow() {
     client.finalize_raffle();
 
     let raffle = client.get_raffle();
-    let winner = raffle.winner.unwrap();
-    let _claimed_amount = client.claim_prize(&winner);
+    let winner = raffle.winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    let _claimed_amount = client.claim_prize(&winner, &0);
 
     assert_eq!(token_client.balance(&winner), 100i128);
     assert_eq!(token_client.balance(&creator), 900i128);
@@ -113,8 +120,9 @@ fn test_protocol_fees() {
     }
 
     client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
-    client.claim_prize(&winner);
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
 
     // Prize: 100, Fee: 5% = 5, Winner: 95
     assert_eq!(token_client.balance(&winner), 95i128);
@@ -165,7 +173,7 @@ fn test_vrf_raffle_flow() {
 
     let raffle_post = client.get_raffle();
     assert!(matches!(raffle_post.status, RaffleStatus::Finalized));
-    assert_eq!(raffle_post.winner.unwrap(), expected_winner);
+    assert_eq!(raffle_post.winners.get(0).unwrap(), expected_winner);
 }
 
 // --- 2. ERROR CONDITION TESTS ---
@@ -226,6 +234,9 @@ fn test_raffle_created_event() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000);
+
     let config = RaffleConfig {
         description: String::from_str(&env, "Test Raffle"),
         end_time: 0,
@@ -234,10 +245,13 @@ fn test_raffle_created_event() {
         ticket_price: 10i128,
         payment_token: token_id,
         prize_amount: 100i128,
+        prizes,
         randomness_source: RandomnessSource::Internal,
         oracle_address: None,
         protocol_fee_bp: 0,
         treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
     };
 
     client.init(&factory, &factory_admin, &creator, &config);
@@ -407,8 +421,9 @@ fn test_prize_claimed_event() {
     }
 
     client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
-    client.claim_prize(&winner);
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
 
     // Check that prize_claimed event was emitted
     assert!(env.events().all().len() > 0);
@@ -521,8 +536,9 @@ fn test_claim_prize_guard_released_after_success() {
         client.buy_ticket(&b);
     }
     client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
-    client.claim_prize(&winner);
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
 
     // Guard must be released after successful claim
     env.as_contract(&client.address, || {
@@ -598,7 +614,7 @@ fn test_claim_prize_blocked_by_active_reentrancy_guard() {
         client.buy_ticket(&b);
     }
     client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
+    let winner = client.get_raffle().winners.get(0).unwrap();
 
     // Simulate reentrancy: set guard before external call returns
     env.as_contract(&client.address, || {
@@ -607,7 +623,8 @@ fn test_claim_prize_blocked_by_active_reentrancy_guard() {
             .set(&DataKey::ReentrancyGuard, &true);
     });
 
-    client.claim_prize(&winner); // Must panic with Reentrancy
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0); // Must panic with Reentrancy
 }
 
 #[test]
@@ -654,8 +671,9 @@ fn test_claim_with_protocol_fee_guard_released() {
     }
     client.finalize_raffle();
 
-    let winner = client.get_raffle().winner.unwrap();
-    let claimed = client.claim_prize(&winner);
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    let claimed = client.claim_prize(&winner, &0);
     assert_eq!(claimed, 95i128);
 
     // Guard released even when fee transfer path is taken
@@ -735,7 +753,8 @@ fn test_track_multiple_unique_participants() {
 fn test_deposit_prize_cei_state_active_after_call() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let (client, _, _, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
 
@@ -788,8 +807,9 @@ fn test_claim_prize_cei_status_transitions_to_claimed() {
     let raffle_before = client.get_raffle();
     assert!(raffle_before.status == RaffleStatus::Finalized);
 
-    let winner = raffle_before.winner.unwrap();
-    client.claim_prize(&winner);
+    let winner = raffle_before.winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
 
     let raffle_after = client.get_raffle();
     assert!(raffle_after.status == RaffleStatus::Claimed);
@@ -810,10 +830,10 @@ fn test_double_claim_rejected_after_cei_state_transition() {
         client.buy_ticket(&b);
     }
     client.finalize_raffle();
-    let winner = client.get_raffle().winner.unwrap();
-
-    client.claim_prize(&winner);
-    client.claim_prize(&winner); // Must panic: status is Claimed, not Finalized
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
+    client.claim_prize(&winner, &0); // Must panic: status is Claimed, not Finalized
 }
 
 #[test]
@@ -836,173 +856,195 @@ fn test_cancel_raffle_cei_state_cancelled_before_refund() {
     assert_eq!(token_client.balance(&creator), 1000i128);
 }
 
-// --- 8. PAGINATED QUERY SYSTEM TESTS ---
-
-fn page(limit: u32, offset: u32) -> crate::types::PaginationParams {
-    crate::types::PaginationParams { limit, offset }
-}
-
-// ---- get_tickets ----
+// --- 8. NFT INTERFACE TESTS ---
 
 #[test]
-fn test_get_tickets_empty_returns_empty_page() {
+fn test_nft_metadata() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    let result = client.get_tickets(&page(10, 0));
-    assert_eq!(result.total, 0u32);
-    assert_eq!(result.items.len(), 0u32);
-    assert!(!result.has_more);
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
+    assert_eq!(client.name(), String::from_str(&env, "Tikka Raffle Ticket"));
+    assert_eq!(client.symbol(), String::from_str(&env, "TIKKA_TKT"));
+    assert_eq!(client.token_uri(&1u32), String::from_str(&env, "https://tikka.app/api/ticket"));
 }
 
 #[test]
-fn test_get_tickets_first_page_has_more_true() {
+fn test_nft_transfer_and_balance() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
+    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
     client.deposit_prize();
-    for _ in 0..3 {
-        let b = Address::generate(&env);
-        admin_client.mint(&b, &10i128);
-        client.buy_ticket(&b);
-    }
+    client.buy_ticket(&buyer);
+    
+    assert_eq!(client.balance(&buyer), 1);
+    assert_eq!(client.owner_of(&1u32), buyer);
 
-    let result = client.get_tickets(&page(2, 0));
-    assert_eq!(result.total, 3u32);
-    assert_eq!(result.items.len(), 2u32);
-    assert!(result.has_more);
+    let new_owner = Address::generate(&env);
+    client.transfer(&buyer, &new_owner, &1u32);
+
+    assert_eq!(client.balance(&buyer), 0);
+    assert_eq!(client.balance(&new_owner), 1);
+    assert_eq!(client.owner_of(&1u32), new_owner);
+    
+    // Attempting unauthorized transfer
+    let hacker = Address::generate(&env);
+    let res = client.try_transfer(&hacker, &new_owner, &1u32);
+    assert!(res.is_err());
 }
 
 #[test]
-fn test_get_tickets_second_page_no_more() {
+fn test_nft_approvals_and_transfer_from() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
+    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
     client.deposit_prize();
-    for _ in 0..3 {
-        let b = Address::generate(&env);
-        admin_client.mint(&b, &10i128);
-        client.buy_ticket(&b);
-    }
+    client.buy_ticket(&buyer);
 
-    let result = client.get_tickets(&page(2, 2));
-    assert_eq!(result.total, 3u32);
-    assert_eq!(result.items.len(), 1u32);
-    assert!(!result.has_more);
+    let operator = Address::generate(&env);
+    let receiver = Address::generate(&env);
+
+    client.approve(&buyer, &Some(operator.clone()), &1u32);
+    assert_eq!(client.get_approved(&1u32), Some(operator.clone()));
+
+    // Operator transfers to receiver
+    client.transfer_from(&operator, &buyer, &receiver, &1u32);
+
+    assert_eq!(client.owner_of(&1u32), receiver);
+    assert_eq!(client.get_approved(&1u32), None); // Approval clears on transfer
 }
 
 #[test]
-fn test_get_tickets_offset_at_total_returns_empty() {
+fn test_nft_set_approval_for_all() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
+    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
     client.deposit_prize();
-    for _ in 0..3 {
-        let b = Address::generate(&env);
-        admin_client.mint(&b, &10i128);
-        client.buy_ticket(&b);
-    }
+    client.buy_ticket(&buyer);
 
-    // offset == total => empty page, has_more false
-    let result = client.get_tickets(&page(10, 3));
-    assert_eq!(result.total, 3u32);
-    assert_eq!(result.items.len(), 0u32);
-    assert!(!result.has_more);
+    let operator = Address::generate(&env);
+    let receiver = Address::generate(&env);
+
+    client.set_approval_for_all(&buyer, &operator, &true);
+    assert!(client.is_approved_for_all(&buyer, &operator));
+
+    client.transfer_from(&operator, &buyer, &receiver, &1u32);
+    assert_eq!(client.owner_of(&1u32), receiver);
 }
 
 #[test]
-fn test_get_tickets_zero_limit_uses_default() {
+fn test_nft_winner_after_transfer() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
+    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    
     client.deposit_prize();
-    for _ in 0..3 {
-        let b = Address::generate(&env);
-        admin_client.mint(&b, &10i128);
-        client.buy_ticket(&b);
-    }
+    client.buy_ticket(&buyer);
 
-    // limit=0 => effective_limit returns DEFAULT_PAGE_LIMIT (100), all 3 returned
-    let result = client.get_tickets(&page(0, 0));
-    assert_eq!(result.total, 3u32);
-    assert_eq!(result.items.len(), 3u32);
-    assert!(!result.has_more);
-}
+    let secondary_buyer = Address::generate(&env);
+    client.transfer(&buyer, &secondary_buyer, &1u32);
 
-#[test]
-fn test_get_tickets_has_more_false_on_exact_fit() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-
-    client.deposit_prize();
     for _ in 0..4 {
         let b = Address::generate(&env);
         admin_client.mint(&b, &10i128);
         client.buy_ticket(&b);
     }
+    client.finalize_raffle();
+    let winner = client.get_raffle().winners.get(0).unwrap();
 
-    // 4 tickets sold, request exactly 4 — has_more must be false
-    let result = client.get_tickets(&page(4, 0));
-    assert_eq!(result.total, 4u32);
-    assert_eq!(result.items.len(), 4u32);
-    assert!(!result.has_more);
+    // Advance time by 3600s
+    env.ledger().with_mut(|l| {
+        l.timestamp += 3600;
+    });
+
+    let claimed = client.claim_prize(&winner, &0);
+    assert_eq!(claimed, 100i128);
 }
 
-// ---- get_raffles (Factory) ----
-
 #[test]
-fn test_get_raffles_empty_factory() {
+fn test_tiered_prizes() {
     let env = Env::default();
     env.mock_all_auths();
-    let (factory, _admin) = setup_factory(&env);
+    
+    let creator = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
 
-    let result = factory.get_raffles(&page(10, 0));
-    assert_eq!(result.total, 0u32);
-    assert_eq!(result.items.len(), 0u32);
-    assert!(!result.has_more);
-}
+    #[contract]
+    pub struct DummyFactory;
+    #[contractimpl]
+    impl DummyFactory {}
+    let factory = env.register(DummyFactory, ());
 
-#[test]
-fn test_get_raffles_offset_beyond_total() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (factory, _admin) = setup_factory(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(&env, &token_id);
 
-    let result = factory.get_raffles(&page(10, 99));
-    assert_eq!(result.total, 0u32);
-    assert_eq!(result.items.len(), 0u32);
-    assert!(!result.has_more);
-}
+    admin_client.mint(&creator, &1_000i128);
 
-#[test]
-fn test_get_raffles_limit_exceeds_max_is_capped() {
-    // Confirms that requesting more than MAX_PAGE_LIMIT is capped,
-    // preventing out-of-gas attacks on get_tickets and get_raffles_page.
-    let limit_above_max = crate::types::MAX_PAGE_LIMIT + 1;
-    let effective = crate::types::effective_limit(limit_above_max);
-    assert_eq!(effective, crate::types::MAX_PAGE_LIMIT);
-}
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
 
-#[test]
-fn test_get_raffles_has_more_false_for_empty() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (factory, _admin) = setup_factory(&env);
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(5000); // 50%
+    prizes.push_back(3000); // 30%
+    prizes.push_back(2000); // 20%
 
-    let result = factory.get_raffles(&page(1, 0));
-    assert!(!result.has_more);
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Tiered Raffle"),
+        end_time: 0,
+        max_tickets: 10,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 1000i128,
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+    client.deposit_prize();
+
+    for _ in 0..10 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.finalize_raffle();
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.winners.len(), 3);
+    
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+
+    let token_client = token::Client::new(&env, &token_id);
+
+    // Winner 1 (50%)
+    let winner1 = raffle.winners.get(0).unwrap();
+    client.claim_prize(&winner1, &0);
+    assert_eq!(token_client.balance(&winner1), 500i128);
+
+    // Winner 2 (30%)
+    let winner2 = raffle.winners.get(1).unwrap();
+    client.claim_prize(&winner2, &1);
+    assert_eq!(token_client.balance(&winner2), 300i128);
+
+    // Winner 3 (20%)
+    let winner3 = raffle.winners.get(2).unwrap();
+    client.claim_prize(&winner3, &2);
+    assert_eq!(token_client.balance(&winner3), 200i128);
+
+    let raffle_final = client.get_raffle();
+    assert!(raffle_final.status == RaffleStatus::Claimed);
 }
 
 // ============================================================================

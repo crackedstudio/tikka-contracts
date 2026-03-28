@@ -16,6 +16,7 @@ pub struct RaffleCreated {
     pub ticket_price: i128,
     pub payment_token: Address,
     pub prize_amount: i128,
+    pub prizes: Vec<u32>,
     pub description: String,
     pub randomness_source: RandomnessSource,
 }
@@ -71,8 +72,8 @@ pub struct RandomnessReceived {
 #[derive(Clone)]
 #[contracttype]
 pub struct RaffleFinalized {
-    pub winner: Address,
-    pub winning_ticket_id: u32,
+    pub winners: Vec<Address>,
+    pub winning_ticket_ids: Vec<u32>,
     pub total_tickets_sold: u32,
     pub randomness_source: RandomnessSource,
     pub finalized_at: u64,
@@ -98,15 +99,27 @@ pub struct TicketRefunded {
     pub timestamp: u64,
 }
 
-/// Emitted when the winner claims their prize
+/// Emitted when a winner claims their prize
 #[derive(Clone)]
 #[contracttype]
 pub struct PrizeClaimed {
     pub winner: Address,
+    pub tier_index: u32,
     pub gross_amount: i128,
     pub net_amount: i128,
     pub platform_fee: i128,
     pub claimed_at: u64,
+}
+
+/// Emitted when platform fees are automatically swapped and burned
+#[derive(Clone)]
+#[contracttype]
+pub struct BuybackAndBurnExecuted {
+    pub router: Address,
+    pub tikka_token: Address,
+    pub amount_in: i128,
+    pub amount_out: i128,
+    pub timestamp: u64,
 }
 
 // ============================================================================
