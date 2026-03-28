@@ -288,3 +288,17 @@ pub struct StatusChanged {
     pub new_status: RaffleStatus,
     pub timestamp: u64,
 }
+
+// ============================================================================
+// CHECKPOINT EVENTS
+// ============================================================================
+
+/// Emitted when a periodic state checkpoint is created (every 1,000 raffles)
+#[derive(Clone)]
+#[contracttype]
+pub struct CheckpointCreated {
+    pub index: u32,
+    pub raffle_count: u32,
+    pub ledger_timestamp: u64,
+    pub aggregate_hash: soroban_sdk::BytesN<32>,
+}
