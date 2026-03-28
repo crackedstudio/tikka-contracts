@@ -42,8 +42,22 @@ pub enum DataKey {
     Treasury,
     Paused,
     PendingAdmin,
+
+    TotalRafflesCreated,
+    TotalVolumePerAsset(Address),
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ProtocolStats {
+    pub total_raffles_created: u32,
+    pub protocol_fee_bp: u32,
+    pub paused: bool,
+
     UniqueParticipant(Address),
     TotalUniqueParticipants,
+    CreatorVerification(Address),
+
 }
 
 #[contracterror]
@@ -126,7 +140,14 @@ impl RaffleFactory {
         protocol_fee_bp: u32,
         treasury: Address,
     ) -> Result<(), ContractError> {
-        require_factory_admin(&env)?;
+        let admin = require_factory_admin(&env)?;
+        let old_fee_bp: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolFeeBP)
+            .unwrap_or(0);
+        let old_treasury: Option<Address> = env.storage().persistent().get(&DataKey::Treasury);
+
         env.storage()
             .persistent()
             .set(&DataKey::OpCounter, &op_id);
@@ -273,21 +294,106 @@ impl RaffleFactory {
             .unwrap();
 
         // Use parameters to avoid warnings
+        let mut final_config = config.clone();
+
+        let _ = RaffleConfig {
+            description,
+            end_time,
+            max_tickets,
+            allow_multiple,
+            ticket_price,
+            payment_token,
+            prize_amount,
+            randomness_source,
+            oracle_address,
+            protocol_fee_bp,
+            treasury_address: Some(treasury),
+            swap_router: None,
+            tikka_token: None,
+        };
+
         let mut final_config = config;
         final_config.protocol_fee_bp = protocol_fee_bp;
         final_config.treasury_address = Some(treasury);
 
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         let factory_address = env.current_contract_address();
+        
+        // Salt for deployment
+         let salt = env.crypto().sha256(&(creator.clone(), config.description.clone()).to_xdr(&env));
+         let raffle_address = env.deployer().with_address(factory_address.clone(), salt).deploy(wasm_hash);
+
         let client = instance::ContractClient::new(&env, &raffle_address);
         client.init(&factory_address, &admin, &creator, &config);
+
 
         instances.push_back(raffle_address.clone());
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
 
+
+        // Update global stats
+        let mut count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalRafflesCreated)
+            .unwrap_or(0);
+        count += 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalRafflesCreated, &count);
+
+        Ok(creator)
+
         Ok(raffle_address)
+
+    }
+
+    pub fn get_protocol_stats(env: Env) -> ProtocolStats {
+        let total_raffles_created: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalRafflesCreated)
+            .unwrap_or(0);
+        let protocol_fee_bp: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolFeeBP)
+            .unwrap_or(0);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+
+        ProtocolStats {
+            total_raffles_created,
+            protocol_fee_bp,
+            paused,
+        }
+    }
+
+    pub fn get_total_volume(env: Env, asset: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalVolumePerAsset(asset))
+            .unwrap_or(0)
+    }
+
+    pub fn record_volume(env: Env, asset: Address, amount: i128) -> Result<(), ContractError> {
+        // In a production environment, this should be restricted to authorized raffle instances
+        // For now, we allow any caller to update the volume as requested by the task
+        let mut total_volume: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalVolumePerAsset(asset.clone()))
+            .unwrap_or(0);
+        total_volume += amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalVolumePerAsset(asset), &total_volume);
+        Ok(())
     }
 
     pub fn get_admin(env: Env) -> Result<Address, ContractError> {
@@ -424,6 +530,10 @@ impl RaffleFactory {
         Ok(())
     }
 
+    pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), ContractError> {
+        Self::transfer_admin(env, new_owner)
+    }
+
     pub fn accept_admin(env: Env) -> Result<(), ContractError> {
         let pending: Address = env
             .storage()
@@ -450,10 +560,17 @@ impl RaffleFactory {
         Ok(())
     }
 
+    pub fn accept_ownership(env: Env) -> Result<(), ContractError> {
+        Self::accept_admin(env)
+    }
+
     pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
         let admin = require_factory_admin(&env)?;
-        let instance_client = instance::ContractClient::new(&env, &instance_address);
-        instance_client.set_admin(&admin);
+        env.invoke_contract::<()>(
+            &instance_address,
+            &Symbol::new(&env, "set_admin"),
+            (admin,).into_val(&env),
+        );
         Ok(())
     }
 

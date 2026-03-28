@@ -69,6 +69,15 @@ pub struct RandomnessReceived {
     pub timestamp: u64,
 }
 
+/// Exact draw-quality label used for winner selection
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum RandomnessType {
+    Prng = 0,
+    Vrf = 1,
+    Fallback = 2,
+}
+
 /// Emitted when the raffle winner is determined
 #[derive(Clone)]
 #[contracttype]
@@ -77,6 +86,7 @@ pub struct RaffleFinalized {
     pub winning_ticket_ids: Vec<u32>,
     pub total_tickets_sold: u32,
     pub randomness_source: RandomnessSource,
+    pub randomness_type: RandomnessType,
     pub finalized_at: u64,
 }
 
@@ -97,6 +107,16 @@ pub struct TicketRefunded {
     pub buyer: Address,
     pub ticket_id: u32,
     pub amount: i128,
+    pub timestamp: u64,
+}
+
+/// Emitted when a creator's verification status is updated
+#[derive(Clone)]
+#[contracttype]
+pub struct CreatorVerified {
+    pub creator: Address,
+    pub is_verified: bool,
+    pub admin: Address,
     pub timestamp: u64,
 }
 
