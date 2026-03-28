@@ -613,6 +613,57 @@ impl RaffleFactory {
             .get(&DataKey::TotalUniqueParticipants)
             .unwrap_or(0)
     }
+
+    /// Deletes all on-chain data for a raffle that has been in a terminal state
+    /// for more than 90 days (7,776,000 seconds), reclaiming storage rent.
+    pub fn clean_old_raffle(env: Env, raffle_id: u32) -> Result<(), ContractError> {
+        // 1. Auth — must be first
+        let admin = require_factory_admin(&env)?;
+
+        // 2. Bounds check
+        let mut instances: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RaffleInstances)
+            .unwrap_or_else(|| Vec::new(&env));
+        if raffle_id >= instances.len() {
+            return Err(ContractError::InvalidRaffleId);
+        }
+
+        // 3. Eligibility: cross-call get_finish_time and check 90-day window
+        let raffle_address = instances.get(raffle_id).unwrap();
+        let instance_client = instance::ContractClient::new(&env, &raffle_address);
+        let finish_time = instance_client
+            .get_finish_time()
+            .ok_or(ContractError::RaffleNotEligible)?;
+        let now = env.ledger().timestamp();
+        if now - finish_time < 7_776_000u64 {
+            return Err(ContractError::RaffleNotEligible);
+        }
+
+        // 4. Wipe instance storage
+        instance_client.wipe_storage();
+
+        // 5. Registry compaction (swap-remove)
+        instances.swap_remove(raffle_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RaffleInstances, &instances);
+
+        // 6. Audit event
+        publish_factory_event(
+            &env,
+            "raffle_cleaned_up",
+            events::RaffleCleanedUp {
+                raffle_address,
+                cleaned_by: admin,
+                finish_time,
+                cleaned_at: now,
+            },
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

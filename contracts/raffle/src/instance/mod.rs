@@ -617,6 +617,10 @@ impl Contract {
         raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
+
         publish_event(
             &env,
             "raffle_finalized",
@@ -686,6 +690,10 @@ impl Contract {
         raffle.claimed_winners = claimed_winners;
         raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         publish_event(
             &env,
@@ -783,6 +791,10 @@ impl Contract {
             raffle.status = RaffleStatus::Claimed;
         }
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         // Interactions: external token transfers
         let token_client = token::Client::new(&env, &raffle.payment_token);
@@ -917,6 +929,10 @@ impl Contract {
             raffle.prize_deposited = false;
         }
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         // Interaction: external token transfer
         if should_refund_prize {
@@ -1170,6 +1186,48 @@ impl Contract {
         Ok(())
     }
 
+    pub fn get_finish_time(env: Env) -> Option<u64> {
+        env.storage().persistent().get(&DataKey::FinishTime)
+    }
+
+    pub fn wipe_storage(env: Env) -> Result<(), Error> {
+        // Auth: only factory may call
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(Error::NotAuthorized)?;
+        factory.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        let tickets_sold = raffle.tickets_sold;
+        let tickets_list = read_tickets(&env);
+
+        // Remove per-ticket persistent entries
+        for n in 1..=tickets_sold {
+            env.storage().persistent().remove(&DataKey::Ticket(n));
+            env.storage().persistent().remove(&DataKey::RefundStatus(n));
+        }
+        // Remove per-buyer ticket counts
+        for buyer in tickets_list.iter() {
+            env.storage().persistent().remove(&DataKey::TicketCount(buyer));
+        }
+        // Remove FinishTime
+        env.storage().persistent().remove(&DataKey::FinishTime);
+
+        // Remove instance storage entries (Factory and Admin removed last)
+        env.storage().instance().remove(&DataKey::Raffle);
+        env.storage().instance().remove(&DataKey::Tickets);
+        env.storage().instance().remove(&DataKey::NextTicketId);
+        env.storage().instance().remove(&DataKey::Paused);
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+        }
+        env.storage().instance().remove(&DataKey::Factory);
+        env.storage().instance().remove(&DataKey::Admin);
+
+        Ok(())
+    }
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
