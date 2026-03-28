@@ -1134,3 +1134,267 @@ fn test_tiered_prizes() {
     let raffle_final = client.get_raffle();
     assert!(raffle_final.status == RaffleStatus::Claimed);
 }
+
+// --- 5. ORACLE RANDOMNESS TESTS (Issue #59) ---
+
+/// Helper: register a dummy oracle contract and return its address.
+fn register_oracle(env: &Env) -> Address {
+    #[contract]
+    pub struct DummyOracle;
+    #[contractimpl]
+    impl DummyOracle {}
+    env.register(DummyOracle, ())
+}
+
+/// request_winner_selection: happy path via the dedicated function.
+/// Creator calls request_winner_selection after raffle moves to Drawing.
+#[test]
+fn test_request_winner_selection_happy_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _creator, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    // Raffle is now Drawing (max tickets sold); creator requests oracle randomness
+    client.request_winner_selection();
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
+
+    // Oracle provides the seed — raffle should finalise
+    env.as_contract(&oracle, || {
+        client.provide_randomness(&99999u64);
+    });
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
+    assert_eq!(client.get_raffle().winners.len(), 1);
+}
+
+/// request_winner_selection: transitions Active → Drawing then issues request.
+#[test]
+fn test_request_winner_selection_from_active_after_time_expired() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+
+    // Create raffle with a short end_time
+    let creator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(&env, &token_id);
+    admin_client.mint(&creator, &1_000i128);
+
+    #[contract]
+    pub struct DummyFactory2;
+    #[contractimpl]
+    impl DummyFactory2 {}
+    let factory = env.register(DummyFactory2, ());
+    let factory_admin = Address::generate(&env);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    let end_time = env.ledger().timestamp() + 100;
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Time-Expired Raffle"),
+        end_time,
+        max_tickets: 10u32,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: RandomnessSource::External,
+        oracle_address: Some(oracle.clone()),
+        protocol_fee_bp: 0u32,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+    };
+    client.init(&factory, &factory_admin, &creator, &config);
+
+    // Deposit and buy one ticket
+    client.deposit_prize();
+    admin_client.mint(&creator, &10i128);
+    client.buy_ticket(&creator);
+
+    // Fast-forward past end_time
+    env.ledger().with_mut(|l| l.timestamp = end_time + 1);
+
+    // request_winner_selection should auto-transition Active → Drawing
+    client.request_winner_selection();
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
+
+    env.as_contract(&oracle, || {
+        client.provide_randomness(&42u64);
+    });
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
+}
+
+/// request_winner_selection: fails when raffle uses Internal randomness.
+#[test]
+fn test_request_winner_selection_rejected_for_internal_randomness() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    let result = client.try_request_winner_selection();
+    assert_eq!(result, Err(Ok(Error::InvalidParameters)));
+}
+
+/// request_winner_selection: fails if raffle has not ended yet (still Active).
+#[test]
+fn test_request_winner_selection_rejected_while_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _, _, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    // Buy only 1 ticket — raffle is still Active (not full, no end_time)
+    let b = Address::generate(&env);
+    let admin_client_local = token::StellarAssetClient::new(&env, &client.get_raffle().payment_token);
+    admin_client_local.mint(&b, &10i128);
+    client.buy_ticket(&b);
+
+    let result = client.try_request_winner_selection();
+    assert_eq!(result, Err(Ok(Error::InvalidStateTransition)));
+}
+
+/// request_winner_selection: prevents a second request while one is pending.
+#[test]
+fn test_request_winner_selection_blocks_duplicate() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.request_winner_selection();
+
+    // Second call while oracle has not yet responded
+    let result = client.try_request_winner_selection();
+    assert_eq!(result, Err(Ok(Error::RandomnessAlreadyRequested)));
+}
+
+/// provide_randomness: rejects an unsolicited oracle callback (no pending request).
+#[test]
+fn test_provide_randomness_rejects_unsolicited_callback() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    // Raffle is in Drawing state but request_winner_selection was never called
+    // (we manually transition by buying all tickets — but no oracle request was made)
+    // The oracle should NOT be able to call provide_randomness
+    let result = env.as_contract(&oracle, || client.try_provide_randomness(&12345u64));
+    assert_eq!(result, Err(Ok(Error::NoRandomnessRequest)));
+}
+
+/// provide_randomness: correctly verifies oracle identity and finalises raffle.
+#[test]
+fn test_provide_randomness_verifies_oracle_and_finalises() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.request_winner_selection();
+
+    // Oracle responds with a deterministic seed
+    let seed = 7u64;
+    let first_winner = env.as_contract(&oracle, || client.provide_randomness(&seed));
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Finalized);
+    assert_eq!(raffle.winners.get(0).unwrap(), first_winner);
+}
+
+/// Full oracle flow: request_winner_selection → provide_randomness → claim_prize.
+#[test]
+fn test_full_oracle_flow_end_to_end() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _creator, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+
+    let mut buyers = Vec::new(&env);
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+        buyers.push_back(b);
+    }
+
+    // Step 1: creator triggers oracle request
+    client.request_winner_selection();
+    assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
+
+    // Step 2: oracle provides randomness (seed 0 → picks ticket at index 0)
+    let winner = env.as_contract(&oracle, || client.provide_randomness(&0u64));
+
+    // Step 3: winner claims prize after lockup
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
+
+    assert_eq!(token_client.balance(&winner), 100i128);
+}
