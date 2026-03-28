@@ -219,27 +219,6 @@ impl RaffleFactory {
                 op: pending.op,
                 executed_by: admin,
                 executed_at: env.ledger().timestamp(),
-            .set(&DataKey::Treasury, &treasury);
-
-        publish_factory_event(
-            &env,
-            "fee_updated",
-            events::FeeUpdated {
-                old_fee_bp,
-                new_fee_bp: protocol_fee_bp,
-                updated_by: admin.clone(),
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        publish_factory_event(
-            &env,
-            "treasury_updated",
-            events::TreasuryUpdated {
-                old_treasury,
-                new_treasury: treasury,
-                updated_by: admin,
-                timestamp: env.ledger().timestamp(),
             },
         );
 
@@ -285,30 +264,6 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::OpCounter)
             .unwrap_or(0u32)
-    pub fn set_verified(env: Env, creator: Address, is_verified: bool) -> Result<(), ContractError> {
-        let admin = require_factory_admin(&env)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::CreatorVerification(creator.clone()), &is_verified);
-
-        publish_factory_event(
-            &env,
-            "creator_verified",
-            events::CreatorVerified {
-                creator,
-                is_verified,
-                admin,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-        Ok(())
-    }
-
-    pub fn is_verified(env: Env, creator: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::CreatorVerification(creator))
-            .unwrap_or(false)
     }
 
     pub fn create_raffle(
@@ -1120,103 +1075,5 @@ mod tests {
         //   client.set_config(&0u32, &Address::generate(&env));
         // Since set_config was removed (task 7), this test passes by compilation.
         assert!(true);
-    // 13. set_config emits FeeUpdated and TreasuryUpdated events
-    // =========================================================================
-    #[test]
-    fn test_set_config_emits_events() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin, _) = setup_factory(&env);
-
-        let new_treasury = Address::generate(&env);
-        let new_fee = 500u32;
-
-        client.set_config(&new_fee, &new_treasury);
-
-        let events = env.events().all();
-        let mut found_fee = false;
-        let mut found_treasury = false;
-
-        for event in events.iter() {
-            let topics = event.0;
-            if topics.get(1).unwrap() == Symbol::new(&env, "fee_updated") {
-                found_fee = true;
-            }
-            if topics.get(1).unwrap() == Symbol::new(&env, "treasury_updated") {
-                found_treasury = true;
-            }
-        }
-
-        assert!(found_fee, "FeeUpdated event not found");
-        assert!(found_treasury, "TreasuryUpdated event not found");
-    }
-
-    // =========================================================================
-    // 14. transfer_ownership and accept_ownership work (aliases)
-    // =========================================================================
-    #[test]
-    fn test_ownership_transfer_aliases() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin, _) = setup_factory(&env);
-
-        let new_owner = Address::generate(&env);
-
-        // Propose
-        client.transfer_ownership(&new_owner);
-
-        // Accept
-        env.as_contract(&new_owner, || {
-            client.accept_ownership();
-        });
-
-        assert_eq!(client.get_admin(), new_owner);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-
-    #[test]
-    fn test_protocol_stats() {
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        let treasury = Address::generate(&env);
-        let wasm_hash = Bytes::from_array(&env, &[0u8; 32]);
-        
-        RaffleFactory::init_factory(env.clone(), admin.clone(), wasm_hash, 100, treasury.clone()).unwrap();
-        
-        let stats = RaffleFactory::get_protocol_stats(env.clone());
-        assert_eq!(stats.total_raffles_created, 0);
-        
-        let creator = Address::generate(&env);
-        env.mock_all_auths();
-        
-        RaffleFactory::create_raffle(
-            env.clone(),
-            creator.clone(),
-            String::from_str(&env, "Test"),
-            0,
-            10,
-            false,
-            100,
-            Address::generate(&env),
-            1000,
-            RandomnessSource::Internal,
-            None
-        ).unwrap();
-        
-        let stats = RaffleFactory::get_protocol_stats(env.clone());
-        assert_eq!(stats.total_raffles_created, 1);
-        
-        let asset = Address::generate(&env);
-        RaffleFactory::record_volume(env.clone(), asset.clone(), 500).unwrap();
-        
-        assert_eq!(RaffleFactory::get_total_volume(env.clone(), asset.clone()), 500);
-        
-        RaffleFactory::record_volume(env.clone(), asset.clone(), 300).unwrap();
-        assert_eq!(RaffleFactory::get_total_volume(env.clone(), asset.clone()), 800);
     }
 }

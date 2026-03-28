@@ -132,7 +132,6 @@ where
 #[contracttype]
 pub enum DataKey {
     Raffle,
-    Tickets,
     TicketCount(Address),
     Ticket(u32),
     NextTicketId,
@@ -143,6 +142,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    TicketOwner(u32), // ticket_number -> Address
     PendingAdmin,
 }
 
@@ -209,9 +209,8 @@ fn require_not_paused(env: &Env) -> Result<(), Error> {
 
 fn read_tickets(env: &Env) -> Vec<Ticket> {
     env.storage()
-        .instance()
-        .get(&DataKey::Tickets)
-        .unwrap_or_else(|| Vec::new(env))
+        .persistent()
+        .set(&DataKey::TicketOwner(ticket_number), owner);
 }
 
 fn write_tickets(env: &Env, tickets: &Vec<Ticket>) {
@@ -644,7 +643,7 @@ impl Contract {
         Ok(())
     }
 
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {(env: Env, random_seed: u64) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
         match &raffle.oracle_address {
             Some(oracle) => oracle.require_auth(),
@@ -657,8 +656,8 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
+        let tickets_sold = raffle.tickets_sold;
+        if tickets_sold == 0 {
             return Err(Error::NoTicketsSold);
         }
 
