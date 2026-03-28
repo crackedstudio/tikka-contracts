@@ -147,6 +147,17 @@ pub struct BuybackAndBurnExecuted {
 // ADMIN EVENTS
 // ============================================================================
 
+/// Emitted when the oracle timeout elapses and PRNG is used as fallback
+#[derive(Clone)]
+#[contracttype]
+pub struct RandomnessFallbackTriggered {
+    pub triggered_by: Address,
+    pub seed_used: u64,
+    pub request_ledger: u32,
+    pub fallback_ledger: u32,
+    pub timestamp: u64,
+}
+
 /// Emitted when the oracle address is updated
 #[derive(Clone)]
 #[contracttype]
