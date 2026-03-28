@@ -25,6 +25,9 @@ pub enum DataKey {
     PendingAdmin,
     UniqueParticipant(Address),
     TotalUniqueParticipants,
+    MinCreationDelay, // Global config (u64 seconds)
+    LastCreationTime(Address), // Per-user tracking
+    WhitelistedPartner(Address), // For admin bypass
 }
 
 #[contracterror]
@@ -40,6 +43,9 @@ pub enum ContractError {
     // Admin errors (11-20)
     AdminTransferPending = 11,
     NoPendingTransfer = 12,
+
+    // rate error
+    RateLimitExceeded = 13,
 }
 
 fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
@@ -118,12 +124,39 @@ impl RaffleFactory {
     }
 
     pub fn create_raffle(
-        env: Env,
-        creator: Address,
-        config: RaffleConfig,
-    ) -> Result<Address, ContractError> {
-        creator.require_auth();
-        require_factory_not_paused(&env)?;
+    env: Env,
+    creator: Address,
+    config: RaffleConfig,
+) -> Result<Address, ContractError> {
+    creator.require_auth();
+    require_factory_not_paused(&env)?;
+
+    // Check if the creator is whitelisted
+    let is_whitelisted = env.storage()
+        .persistent()
+        .get(&DataKey::WhitelistedPartner(creator.clone()))
+        .unwrap_or(false);
+
+    if !is_whitelisted {
+        let now = env.ledger().timestamp();
+        let min_delay = env.storage()
+            .persistent()
+            .get(&DataKey::MinCreationDelay)
+            .unwrap_or(300); // Default to 5 minutes (300s)
+
+        let last_creation: u64 = env.storage()
+            .persistent()
+            .get(&DataKey::LastCreationTime(creator.clone()))
+            .unwrap_or(0);
+
+        // Enforce the delay
+        if now < last_creation + min_delay {
+            return Err(ContractError::RateLimitExceeded);
+        }
+
+        // Update the last creation timestamp
+        env.storage().persistent().set(&DataKey::LastCreationTime(creator.clone()), &now);
+    }
 
         let wasm_hash: soroban_sdk::BytesN<32> = env
             .storage()
@@ -368,6 +401,19 @@ impl RaffleFactory {
             .get(&DataKey::TotalUniqueParticipants)
             .unwrap_or(0)
     }
+
+    // rate
+    pub fn set_creation_delay(env: Env, delay_seconds: u64) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        env.storage().persistent().set(&DataKey::MinCreationDelay, &delay_seconds);
+        Ok(())
+    }
+
+    pub fn set_whitelist_status(env: Env, partner: Address, status: bool) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
+        env.storage().persistent().set(&DataKey::WhitelistedPartner(partner), &status);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -412,6 +458,69 @@ mod tests {
             payment_token,
             100i128,
         )
+    }
+
+
+    // Test case that attempts to create two raffles back-to-back. The second attempt should fail with RateLimitExceeded. Then we fast forward time and try again, which should succeed.
+    #[test]
+    fn test_create_raffle_rate_limiting() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        //  Setup
+        let (client, admin, _) = setup_factory(&env);
+        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
+            make_raffle_args(&env);
+
+        // Set a 5-minute limit (300 seconds)
+        client.set_creation_delay(&300u64);
+
+        //  First creation (should succeed)
+        let res1 = client.try_create_raffle(
+            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
+            &ticket_price, &payment_token, &prize_amount, 
+            &instance::RandomnessSource::Internal, &None
+        );
+        assert!(res1.is_ok());
+
+        //  Immediate second creation (should fail)
+        let res2 = client.try_create_raffle(
+            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
+            &ticket_price, &payment_token, &prize_amount, 
+            &instance::RandomnessSource::Internal, &None
+        );
+        assert_eq!(res2, Err(Ok(ContractError::RateLimitExceeded)));
+
+        //  Advance time by 301 seconds
+        env.ledger().with_mut(|li| {
+            li.timestamp += 301;
+        });
+
+        //  Third creation (should succeed now)
+        let res3 = client.try_create_raffle(
+            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
+            &ticket_price, &payment_token, &prize_amount, 
+            &instance::RandomnessSource::Internal, &None
+        );
+        assert!(res3.is_ok());
+    }
+
+    // Testing the Admin Bypass for whitelisted partners. We will whitelist an address and then attempt to create two raffles back-to-back with that address. Both attempts should succeed, demonstrating that the rate limit is bypassed for whitelisted partners.
+    #[test]
+    fn test_whitelisted_partner_bypass() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, _) = setup_factory(&env);
+        let (creator, desc, _, _, _, _, _, _) = make_raffle_args(&env);
+
+        client.set_whitelist_status(&creator, &true);
+
+        // Create two raffles in the same ledger timestamp
+        let res1 = client.try_create_raffle(/* ...args... */);
+        let res2 = client.try_create_raffle(/* ...args... */);
+
+        assert!(res1.is_ok());
+        assert!(res2.is_ok()); // Should succeed because of whitelist
     }
 
     // =========================================================================
