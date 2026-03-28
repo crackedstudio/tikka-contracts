@@ -1398,3 +1398,178 @@ fn test_full_oracle_flow_end_to_end() {
 
     assert_eq!(token_client.balance(&winner), 100i128);
 }
+
+// --- 6. ORACLE TIMEOUT / FALLBACK TESTS (Issue #61) ---
+
+/// Helper: set up an External raffle, deposit prize, sell all tickets,
+/// call request_winner_selection, then advance the ledger by `ledgers`.
+/// Returns (client, creator, oracle, token_client).
+fn setup_drawing_external(
+    env: &Env,
+    ledgers_to_advance: u32,
+) -> (ContractClient<'_>, Address, Address, token::Client<'_>) {
+    let oracle = register_oracle(env);
+    let (client, creator, _, admin_client, _, _) =
+        setup_raffle_env(env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.request_winner_selection();
+
+    // Advance ledger sequence to simulate time passing
+    env.ledger().with_mut(|l| l.sequence_number += ledgers_to_advance);
+
+    let token_client = token::Client::new(env, &admin_client.address);
+    (client, creator, oracle, token_client)
+}
+
+/// fallback: creator can trigger after timeout window has passed.
+#[test]
+fn test_fallback_succeeds_after_timeout() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, creator, _oracle, _) = setup_drawing_external(&env, 200);
+
+    client.trigger_randomness_fallback(&creator);
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Finalized);
+    assert_eq!(raffle.winners.len(), 1);
+}
+
+/// fallback: admin can also trigger after timeout (creator might be unavailable).
+#[test]
+fn test_fallback_admin_can_trigger() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _creator, _, admin_client, _, admin) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    client.request_winner_selection();
+
+    env.ledger().with_mut(|l| l.sequence_number += 200);
+
+    client.trigger_randomness_fallback(&admin);
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
+}
+
+/// fallback: returns FallbackTooEarly when called before timeout elapses.
+#[test]
+fn test_fallback_too_early_returns_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Advance only 199 ledgers — one short of the 200-ledger timeout
+    let (client, creator, _oracle, _) = setup_drawing_external(&env, 199);
+
+    let result = client.try_trigger_randomness_fallback(&creator);
+    assert_eq!(result, Err(Ok(Error::FallbackTooEarly)));
+}
+
+/// fallback: exactly at the boundary (199 ledgers elapsed = too early).
+#[test]
+fn test_fallback_boundary_199_ledgers_too_early() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, creator, _oracle, _) = setup_drawing_external(&env, 199);
+
+    let result = client.try_trigger_randomness_fallback(&creator);
+    assert_eq!(result, Err(Ok(Error::FallbackTooEarly)));
+}
+
+/// fallback: exactly at the boundary (200 ledgers elapsed = allowed).
+#[test]
+fn test_fallback_boundary_200_ledgers_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, creator, _oracle, _) = setup_drawing_external(&env, 200);
+
+    // Should succeed at exactly 200 ledgers
+    client.trigger_randomness_fallback(&creator);
+    assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
+}
+
+/// fallback: fails when no oracle request is pending.
+#[test]
+fn test_fallback_fails_without_pending_request() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, creator, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+    // Raffle is Drawing (all tickets sold) but request_winner_selection was NOT called
+    env.ledger().with_mut(|l| l.sequence_number += 200);
+
+    let result = client.try_trigger_randomness_fallback(&creator);
+    assert_eq!(result, Err(Ok(Error::NoRandomnessRequest)));
+}
+
+/// fallback: an unauthorised address cannot trigger fallback.
+#[test]
+fn test_fallback_unauthorised_caller_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _creator, _oracle, _) = setup_drawing_external(&env, 200);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_trigger_randomness_fallback(&stranger);
+    assert_eq!(result, Err(Ok(Error::NotAuthorized)));
+}
+
+/// fallback: once triggered, provide_randomness is rejected (no pending request).
+#[test]
+fn test_oracle_callback_rejected_after_fallback() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, creator, oracle, _) = setup_drawing_external(&env, 200);
+
+    client.trigger_randomness_fallback(&creator);
+
+    // Oracle tries to respond after fallback has already finalised the raffle
+    let result = env.as_contract(&oracle, || client.try_provide_randomness(&999u64));
+    assert!(result.is_err()); // InvalidStateTransition since status is now Finalized
+}
+
+/// fallback: full end-to-end — fallback triggers, winner claims prize normally.
+#[test]
+fn test_fallback_winner_can_claim_prize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, creator, _oracle, token_client) = setup_drawing_external(&env, 200);
+
+    client.trigger_randomness_fallback(&creator);
+
+    let winner = client.get_raffle().winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    client.claim_prize(&winner, &0);
+
+    assert_eq!(token_client.balance(&winner), 100i128);
+}
