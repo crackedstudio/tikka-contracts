@@ -1,6 +1,7 @@
 #![no_std]
 
 pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
+pub const CHECKPOINT_INTERVAL: u32 = 1_000;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String,
@@ -42,6 +43,17 @@ pub enum DataKey {
     PendingAdmin,
     PendingOp(u32),
     OpCounter,
+    Checkpoint(u32),
+    LatestCheckpointIndex,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct StateCheckpoint {
+    pub index: u32,
+    pub raffle_count: u32,
+    pub ledger_timestamp: u64,
+    pub aggregate_hash: soroban_sdk::BytesN<32>,
 }
 
 #[contracterror]
@@ -86,6 +98,49 @@ fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
         return Err(ContractError::ContractPaused);
     }
     Ok(())
+}
+
+fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
+    if raffle_count == 0 || raffle_count % CHECKPOINT_INTERVAL != 0 {
+        return;
+    }
+
+    let index = raffle_count / CHECKPOINT_INTERVAL;
+    let ledger_timestamp = env.ledger().timestamp();
+    let ledger_sequence = env.ledger().sequence();
+
+    // Serialise: raffle_count (u32 BE, 4 bytes) || ledger_sequence (u32 BE, 4 bytes) || ledger_timestamp (u64 BE, 8 bytes)
+    let mut input = Bytes::new(env);
+    input.extend_from_array(&raffle_count.to_be_bytes());
+    input.extend_from_array(&ledger_sequence.to_be_bytes());
+    input.extend_from_array(&ledger_timestamp.to_be_bytes());
+
+    let aggregate_hash = env.crypto().sha256(&input);
+
+    let checkpoint = StateCheckpoint {
+        index,
+        raffle_count,
+        ledger_timestamp,
+        aggregate_hash: aggregate_hash.clone(),
+    };
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::Checkpoint(index), &checkpoint);
+    env.storage()
+        .persistent()
+        .set(&DataKey::LatestCheckpointIndex, &index);
+
+    publish_factory_event(
+        env,
+        "checkpoint_created",
+        events::CheckpointCreated {
+            index,
+            raffle_count,
+            ledger_timestamp,
+            aggregate_hash,
+        },
+    );
 }
 
 #[contractimpl]
@@ -308,6 +363,9 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
 
+        let raffle_count = instances.len();
+        maybe_create_checkpoint(&env, raffle_count);
+
         Ok(creator)
     }
 
@@ -418,6 +476,19 @@ impl RaffleFactory {
         );
 
         Ok(())
+    }
+
+    pub fn get_checkpoint(env: Env, index: u32) -> Option<StateCheckpoint> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Checkpoint(index))
+    }
+
+    pub fn get_latest_checkpoint_index(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::LatestCheckpointIndex)
+            .unwrap_or(0u32)
     }
 
     pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
@@ -902,5 +973,251 @@ mod tests {
         //   client.set_config(&0u32, &Address::generate(&env));
         // Since set_config was removed (task 7), this test passes by compilation.
         assert!(true);
+    }
+
+    // =========================================================================
+    // Checkpoint unit tests — Task 5
+    // =========================================================================
+
+    // Helper: call create_raffle n times, resetting budget each time.
+    fn create_n_raffles(env: &Env, client: &RaffleFactoryClient<'_>, n: u32) {
+        env.budget().reset_unlimited();
+        for _ in 0..n {
+            let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
+                make_raffle_args(env);
+            client
+                .create_raffle(
+                    &creator,
+                    &desc,
+                    &end_time,
+                    &max_tickets,
+                    &allow_multiple,
+                    &ticket_price,
+                    &payment_token,
+                    &prize_amount,
+                    &instance::RandomnessSource::Internal,
+                    &None,
+                );
+        }
+    }
+
+    // =========================================================================
+    // C1. No checkpoint before the first milestone (999 raffles)
+    //     Validates: Req 1.4, 3.3
+    // =========================================================================
+    #[test]
+    fn test_no_checkpoint_before_first_milestone() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        create_n_raffles(&env, &client, 999);
+
+        assert_eq!(client.get_latest_checkpoint_index(), 0u32);
+    }
+
+    // =========================================================================
+    // C2. Checkpoint created at exactly 1,000 raffles
+    //     Validates: Req 1.1, 1.2
+    // =========================================================================
+    #[test]
+    fn test_checkpoint_created_at_1000() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        create_n_raffles(&env, &client, 1_000);
+
+        assert!(client.get_checkpoint(&1u32).is_some());
+    }
+
+    // =========================================================================
+    // C3. Checkpoint fields are correct at index 1
+    //     Validates: Req 1.2, 2.1, 7.1, 7.2
+    // =========================================================================
+    #[test]
+    fn test_checkpoint_fields_correct() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        // Capture ledger state before the 1000th raffle
+        let ledger_seq = env.ledger().sequence();
+        let ledger_ts = env.ledger().timestamp();
+
+        create_n_raffles(&env, &client, 1_000);
+
+        let cp = client.get_checkpoint(&1u32).expect("checkpoint must exist");
+
+        assert_eq!(cp.index, 1u32);
+        assert_eq!(cp.raffle_count, 1_000u32);
+        assert_eq!(cp.ledger_timestamp, ledger_ts);
+
+        // Recompute expected hash: raffle_count BE4 || ledger_sequence BE4 || ledger_timestamp BE8
+        let mut input = Bytes::new(&env);
+        input.extend_from_array(&1_000u32.to_be_bytes());
+        input.extend_from_array(&ledger_seq.to_be_bytes());
+        input.extend_from_array(&ledger_ts.to_be_bytes());
+        let expected_hash = env.crypto().sha256(&input);
+
+        assert_eq!(cp.aggregate_hash, expected_hash);
+    }
+
+    // =========================================================================
+    // C4. get_checkpoint returns None for a missing index
+    //     Validates: Req 4.4
+    // =========================================================================
+    #[test]
+    fn test_get_checkpoint_returns_none_for_missing_index() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        assert!(client.get_checkpoint(&999u32).is_none());
+    }
+
+    // =========================================================================
+    // C5. get_latest_checkpoint_index returns 0 on a fresh factory
+    //     Validates: Req 3.3
+    // =========================================================================
+    #[test]
+    fn test_get_latest_checkpoint_index_initial_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        assert_eq!(client.get_latest_checkpoint_index(), 0u32);
+    }
+
+    // =========================================================================
+    // C6. Query functions require no authorisation
+    //     Validates: Req 4.3
+    // =========================================================================
+    #[test]
+    fn test_query_functions_require_no_auth() {
+        let env = Env::default();
+        // Initialise with auth mocked, then drop mock for query calls
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let wasm_hash = Bytes::from_slice(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+        env.mock_all_auths();
+        client.init_factory(&admin, &wasm_hash, &0u32, &treasury);
+
+        // Call query functions — no mock_all_auths active for these calls
+        let idx = client.get_latest_checkpoint_index();
+        assert_eq!(idx, 0u32);
+
+        let cp = client.get_checkpoint(&1u32);
+        assert!(cp.is_none());
+    }
+
+    // =========================================================================
+    // C7. Paused factory rejects create_raffle at the milestone
+    //     Validates: Req 6.3
+    // =========================================================================
+    #[test]
+    fn test_paused_factory_rejects_create_raffle_at_milestone() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        // Create 999 raffles first
+        create_n_raffles(&env, &client, 999);
+
+        // Pause the factory
+        client.pause();
+
+        // The 1000th raffle should be rejected
+        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
+            make_raffle_args(&env);
+        let result = client.try_create_raffle(
+            &creator,
+            &desc,
+            &end_time,
+            &max_tickets,
+            &allow_multiple,
+            &ticket_price,
+            &payment_token,
+            &prize_amount,
+            &instance::RandomnessSource::Internal,
+            &None,
+        );
+
+        assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+        // No checkpoint should have been created
+        assert_eq!(client.get_latest_checkpoint_index(), 0u32);
+    }
+
+    // =========================================================================
+    // C8. Checkpoint event is emitted with correct topic and payload
+    //     Validates: Req 5.1, 5.2
+    // =========================================================================
+    #[test]
+    fn test_checkpoint_event_emitted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        create_n_raffles(&env, &client, 1_000);
+
+        let cp = client.get_checkpoint(&1u32).expect("checkpoint must exist");
+
+        // Find the checkpoint_created event
+        // env.events().all() returns Vec<(Address, Vec<Val>, Val)>: (contract_id, topics, data)
+        let all_events = env.events().all();
+        let tikka_sym = Symbol::new(&env, "tikka");
+        let cp_sym = Symbol::new(&env, "checkpoint_created");
+        let found = all_events.iter().any(|(_contract_id, topics, data)| {
+            // topics is a Vec<Val>; check for ("tikka", "checkpoint_created") pair
+            if topics.len() < 2 {
+                return false;
+            }
+            let t0: soroban_sdk::Val = topics.get(0).unwrap();
+            let t1: soroban_sdk::Val = topics.get(1).unwrap();
+            let t0_matches = soroban_sdk::Symbol::try_from_val(&env, &t0)
+                .map(|s: Symbol| s == tikka_sym)
+                .unwrap_or(false);
+            let t1_matches = soroban_sdk::Symbol::try_from_val(&env, &t1)
+                .map(|s: Symbol| s == cp_sym)
+                .unwrap_or(false);
+            if !t0_matches || !t1_matches {
+                return false;
+            }
+            // Decode the event payload as CheckpointCreated
+            let event_data: events::CheckpointCreated =
+                soroban_sdk::FromVal::from_val(&env, data);
+            event_data.index == cp.index
+                && event_data.raffle_count == cp.raffle_count
+                && event_data.ledger_timestamp == cp.ledger_timestamp
+                && event_data.aggregate_hash == cp.aggregate_hash
+        });
+
+        assert!(found, "checkpoint_created event not found or payload mismatch");
+    }
+
+    // =========================================================================
+    // C9. Two sequential checkpoints at index 1 and 2
+    //     Validates: Req 7.3
+    // =========================================================================
+    #[test]
+    fn test_two_checkpoints_sequential() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = setup_factory(&env);
+
+        create_n_raffles(&env, &client, 2_000);
+
+        let cp1 = client.get_checkpoint(&1u32).expect("checkpoint 1 must exist");
+        let cp2 = client.get_checkpoint(&2u32).expect("checkpoint 2 must exist");
+
+        assert_eq!(cp1.index, 1u32);
+        assert_eq!(cp1.raffle_count, 1_000u32);
+
+        assert_eq!(cp2.index, 2u32);
+        assert_eq!(cp2.raffle_count, 2_000u32);
+
+        assert_eq!(client.get_latest_checkpoint_index(), 2u32);
     }
 }
