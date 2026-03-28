@@ -4,12 +4,14 @@ pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
 pub const CHECKPOINT_INTERVAL: u32 = 1_000;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, String,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Env, IntoVal, String,
     Symbol, Vec,
 };
 
 mod events;
 mod instance;
+pub mod types;
+pub use types::{PaginationParams, PageResult_Raffles, PageResult_Tickets, effective_limit};
 use instance::{RaffleConfig, RandomnessSource};
 
 #[contract]
@@ -41,31 +43,23 @@ pub enum DataKey {
     Treasury,
     Paused,
     PendingAdmin,
-    PendingOp(u32),
-    OpCounter,
-    Checkpoint(u32),
-    LatestCheckpointIndex,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct StateCheckpoint {
-    pub index: u32,
-    pub raffle_count: u32,
-    pub ledger_timestamp: u64,
-    pub aggregate_hash: soroban_sdk::BytesN<32>,
+    UniqueParticipant(Address),
+    TotalUniqueParticipants,
 }
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ContractError {
+    // General errors (1-10)
     AlreadyInitialized = 1,
     NotAuthorized = 2,
     ContractPaused = 3,
-    AdminTransferPending = 4,
-    NoPendingTransfer = 5,
-    TimelockNotElapsed = 6,
-    NoPendingOp = 7,
+    InvalidParameters = 4,
+    RaffleNotFound = 5,
+    
+    // Admin errors (11-20)
+    AdminTransferPending = 11,
+    NoPendingTransfer = 12,
 }
 
 fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
@@ -148,7 +142,7 @@ impl RaffleFactory {
     pub fn init_factory(
         env: Env,
         admin: Address,
-        wasm_hash: Bytes,
+        wasm_hash: soroban_sdk::BytesN<32>,
         protocol_fee_bp: u32,
         treasury: Address,
     ) -> Result<(), ContractError> {
@@ -171,19 +165,12 @@ impl RaffleFactory {
         Ok(())
     }
 
-    pub fn propose_config_change(
+    pub fn set_config(
         env: Env,
         protocol_fee_bp: u32,
         treasury: Address,
-    ) -> Result<u32, ContractError> {
-        let admin = require_factory_admin(&env)?;
-
-        let op_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::OpCounter)
-            .unwrap_or(0u32)
-            + 1;
+    ) -> Result<(), ContractError> {
+        require_factory_admin(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::OpCounter, &op_id);
@@ -305,20 +292,12 @@ impl RaffleFactory {
     pub fn create_raffle(
         env: Env,
         creator: Address,
-        description: String,
-        end_time: u64,
-        max_tickets: u32,
-        allow_multiple: bool,
-        ticket_price: i128,
-        payment_token: Address,
-        prize_amount: i128,
-        randomness_source: RandomnessSource,
-        oracle_address: Option<Address>,
+        config: RaffleConfig,
     ) -> Result<Address, ContractError> {
         creator.require_auth();
         require_factory_not_paused(&env)?;
 
-        let _wasm_hash: Bytes = env
+        let wasm_hash: soroban_sdk::BytesN<32> = env
             .storage()
             .persistent()
             .get(&DataKey::InstanceWasmHash)
@@ -331,12 +310,6 @@ impl RaffleFactory {
             .unwrap_or(0);
         let treasury: Address = env.storage().persistent().get(&DataKey::Treasury).unwrap();
 
-        let mut _salt_src = Vec::new(&env);
-        _salt_src.push_back(creator.clone());
-        let _salt = env.crypto().sha256(&creator.clone().to_xdr(&env));
-
-        // Deployment logic placeholder
-
         let mut instances: Vec<Address> = env
             .storage()
             .persistent()
@@ -344,29 +317,21 @@ impl RaffleFactory {
             .unwrap();
 
         // Use parameters to avoid warnings
-        let _ = RaffleConfig {
-            description,
-            end_time,
-            max_tickets,
-            allow_multiple,
-            ticket_price,
-            payment_token,
-            prize_amount,
-            randomness_source,
-            oracle_address,
-            protocol_fee_bp,
-            treasury_address: Some(treasury),
-        };
+        let mut final_config = config;
+        final_config.protocol_fee_bp = protocol_fee_bp;
+        final_config.treasury_address = Some(treasury);
 
-        instances.push_back(creator.clone());
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let factory_address = env.current_contract_address();
+        let client = instance::ContractClient::new(&env, &raffle_address);
+        client.init(&factory_address, &admin, &creator, &config);
+
+        instances.push_back(raffle_address.clone());
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
 
-        let raffle_count = instances.len();
-        maybe_create_checkpoint(&env, raffle_count);
-
-        Ok(creator)
+        Ok(raffle_address)
     }
 
     pub fn get_admin(env: Env) -> Result<Address, ContractError> {
@@ -376,11 +341,62 @@ impl RaffleFactory {
             .ok_or(ContractError::NotAuthorized)
     }
 
-    pub fn get_raffles(env: Env) -> Vec<Address> {
-        env.storage()
+    pub fn get_raffles(env: Env, params: PaginationParams) -> PageResult_Raffles {
+        let all: Vec<Address> = env
+            .storage()
             .persistent()
             .get(&DataKey::RaffleInstances)
-            .unwrap_or_else(|| Vec::new(&env))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let total = all.len();
+        let lim = effective_limit(params.limit);
+        let offset = params.offset;
+
+        if offset >= total {
+            return PageResult_Raffles {
+                items: Vec::new(&env),
+                total,
+                has_more: false,
+            };
+        }
+
+        let end = (offset + lim).min(total);
+        let mut items = Vec::new(&env);
+        for i in offset..end {
+            items.push_back(all.get(i).unwrap());
+        }
+
+        let has_more = (offset + items.len()) < total;
+        PageResult_Raffles { items, total, has_more }
+    }
+
+    pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResult_Raffles {
+        let all: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RaffleInstances)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let total = all.len();
+        let lim = effective_limit(params.limit);
+        let offset = params.offset;
+
+        if offset >= total {
+            return PageResult_Raffles {
+                items: Vec::new(&env),
+                total,
+                has_more: false,
+            };
+        }
+
+        let end = (offset + lim).min(total);
+        let mut items = Vec::new(&env);
+        for i in offset..end {
+            items.push_back(all.get(i).unwrap());
+        }
+
+        let has_more = (offset + items.len()) < total;
+        PageResult_Raffles { items, total, has_more }
     }
 
     pub fn pause(env: Env) -> Result<(), ContractError> {
@@ -510,6 +526,32 @@ impl RaffleFactory {
         let instance_client = instance::ContractClient::new(&env, &instance_address);
         instance_client.unpause();
         Ok(())
+    }
+
+    pub fn track_participant(env: Env, participant: Address) -> Result<(), ContractError> {
+        participant.require_auth();
+
+        let key = DataKey::UniqueParticipant(participant.clone());
+        if !env.storage().persistent().has(&key) {
+            env.storage().persistent().set(&key, &true);
+            let mut count: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TotalUniqueParticipants)
+                .unwrap_or(0);
+            count += 1;
+            env.storage()
+                .persistent()
+                .set(&DataKey::TotalUniqueParticipants, &count);
+        }
+        Ok(())
+    }
+
+    pub fn get_unique_participants(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalUniqueParticipants)
+            .unwrap_or(0)
     }
 }
 

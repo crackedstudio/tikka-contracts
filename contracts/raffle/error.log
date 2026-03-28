@@ -1,0 +1,195 @@
+﻿cargo :     Checking 
+hello-world v0.0.0 (C:\Users\
+HP\Desktop\tikka-contracts\co
+ntracts\raffle)
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -Encoding utf8 
+error.log
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (    Che  
+  cking he...ntracts\raffl   
+ e):String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+warning: use of deprecated 
+method `soroban_sdk::events::
+Events::publish`: use the 
+#[contractevent] macro on a 
+contract event type
+  --> contracts\raffle\src\in
+stance\mod.rs:92:18
+   |
+92 |     
+env.events().publish(
+   |                  ^^^^^^^
+   |
+   = note: 
+`#[warn(deprecated)]` on by 
+default
+
+error[E0599]: no variant or 
+associated item named 
+`Admin` found for enum 
+`instance::DataKey` in the 
+current scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:257:48
+    |
+100 | pub enum DataKey {
+    | ---------------- 
+variant or associated item 
+`Admin` not found for this 
+enum
+...
+257 |         env.storage().i
+nstance().set(&DataKey::Admin
+, &admin);
+    |                        
+                        
+^^^^^ variant or associated 
+item not found in 
+`instance::DataKey`
+
+error[E0425]: cannot find 
+function 
+`require_not_paused` in this 
+scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:278:9
+    |
+278 |         
+require_not_paused(&env)?;
+    |         
+^^^^^^^^^^^^^^^^^^ not found 
+in this scope
+
+error[E0425]: cannot find 
+function 
+`require_not_paused` in this 
+scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:325:9
+    |
+325 |         
+require_not_paused(&env)?;
+    |         
+^^^^^^^^^^^^^^^^^^ not found 
+in this scope
+
+error[E0599]: no variant or 
+associated item named 
+`Paused` found for enum 
+`instance::DataKey` in the 
+current scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:756:48
+    |
+100 | pub enum DataKey {
+    | ---------------- 
+variant or associated item 
+`Paused` not found for this 
+enum
+...
+756 |         env.storage().i
+nstance().set(&DataKey::Pause
+d, &true);
+    |                        
+                        
+^^^^^^ variant or associated 
+item not found in 
+`instance::DataKey`
+
+error[E0599]: no variant or 
+associated item named 
+`Paused` found for enum 
+`instance::DataKey` in the 
+current scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:777:48
+    |
+100 | pub enum DataKey {
+    | ---------------- 
+variant or associated item 
+`Paused` not found for this 
+enum
+...
+777 |         env.storage().i
+nstance().set(&DataKey::Pause
+d, &false);
+    |                        
+                        
+^^^^^^ variant or associated 
+item not found in 
+`instance::DataKey`
+
+error[E0599]: no variant or 
+associated item named 
+`Paused` found for enum 
+`instance::DataKey` in the 
+current scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:794:28
+    |
+100 | pub enum DataKey {
+    | ---------------- 
+variant or associated item 
+`Paused` not found for this 
+enum
+...
+794 |             
+.get(&DataKey::Paused)
+    |                        
+    ^^^^^^ variant or 
+associated item not found in 
+`instance::DataKey`
+
+error[E0599]: no variant or 
+associated item named 
+`Admin` found for enum 
+`instance::DataKey` in the 
+current scope
+   --> contracts\raffle\src\i
+nstance\mod.rs:805:48
+    |
+100 | pub enum DataKey {
+    | ---------------- 
+variant or associated item 
+`Admin` not found for this 
+enum
+...
+805 |         env.storage().i
+nstance().set(&DataKey::Admin
+, &new_admin);
+    |                        
+                        
+^^^^^ variant or associated 
+item not found in 
+`instance::DataKey`
+
+warning: use of deprecated 
+method `soroban_sdk::events::
+Events::publish`: use the 
+#[contractevent] macro on a 
+contract event type
+  --> contracts\raffle\src\li
+b.rs:40:18
+   |
+40 |     
+env.events().publish(
+   |                  ^^^^^^^
+
+Some errors have detailed 
+explanations: E0425, E0599.
+For more information about 
+an error, try `rustc 
+--explain E0425`.
+warning: `hello-world` (lib) 
+generated 2 warnings
+error: could not compile 
+`hello-world` (lib) due to 7 
+previous errors; 2 warnings 
+emitted
