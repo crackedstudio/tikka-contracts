@@ -107,10 +107,11 @@ Emitted when the raffle winner is determined.
 **Topic:** `("tikka", "raffle_finalized")`
 
 **Fields:**
-- `winner: Address` - Address of the winning participant
-- `winning_ticket_id: u32` - ID of the winning ticket
+- `winners: Vec<Address>` - Addresses of the winning participants by prize tier
+- `winning_ticket_ids: Vec<u32>` - Ticket indices selected for each prize tier
 - `total_tickets_sold: u32` - Total tickets sold in this raffle
-- `randomness_source: RandomnessSource` - Source used for winner selection
+- `randomness_source: RandomnessSource` - High-level randomness channel used for winner selection
+- `randomness_type: RandomnessType` - Exact draw type used for finalization (`Prng = 0`, `Vrf = 1`, `Fallback = 2`)
 - `finalized_at: u64` - Unix timestamp when raffle was finalized
 
 ---

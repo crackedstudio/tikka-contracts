@@ -1,9 +1,28 @@
 use soroban_sdk::{contracttype, Address, Vec};
 
-use crate::instance::Ticket;
+use crate::instance::{Ticket, RandomnessSource};
 
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
 pub const MAX_PAGE_LIMIT: u32 = 200;
+
+/// Fairness data returned by get_fairness_proof
+/// Contains all data used to select the winner for transparency
+#[derive(Clone)]
+#[contracttype]
+pub struct FairnessData {
+    /// The initial randomness seed used for the draw
+    pub seed: u64,
+    /// The randomness source used (Internal or External)
+    pub randomness_source: RandomnessSource,
+    /// All ticket IDs that participated in the draw
+    pub ticket_ids: Vec<u32>,
+    /// Winning ticket indices selected
+    pub winning_ticket_indices: Vec<u32>,
+    /// Ledger timestamp when the draw occurred
+    pub draw_timestamp: u64,
+    /// Ledger sequence when the draw occurred
+    pub draw_sequence: u32,
+}
 
 #[derive(Clone)]
 #[contracttype]

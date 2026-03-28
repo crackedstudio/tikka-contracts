@@ -26,15 +26,15 @@
 - `prize_claimed` - Emitted in `claim_prize()`
 - `status_changed` - Emitted on all status transitions
 
-#### Admin Events (Defined but not yet implemented):
-- `oracle_address_updated`
-- `fee_updated`
-- `treasury_updated`
-- `fees_withdrawn`
-- `contract_paused`
-- `contract_unpaused`
-- `admin_transfer_proposed`
-- `admin_transfer_accepted`
+#### Admin Events (Implemented):
+- `oracle_address_updated` (Available in instance)
+- `fee_updated` (Emitted in `set_config`)
+- `treasury_updated` (Emitted in `set_config`)
+- `fees_withdrawn` (Available in `claim_prize`)
+- `contract_paused` (Emitted in `pause`)
+- `contract_unpaused` (Emitted in `unpause`)
+- `admin_transfer_proposed` (Emitted in `transfer_admin` / `transfer_ownership`)
+- `admin_transfer_accepted` (Emitted in `accept_admin` / `accept_ownership`)
 
 Note: Admin events are defined in the events module but require corresponding admin functions to be implemented in the contract.
 
@@ -91,6 +91,9 @@ Every state transition emits both the primary event (e.g., `prize_deposited`) an
 ✅ Unit tests assert event emission for each applicable function  
 ✅ No external behavior changes - only added emissions  
 ✅ No breaking changes to existing tests  
+✅ Standard `transfer_ownership` and `accept_ownership` logic implemented for DAO handover  
+✅ Two-step ownership transfer implemented in both Factory and Instance  
+✅ Fee and Treasury update hooks emit corresponding events for transparency  
 
 ## Build & Test Results
 
