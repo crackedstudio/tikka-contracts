@@ -143,6 +143,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    PendingAdmin,
 }
 
 // --- Error Types ---
@@ -1172,6 +1173,74 @@ impl Contract {
         factory.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Ok(())
+    }
+
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        if new_admin == admin {
+            env.storage().instance().remove(&DataKey::PendingAdmin);
+            return Ok(());
+        }
+
+        if env.storage().instance().has(&DataKey::PendingAdmin) {
+            return Err(Error::AdminTransferPending);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+
+        publish_event(
+            &env,
+            "admin_transfer_proposed",
+            crate::events::AdminTransferProposed {
+                current_admin: admin,
+                proposed_admin: new_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), Error> {
+        Self::transfer_admin(env, new_owner)
+    }
+
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::NoPendingTransfer)?;
+        pending.require_auth();
+
+        let old_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+
+        publish_event(
+            &env,
+            "admin_transfer_accepted",
+            crate::events::AdminTransferAccepted {
+                old_admin,
+                new_admin: pending,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn accept_ownership(env: Env) -> Result<(), Error> {
+        Self::accept_admin(env)
     }
 }
 
