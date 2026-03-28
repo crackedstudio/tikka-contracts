@@ -109,6 +109,16 @@ pub struct TicketRefunded {
     pub timestamp: u64,
 }
 
+/// Emitted when a creator's verification status is updated
+#[derive(Clone)]
+#[contracttype]
+pub struct CreatorVerified {
+    pub creator: Address,
+    pub is_verified: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
 /// Emitted when a winner claims their prize
 #[derive(Clone)]
 #[contracttype]
