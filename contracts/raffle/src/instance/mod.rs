@@ -1,18 +1,25 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, IntoVal, String,
+    Symbol, Vec,
 };
 
 use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
-    RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
+    RandomnessReceived, RandomnessRequested, RandomnessType, StatusChanged, TicketPurchased,
 };
+
+
+// Define a trait for Soroswap Router
+#[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
+pub trait SoroswapRouter {
 
 // --- External Contract Traits ---
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
 pub trait SoroswapRouterTrait {
+
     fn swap_exact_tokens_for_tokens(
         env: Env,
         amount_in: i128,
@@ -77,6 +84,9 @@ pub struct Raffle {
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
     pub finalized_at: Option<u64>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub winner_ticket_id: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -122,7 +132,6 @@ where
 #[contracttype]
 pub enum DataKey {
     Raffle,
-    Tickets,
     TicketCount(Address),
     Ticket(u32),
     NextTicketId,
@@ -133,6 +142,8 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    TicketOwner(u32), // ticket_number -> Address
+    PendingAdmin,
 }
 
 // --- Error Types ---
@@ -166,6 +177,7 @@ pub enum Error {
     MultipleTicketsNotAllowed = 32,
     NoTicketsSold = 33,
     TicketNotFound = 34,
+    RaffleEnded = 35,
     
     // System errors (41-50)
     ArithmeticOverflow = 41,
@@ -188,11 +200,17 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
+fn require_not_paused(env: &Env) -> Result<(), Error> {
+    if Contract::is_paused(env.clone()) {
+        return Err(Error::ContractPaused);
+    }
+    Ok(())
+}
+
 fn read_tickets(env: &Env) -> Vec<Ticket> {
     env.storage()
-        .instance()
-        .get(&DataKey::Tickets)
-        .unwrap_or_else(|| Vec::new(env))
+        .persistent()
+        .set(&DataKey::TicketOwner(ticket_number), owner);
 }
 
 fn write_tickets(env: &Env, tickets: &Vec<Ticket>) {
@@ -229,13 +247,6 @@ fn write_ticket(env: &Env, ticket: &Ticket) {
         .set(&DataKey::Ticket(ticket.id), ticket);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
-}
-
 fn acquire_guard(env: &Env) -> Result<(), Error> {
     if env.storage().instance().has(&DataKey::ReentrancyGuard) {
         return Err(Error::Reentrancy);
@@ -264,6 +275,20 @@ fn require_creator(env: &Env) -> Result<Address, Error> {
     let raffle = read_raffle(env)?;
     raffle.creator.require_auth();
     Ok(raffle.creator)
+fn require_not_paused(env: &Env) -> Result<(), Error> {
+
+    if env
+        .storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+    {
+
+    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+
+        return Err(Error::ContractPaused);
+    }
+    Ok(())
 }
 
 fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
@@ -366,6 +391,9 @@ impl Contract {
             swap_router: config.swap_router,
             tikka_token: config.tikka_token,
             finalized_at: None,
+            swap_router: config.swap_router,
+            tikka_token: config.tikka_token,
+            winner_ticket_id: None,
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
@@ -490,6 +518,15 @@ impl Contract {
         write_ticket_count(&env, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
 
+        // Update global volume in factory
+        if let Some(factory_address) = env.storage().instance().get::<_, Address>(&DataKey::Factory) {
+            env.invoke_contract::<()>(
+                &factory_address,
+                &Symbol::new(&env, "record_volume"),
+                (raffle.payment_token.clone(), raffle.ticket_price).into_val(&env),
+            );
+        }
+
         // Interaction: external token transfer
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
@@ -577,7 +614,7 @@ impl Contract {
         for _ in 0..raffle.prizes.len() {
             let winner_index = (current_seed % tickets.len() as u64) as u32;
             let winner_ticket = tickets.get(winner_index).expect("Ticket out of bounds");
-            winners.push_back(winner_ticket.owner.clone());
+            winners.push_back(winner_ticket.owner);
             winning_ticket_ids.push_back(winner_index);
             // Change seed for the next winner
             current_seed = current_seed.wrapping_add(1);
@@ -594,6 +631,10 @@ impl Contract {
         raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
 
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
+
         publish_event(
             &env,
             "raffle_finalized",
@@ -602,6 +643,7 @@ impl Contract {
                 winning_ticket_ids,
                 total_tickets_sold: raffle.tickets_sold,
                 randomness_source: RandomnessSource::Internal,
+                randomness_type: RandomnessType::Prng,
                 finalized_at: env.ledger().timestamp(),
             },
         );
@@ -619,7 +661,7 @@ impl Contract {
         Ok(())
     }
 
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {(env: Env, random_seed: u64) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
         match &raffle.oracle_address {
             Some(oracle) => oracle.require_auth(),
@@ -632,8 +674,8 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
+        let tickets_sold = raffle.tickets_sold;
+        if tickets_sold == 0 {
             return Err(Error::NoTicketsSold);
         }
 
@@ -646,7 +688,7 @@ impl Contract {
             let winner_ticket = tickets
                 .get(winner_index)
                 .expect("Ticket out of bounds callback");
-            winners.push_back(winner_ticket.owner.clone());
+            winners.push_back(winner_ticket.owner);
             winning_ticket_ids.push_back(winner_index);
             // Change seed for the next winner
             current_seed = current_seed.wrapping_add(1);
@@ -662,6 +704,10 @@ impl Contract {
         raffle.claimed_winners = claimed_winners;
         raffle.finalized_at = Some(env.ledger().timestamp());
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         publish_event(
             &env,
@@ -681,6 +727,7 @@ impl Contract {
                 winning_ticket_ids,
                 total_tickets_sold: raffle.tickets_sold,
                 randomness_source: RandomnessSource::External,
+                randomness_type: RandomnessType::Vrf,
                 finalized_at: env.ledger().timestamp(),
             },
         );
@@ -758,6 +805,10 @@ impl Contract {
             raffle.status = RaffleStatus::Claimed;
         }
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         // Interactions: external token transfers
         let token_client = token::Client::new(&env, &raffle.payment_token);
@@ -891,6 +942,10 @@ impl Contract {
             raffle.prize_deposited = false;
         }
         write_raffle(&env, &raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
 
         // Interaction: external token transfer
         if should_refund_prize {
@@ -1142,6 +1197,116 @@ impl Contract {
         factory.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Ok(())
+    }
+
+    pub fn get_finish_time(env: Env) -> Option<u64> {
+        env.storage().persistent().get(&DataKey::FinishTime)
+    }
+
+    pub fn wipe_storage(env: Env) -> Result<(), Error> {
+        // Auth: only factory may call
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(Error::NotAuthorized)?;
+        factory.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        let tickets_sold = raffle.tickets_sold;
+        let tickets_list = read_tickets(&env);
+
+        // Remove per-ticket persistent entries
+        for n in 1..=tickets_sold {
+            env.storage().persistent().remove(&DataKey::Ticket(n));
+            env.storage().persistent().remove(&DataKey::RefundStatus(n));
+        }
+        // Remove per-buyer ticket counts
+        for buyer in tickets_list.iter() {
+            env.storage().persistent().remove(&DataKey::TicketCount(buyer));
+        }
+        // Remove FinishTime
+        env.storage().persistent().remove(&DataKey::FinishTime);
+
+        // Remove instance storage entries (Factory and Admin removed last)
+        env.storage().instance().remove(&DataKey::Raffle);
+        env.storage().instance().remove(&DataKey::Tickets);
+        env.storage().instance().remove(&DataKey::NextTicketId);
+        env.storage().instance().remove(&DataKey::Paused);
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+        }
+        env.storage().instance().remove(&DataKey::Factory);
+        env.storage().instance().remove(&DataKey::Admin);
+
+        Ok(())
+    }
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        if new_admin == admin {
+            env.storage().instance().remove(&DataKey::PendingAdmin);
+            return Ok(());
+        }
+
+        if env.storage().instance().has(&DataKey::PendingAdmin) {
+            return Err(Error::AdminTransferPending);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+
+        publish_event(
+            &env,
+            "admin_transfer_proposed",
+            crate::events::AdminTransferProposed {
+                current_admin: admin,
+                proposed_admin: new_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), Error> {
+        Self::transfer_admin(env, new_owner)
+    }
+
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::NoPendingTransfer)?;
+        pending.require_auth();
+
+        let old_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+
+        publish_event(
+            &env,
+            "admin_transfer_accepted",
+            crate::events::AdminTransferAccepted {
+                old_admin,
+                new_admin: pending,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn accept_ownership(env: Env) -> Result<(), Error> {
+        Self::accept_admin(env)
     }
 }
 
