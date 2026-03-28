@@ -1,10 +1,11 @@
 #![cfg(test)]
 
 use super::*;
+use crate::events::{RaffleFinalized, RandomnessType};
 use crate::{ContractError, RaffleFactory, RaffleFactoryClient};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Bytes, Env, IntoVal, String, Symbol,
+    token, Address, Bytes, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
 /// HELPER: Standardized environment setup
@@ -67,6 +68,23 @@ fn setup_raffle_env(
     client.init(&factory, &factory_admin, &creator, &config);
 
     (client, creator, buyer, admin_client, factory, factory_admin)
+}
+
+fn raffle_finalized_event(env: &Env, contract_address: &Address) -> RaffleFinalized {
+    let events = env.events().all();
+    for event in events.iter() {
+        let (address, topics, data) = event;
+        if address != *contract_address || topics.len() < 2 {
+            continue;
+        }
+
+        let event_name = Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap();
+        if event_name == Symbol::new(env, "raffle_finalized") {
+            return RaffleFinalized::try_from_val(env, &data).unwrap();
+        }
+    }
+
+    panic!("raffle_finalized event not found");
 }
 
 // --- 1. FUNCTIONAL FLOW TESTS ---
@@ -294,8 +312,10 @@ fn test_raffle_finalized_event_audit() {
 
     client.finalize_raffle();
 
-    // Check that raffle_finalized event was emitted
-    assert!(env.events().all().len() > 0);
+    let finalized_event = raffle_finalized_event(&env, &client.address);
+    assert_eq!(finalized_event.randomness_source, RandomnessSource::Internal);
+    assert_eq!(finalized_event.randomness_type, RandomnessType::Prng);
+    assert_eq!(finalized_event.finalized_at, expected_timestamp);
 }
 
 #[test]
@@ -403,6 +423,42 @@ fn test_randomness_received_event() {
 
     // Check that randomness_received event was emitted
     assert!(env.events().all().len() > 0);
+}
+
+#[test]
+fn test_external_raffle_finalized_event_uses_vrf_randomness_type() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    #[contract]
+    pub struct DummyOracle;
+    #[contractimpl]
+    impl DummyOracle {}
+    let oracle = env.register(DummyOracle, ());
+
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.finalize_raffle();
+    env.as_contract(&oracle, || {
+        client.provide_randomness(&12345u64);
+    });
+
+    let finalized_event = raffle_finalized_event(&env, &client.address);
+    assert_eq!(finalized_event.randomness_source, RandomnessSource::External);
+    assert_eq!(finalized_event.randomness_type, RandomnessType::Vrf);
 }
 
 #[test]
@@ -1045,4 +1101,72 @@ fn test_tiered_prizes() {
 
     let raffle_final = client.get_raffle();
     assert!(raffle_final.status == RaffleStatus::Claimed);
+}
+
+// --- 9. GOVERNANCE TESTS ---
+
+#[test]
+fn test_instance_ownership_transfer_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, factory_admin) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let new_owner = Address::generate(&env);
+
+    // Propose
+    env.as_contract(&factory_admin, || {
+        client.transfer_ownership(&new_owner);
+    });
+
+    // Verify pending
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get::<_, Address>(&DataKey::PendingAdmin),
+            Some(new_owner.clone())
+        );
+    });
+
+    // Accept
+    env.as_contract(&new_owner, || {
+        client.accept_ownership();
+    });
+
+    // Verify new admin
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get::<_, Address>(&DataKey::Admin),
+            Some(new_owner.clone())
+        );
+        assert!(!env.storage().instance().has(&DataKey::PendingAdmin));
+    });
+}
+
+#[test]
+#[should_panic] // Error(Contract, #5) - NotAuthorized
+fn test_instance_transfer_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let stranger = Address::generate(&env);
+    let new_owner = Address::generate(&env);
+
+    env.as_contract(&stranger, || {
+        client.transfer_ownership(&new_owner);
+    });
+}
+
+#[test]
+#[should_panic] // Error(Contract, #52) - NoPendingTransfer
+fn test_instance_accept_without_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let stranger = Address::generate(&env);
+
+    env.as_contract(&stranger, || {
+        client.accept_ownership();
+    });
 }
