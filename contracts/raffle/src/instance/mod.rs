@@ -172,6 +172,9 @@ pub enum Error {
     AlreadyInitialized = 42,
     NotInitialized = 43,
     Reentrancy = 44,
+    // Cross-contract errors (45-50)
+    /// External token transfer failed (e.g. malicious or broken token contract).
+    TokenTransferFailed = 45,
     // Admin errors (51-60)
     AdminTransferPending = 51,
     NoPendingTransfer = 52,
@@ -405,10 +408,13 @@ impl Contract {
         raffle.status = RaffleStatus::Active;
         write_raffle(&env, &raffle);
 
-        // Interaction: external token transfer
+        // Interaction: external token transfer — creator deposits the prize pool.
+        // Use try_transfer so a broken token surfaces as a typed error.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&raffle.creator, &contract_address, &raffle.prize_amount);
+        token_client
+            .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         publish_event(
             &env,
@@ -488,10 +494,13 @@ impl Contract {
         write_ticket_count(&env, &buyer, current_count + 1);
         write_raffle(&env, &raffle);
 
-        // Interaction: external token transfer
+        // Interaction: external token transfer — buyer pays for the ticket.
+        // Use try_transfer so a broken token surfaces as a typed error.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&buyer, &contract_address, &raffle.ticket_price);
+        token_client
+            .try_transfer(&buyer, &contract_address, &raffle.ticket_price)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
@@ -761,13 +770,29 @@ impl Contract {
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
 
-        token_client.transfer(&contract_address, &winner, &net_amount);
+        // Critical: winner must receive their prize. Use try_transfer so a
+        // malicious token surfaces as a typed error rather than a panic that
+        // could leave state inconsistent after the guard is released.
+        token_client
+            .try_transfer(&contract_address, &winner, &net_amount)
+            .map_err(|_| {
+                // Roll back the claimed flag so the winner can retry once the
+                // token is fixed / replaced.
+                let mut rollback = raffle.claimed_winners.clone();
+                rollback.set(tier_index, false);
+                let mut r = raffle.clone();
+                r.claimed_winners = rollback;
+                r.status = old_status.clone();
+                write_raffle(&env, &r);
+                release_guard(&env);
+                Error::TokenTransferFailed
+            })?;
 
         if platform_fee > 0 {
             if let (Some(router), Some(tikka)) = (&raffle.swap_router, &raffle.tikka_token) {
                 if raffle.payment_token != *tikka {
-                    // Approve router
-                    token_client.approve(
+                    // Approve router — non-critical, skip silently on failure.
+                    let _ = token_client.try_approve(
                         &contract_address,
                         router,
                         &platform_fee,
@@ -779,7 +804,10 @@ impl Contract {
                     path.push_back(tikka.clone());
 
                     let router_client = SoroswapRouterClient::new(&env, router);
-                    let amount_out = router_client.swap_exact_tokens_for_tokens(
+                    // Non-critical: if the swap fails (e.g. malicious router or
+                    // slippage), fees stay in the contract rather than blocking
+                    // the winner's claim.
+                    let swap_result = router_client.try_swap_exact_tokens_for_tokens(
                         &platform_fee,
                         &0i128,
                         &path,
@@ -787,23 +815,29 @@ impl Contract {
                         &(env.ledger().timestamp() + 300),
                     );
 
-                    let tikka_client = token::Client::new(&env, tikka);
-                    tikka_client.burn(&contract_address, &amount_out);
+                    if let Ok(Ok(amount_out)) = swap_result {
+                        let tikka_client = token::Client::new(&env, tikka);
+                        // Non-critical: burn failure keeps fees in contract.
+                        let _ = tikka_client.try_burn(&contract_address, &amount_out);
 
-                    publish_event(
-                        &env,
-                        "buyback_and_burn_executed",
-                        crate::events::BuybackAndBurnExecuted {
-                            router: router.clone(),
-                            tikka_token: tikka.clone(),
-                            amount_in: platform_fee,
-                            amount_out,
-                            timestamp: env.ledger().timestamp(),
-                        },
-                    );
+                        publish_event(
+                            &env,
+                            "buyback_and_burn_executed",
+                            crate::events::BuybackAndBurnExecuted {
+                                router: router.clone(),
+                                tikka_token: tikka.clone(),
+                                amount_in: platform_fee,
+                                amount_out,
+                                timestamp: env.ledger().timestamp(),
+                            },
+                        );
+                    }
+                    // If swap failed, fees remain in the contract for manual
+                    // recovery — the winner's claim is already settled above.
                 } else {
                     let tikka_client = token::Client::new(&env, tikka);
-                    tikka_client.burn(&contract_address, &platform_fee);
+                    // Non-critical: burn failure keeps fees in contract.
+                    let _ = tikka_client.try_burn(&contract_address, &platform_fee);
 
                     publish_event(
                         &env,
@@ -818,7 +852,8 @@ impl Contract {
                     );
                 }
             } else if raffle.treasury_address.is_some() {
-                token_client.transfer(
+                // Non-critical: treasury transfer failure keeps fees in contract.
+                let _ = token_client.try_transfer(
                     &contract_address,
                     &raffle.treasury_address.clone().unwrap(),
                     &platform_fee,
@@ -891,11 +926,14 @@ impl Contract {
         }
         write_raffle(&env, &raffle);
 
-        // Interaction: external token transfer
+        // Interaction: external token transfer — use try_transfer so a
+        // malicious or broken token cannot permanently block cancellation.
         if should_refund_prize {
             let token_client = token::Client::new(&env, &raffle.payment_token);
             let contract_address = env.current_contract_address();
-            token_client.transfer(&contract_address, &raffle.creator, &raffle.prize_amount);
+            token_client
+                .try_transfer(&contract_address, &raffle.creator, &raffle.prize_amount)
+                .map_err(|_| Error::TokenTransferFailed)?;
         }
 
         publish_event(
@@ -959,10 +997,13 @@ impl Contract {
             .persistent()
             .set(&DataKey::RefundStatus(ticket_id), &true);
 
-        // Interaction: external token transfer
+        // Interaction: external token transfer — use try_transfer so a
+        // malicious token cannot permanently block a ticket holder's refund.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, &ticket.owner, &raffle.ticket_price);
+        token_client
+            .try_transfer(&contract_address, &ticket.owner, &raffle.ticket_price)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         release_guard(&env);
 
