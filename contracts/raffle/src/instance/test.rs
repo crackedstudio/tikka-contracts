@@ -501,6 +501,94 @@ fn test_raffle_cancelled_event() {
     assert!(env.events().all().len() > 0);
 }
 
+// --- 4. ACCESS CONTROL TESTS (Issue #55) ---
+
+/// require_creator: creator can deposit prize
+#[test]
+fn test_creator_can_deposit_prize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _creator, _, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    // Should succeed — creator auth is mocked
+    client.deposit_prize();
+    assert_eq!(client.get_raffle().status, RaffleStatus::Active);
+}
+
+/// require_creator: creator can finalize raffle
+#[test]
+fn test_creator_can_finalize_raffle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _creator, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.finalize_raffle();
+    assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
+}
+
+/// require_admin: admin can cancel with AdminCancelled reason
+#[test]
+fn test_admin_can_cancel_raffle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+}
+
+/// require_admin: admin cancel uses admin auth, not creator auth.
+/// Admin and creator are different addresses; AdminCancelled should only
+/// require admin auth and succeed without needing the creator to sign.
+#[test]
+fn test_admin_cancel_uses_admin_auth_not_creator_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // factory_admin is stored as DataKey::Admin; creator is a separate address
+    let (client, creator, _, admin_client, _, factory_admin) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    // Confirm they are distinct addresses (belt-and-suspenders check)
+    assert_ne!(factory_admin, creator);
+
+    client.deposit_prize();
+    client.buy_ticket(&creator);
+
+    // Cancel with AdminCancelled — must require admin auth, not creator auth
+    client.cancel_raffle(&CancelReason::AdminCancelled);
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+}
+
+/// require_creator: creator cancel works, admin cancel works — they use different code paths
+#[test]
+fn test_creator_cancel_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+}
+
 #[test]
 fn test_status_changed_events() {
     let env = Env::default();

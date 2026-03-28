@@ -261,6 +261,20 @@ fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
+fn require_admin(env: &Env) -> Result<Address, Error> {
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotAuthorized)?;
+    admin.require_auth();
+    Ok(admin)
+}
+
+fn require_creator(env: &Env) -> Result<Address, Error> {
+    let raffle = read_raffle(env)?;
+    raffle.creator.require_auth();
+    Ok(raffle.creator)
 fn require_not_paused(env: &Env) -> Result<(), Error> {
 
     if env
@@ -406,8 +420,8 @@ impl Contract {
 
     pub fn deposit_prize(env: Env) -> Result<(), Error> {
         require_not_paused(&env)?;
+        require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
 
         if raffle.status != RaffleStatus::Proposed {
             return Err(Error::InvalidStateTransition);
@@ -459,7 +473,7 @@ impl Contract {
             return Err(Error::RaffleInactive);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
-            return Err(Error::RaffleEnded);
+            return Err(Error::RaffleExpired);
         }
         if raffle.tickets_sold >= raffle.max_tickets {
             return Err(Error::TicketsSoldOut);
@@ -537,8 +551,8 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
+        require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
 
         if raffle.status == RaffleStatus::Active {
             if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
@@ -900,16 +914,15 @@ impl Contract {
 
         // Admin or Creator can cancel
         match reason {
-            CancelReason::CreatorCancelled => raffle.creator.require_auth(),
-            CancelReason::AdminCancelled
-            | CancelReason::OracleTimeout
-            | CancelReason::MinTicketsNotMet => {
-                let _factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
-                if reason == CancelReason::AdminCancelled {
-                    raffle.creator.require_auth();
-                } else {
-                    raffle.creator.require_auth();
-                }
+            CancelReason::CreatorCancelled => { require_creator(&env)?; }
+            CancelReason::AdminCancelled => { require_admin(&env)?; }
+            CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+                let factory: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Factory)
+                    .ok_or(Error::NotAuthorized)?;
+                factory.require_auth();
             }
         }
 

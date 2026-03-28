@@ -85,7 +85,7 @@ where
     );
 }
 
-fn require_factory_admin(env: &Env) -> Result<Address, ContractError> {
+fn require_admin(env: &Env) -> Result<Address, ContractError> {
     let admin: Address = env
         .storage()
         .persistent()
@@ -324,7 +324,7 @@ impl RaffleFactory {
          let raffle_address = env.deployer().with_address(factory_address.clone(), salt).deploy(wasm_hash);
 
         let client = instance::ContractClient::new(&env, &raffle_address);
-        client.init(&factory_address, &admin, &creator, &config);
+        client.init(&factory_address, &admin, &creator, &final_config);
 
 
         instances.push_back(raffle_address.clone());
@@ -462,7 +462,7 @@ impl RaffleFactory {
     }
 
     pub fn pause(env: Env) -> Result<(), ContractError> {
-        let admin = require_factory_admin(&env)?;
+        let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &true);
 
         publish_factory_event(
@@ -478,7 +478,7 @@ impl RaffleFactory {
     }
 
     pub fn unpause(env: Env) -> Result<(), ContractError> {
-        let admin = require_factory_admin(&env)?;
+        let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &false);
 
         publish_factory_event(
@@ -501,7 +501,7 @@ impl RaffleFactory {
     }
 
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
-        let admin = require_factory_admin(&env)?;
+        let admin = require_admin(&env)?;
 
         // Self-transfer cancels any pending transfer
         if new_admin == admin {
@@ -575,14 +575,14 @@ impl RaffleFactory {
     }
 
     pub fn pause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
-        require_factory_admin(&env)?;
+        require_admin(&env)?;
         let instance_client = instance::ContractClient::new(&env, &instance_address);
         instance_client.pause();
         Ok(())
     }
 
     pub fn unpause_instance(env: Env, instance_address: Address) -> Result<(), ContractError> {
-        require_factory_admin(&env)?;
+        require_admin(&env)?;
         let instance_client = instance::ContractClient::new(&env, &instance_address);
         instance_client.unpause();
         Ok(())
@@ -671,7 +671,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events},
-        Address, Bytes, Env, String,
+        Address, Bytes, BytesN, Env, String,
     };
 
     // -------------------------------------------------------------------------
@@ -681,7 +681,7 @@ mod tests {
     fn setup_factory(env: &Env) -> (RaffleFactoryClient<'_>, Address, Address) {
         let admin = Address::generate(env);
         let treasury = Address::generate(env);
-        let wasm_hash = Bytes::from_slice(env, &[0u8; 32]);
+        let wasm_hash = BytesN::from_array(env, &[0u8; 32]);
 
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(env, &contract_id);
@@ -693,21 +693,30 @@ mod tests {
     // -------------------------------------------------------------------------
     // Helper: build minimal create_raffle arguments
     // -------------------------------------------------------------------------
-    fn make_raffle_args(env: &Env) -> (Address, String, u64, u32, bool, i128, Address, i128) {
+    fn make_raffle_args(env: &Env) -> (Address, instance::RaffleConfig) {
         let token_admin = Address::generate(env);
         let token_contract = env.register_stellar_asset_contract_v2(token_admin);
         let payment_token = token_contract.address();
         let creator = Address::generate(env);
-        (
-            creator,
-            String::from_str(env, "Test Raffle"),
-            0u64,
-            10u32,
-            false,
-            10i128,
+        let mut prizes = Vec::new(env);
+        prizes.push_back(10000u32);
+        let config = instance::RaffleConfig {
+            description: String::from_str(env, "Test Raffle"),
+            end_time: 0u64,
+            max_tickets: 10u32,
+            allow_multiple: false,
+            ticket_price: 10i128,
             payment_token,
-            100i128,
-        )
+            prize_amount: 100i128,
+            prizes,
+            randomness_source: instance::RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0u32,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+        };
+        (creator, config)
     }
 
     // =========================================================================
@@ -769,21 +778,8 @@ mod tests {
 
         client.pause();
 
-        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
-            make_raffle_args(&env);
-
-        let result = client.try_create_raffle(
-            &creator,
-            &desc,
-            &end_time,
-            &max_tickets,
-            &allow_multiple,
-            &ticket_price,
-            &payment_token,
-            &prize_amount,
-            &instance::RandomnessSource::Internal,
-            &None,
-        );
+        let (creator, config) = make_raffle_args(&env);
+        let result = client.try_create_raffle(&creator, &config);
 
         assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
     }
@@ -800,21 +796,8 @@ mod tests {
 
         assert!(!client.is_paused());
 
-        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
-            make_raffle_args(&env);
-
-        let result = client.try_create_raffle(
-            &creator,
-            &desc,
-            &end_time,
-            &max_tickets,
-            &allow_multiple,
-            &ticket_price,
-            &payment_token,
-            &prize_amount,
-            &instance::RandomnessSource::Internal,
-            &None,
-        );
+        let (creator, config) = make_raffle_args(&env);
+        let result = client.try_create_raffle(&creator, &config);
 
         assert!(result.is_ok());
     }
@@ -914,6 +897,8 @@ mod tests {
         let instance_id = env.register(instance::Contract, ());
         let instance_client = instance::ContractClient::new(env, &instance_id);
 
+        let mut prizes = Vec::new(env);
+        prizes.push_back(10000u32);
         let config = instance::RaffleConfig {
             description: String::from_str(env, "Delegation Test Raffle"),
             end_time: 0u64,
@@ -922,6 +907,7 @@ mod tests {
             ticket_price: 10i128,
             payment_token,
             prize_amount: 100i128,
+            prizes,
             randomness_source: instance::RandomnessSource::Internal,
             oracle_address: None,
             protocol_fee_bp: 0u32,
