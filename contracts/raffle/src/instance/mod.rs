@@ -219,14 +219,22 @@ fn require_not_paused(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
+fn get_ticket_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::NextTicketId)
+        .unwrap_or(0u32)
 fn read_tickets(env: &Env) -> Vec<Ticket> {
     env.storage()
         .persistent()
         .set(&DataKey::TicketOwner(ticket_number), owner);
 }
 
-fn write_tickets(env: &Env, tickets: &Vec<Ticket>) {
-    env.storage().instance().set(&DataKey::Tickets, tickets);
+fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
+        .map(|t| t.owner)
 }
 
 fn read_ticket_count(env: &Env, buyer: &Address) -> u32 {
@@ -326,13 +334,6 @@ fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(
 
     ticket.owner = to.clone();
     write_ticket(env, &ticket);
-
-    let mut all_tickets = read_tickets(env);
-    let index = ticket.ticket_number.saturating_sub(1) as u32;
-    let mut old_ticket = all_tickets.get(index).unwrap();
-    old_ticket.owner = to.clone();
-    all_tickets.set(index, old_ticket);
-    write_tickets(env, &all_tickets);
 
     env.storage().persistent().remove(&DataKey::Approved(token_id));
 
@@ -508,10 +509,6 @@ impl Contract {
         };
         write_ticket(&env, &ticket);
 
-        let mut tickets = read_tickets(&env);
-        tickets.push_back(ticket);
-        write_tickets(&env, &tickets);
-
         raffle.tickets_sold += 1;
 
         if raffle.tickets_sold >= raffle.max_tickets {
@@ -638,7 +635,8 @@ impl Contract {
             return Ok(());
         }
 
-        let tickets = read_tickets(&env);
+        // Optimize: Use NextTicketId as count instead of loading all tickets into Vec
+        let total_tickets = get_ticket_count(&env);
         let mut winners = Vec::new(&env);
         let mut winning_ticket_ids = Vec::new(&env);
         let mut current_seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
@@ -819,10 +817,9 @@ impl Contract {
             return Err(Error::NoRandomnessRequest);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
-        let tickets_sold = raffle.tickets_sold;
-        if tickets_sold == 0 {
+        // Optimize: Use NextTicketId as count instead of loading all tickets into Vec
+        let total_tickets = get_ticket_count(&env);
+        if total_tickets == 0 {
             return Err(Error::NoTicketsSold);
         }
 
@@ -839,11 +836,11 @@ impl Contract {
         let mut current_seed = random_seed;
 
         for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner_ticket = tickets
-                .get(winner_index)
-                .expect("Ticket out of bounds callback");
-            winners.push_back(winner_ticket.owner);
+            let winner_index = (current_seed % total_tickets as u64) as u32;
+            // Load only the winning ticket, not all tickets
+            let ticket_id = winner_index + 1; // ticket IDs start at 1
+            let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
+            winners.push_back(winner);
             winning_ticket_ids.push_back(winner_index);
             current_seed = current_seed.wrapping_add(1);
         }
@@ -1402,9 +1399,9 @@ impl Contract {
 
     /// Get all tickets or a paginated subset
     /// Returns tickets from start index for count number of tickets
+    /// Optimized: Load individual tickets from persistent storage instead of Vec
     pub fn get_tickets(env: Env, start: u32, count: u32) -> Vec<Ticket> {
-        let all_tickets = read_tickets(&env);
-        let total = all_tickets.len();
+        let total = get_ticket_count(&env);
         
         if start >= total {
             return Vec::new(&env);
@@ -1414,7 +1411,13 @@ impl Contract {
         let mut result = Vec::new(&env);
         
         for i in start..end {
-            result.push_back(all_tickets.get(i).unwrap());
+            let ticket_id = i + 1; // ticket IDs start at 1
+            if let Some(ticket) = env.storage()
+                .persistent()
+                .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
+            {
+                result.push_back(ticket);
+            }
         }
         
         result
@@ -1422,7 +1425,7 @@ impl Contract {
 
     /// Get total ticket count
     pub fn get_ticket_count(env: Env) -> u32 {
-        read_tickets(&env).len()
+        get_ticket_count(&env)
     }
 
     pub fn pause(env: Env) -> Result<(), Error> {
