@@ -1,7 +1,7 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, IntoVal, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, IntoVal, String, Symbol, Vec,
 };
 
 use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
@@ -15,15 +15,9 @@ use crate::events::{
 /// Number of ledgers after a randomness request before the fallback can be triggered.
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
 
-
-// Define a trait for Soroswap Router
-#[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
-pub trait SoroswapRouter {
-
 // --- External Contract Traits ---
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
 pub trait SoroswapRouterTrait {
-
     fn swap_exact_tokens_for_tokens(
         env: Env,
         amount_in: i128,
@@ -139,6 +133,17 @@ where
     );
 }
 
+fn verify_randomness_proof_internal(
+    env: &Env,
+    public_key: &BytesN<32>,
+    seed: u64,
+    proof: &BytesN<64>,
+) {
+    let message: Bytes = seed.to_xdr(env);
+    // ed25519_verify traps on invalid signature, rejecting the randomness submit.
+    env.crypto().ed25519_verify(public_key, &message, proof);
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -149,14 +154,15 @@ pub enum DataKey {
     Factory,
     RefundStatus(u32), // ticket_id -> bool
     ReentrancyGuard,
-    Approved(u32), // ticket_id -> Address
+    Approved(u32),                    // ticket_id -> Address
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
-    RandomnessSeed, // Stored after draw for fairness proof
-    RandomnessRequested,    // bool  - true when oracle request is pending
+    RandomnessSeed,          // Stored after draw for fairness proof
+    RandomnessRequested,     // bool  - true when oracle request is pending
     RandomnessRequestLedger, // u32  - ledger sequence when the request was made
-    TicketOwner(u32), // ticket_number -> Address
+    TicketOwner(u32),        // ticket_number -> Address
+    FinishTime,
     PendingAdmin,
 }
 
@@ -175,28 +181,28 @@ pub enum Error {
     RandomnessAlreadyRequested = 7,
     NoRandomnessRequest = 8,
     FallbackTooEarly = 9,
-    
+
     // Prize/Claim errors (11-20)
     PrizeNotDeposited = 11,
     PrizeAlreadyClaimed = 12,
     PrizeAlreadyDeposited = 13,
     NotWinner = 14,
     ClaimTooEarly = 15,
-    
+
     // State/Validation errors (21-30)
     InvalidParameters = 21,
     InvalidStatus = 22,
     ContractPaused = 23,
     InvalidStateTransition = 24,
     RaffleExpired = 25,
-    
+
     // Ticket errors (31-40)
     InsufficientTickets = 31,
     MultipleTicketsNotAllowed = 32,
     NoTicketsSold = 33,
     TicketNotFound = 34,
     RaffleEnded = 35,
-    
+
     // System errors (41-50)
     ArithmeticOverflow = 41,
     AlreadyInitialized = 42,
@@ -233,10 +239,21 @@ fn get_ticket_count(env: &Env) -> u32 {
         .instance()
         .get(&DataKey::NextTicketId)
         .unwrap_or(0u32)
+}
+
 fn read_tickets(env: &Env) -> Vec<Ticket> {
-    env.storage()
-        .persistent()
-        .set(&DataKey::TicketOwner(ticket_number), owner);
+    let mut tickets = Vec::new(env);
+    let count = get_ticket_count(env);
+    for ticket_id in 1..=count {
+        if let Some(ticket) = env
+            .storage()
+            .persistent()
+            .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
+        {
+            tickets.push_back(ticket);
+        }
+    }
+    tickets
 }
 
 fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
@@ -304,20 +321,6 @@ fn require_creator(env: &Env) -> Result<Address, Error> {
     let raffle = read_raffle(env)?;
     raffle.creator.require_auth();
     Ok(raffle.creator)
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-
-    if env
-        .storage()
-        .instance()
-        .get(&DataKey::Paused)
-        .unwrap_or(false)
-    {
-
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
 }
 
 fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
@@ -344,7 +347,9 @@ fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(
     ticket.owner = to.clone();
     write_ticket(env, &ticket);
 
-    env.storage().persistent().remove(&DataKey::Approved(token_id));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Approved(token_id));
 
     Ok(())
 }
@@ -527,7 +532,11 @@ impl Contract {
         // Interaction: external token transfer — buyer pays for the ticket.
         // Use try_transfer so a broken token surfaces as a typed error.
         // Update global volume in factory
-        if let Some(factory_address) = env.storage().instance().get::<_, Address>(&DataKey::Factory) {
+        if let Some(factory_address) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Factory)
+        {
             env.invoke_contract::<()>(
                 &factory_address,
                 &Symbol::new(&env, "record_volume"),
@@ -649,7 +658,11 @@ impl Contract {
             winning_ticket_ids.push_back(winner_index);
 
             env.events().publish(
-                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), winner_index),
+                (
+                    Symbol::new(&env, "WinnerDrawn"),
+                    winner.clone(),
+                    winner_index,
+                ),
                 WinnerDrawn {
                     winner: winner.clone(),
                     ticket_id: winner_index,
@@ -675,7 +688,9 @@ impl Contract {
             draw_timestamp: env.ledger().timestamp(),
             draw_sequence: env.ledger().sequence(),
         };
-        env.storage().instance().set(&DataKey::RandomnessSeed, &fairness_metadata);
+        env.storage()
+            .instance()
+            .set(&DataKey::RandomnessSeed, &fairness_metadata);
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winners = winners.clone();
@@ -684,7 +699,9 @@ impl Contract {
         write_raffle(&env, &raffle);
 
         if !env.storage().persistent().has(&DataKey::FinishTime) {
-            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+            env.storage()
+                .persistent()
+                .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
         publish_event(
@@ -723,7 +740,6 @@ impl Contract {
     /// `randomness_requested` event for off-chain listeners.
     pub fn request_winner_selection(env: Env) -> Result<(), Error> {
         require_creator(&env)?;
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {(env: Env, random_seed: u64) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
         if raffle.randomness_source != RandomnessSource::External {
@@ -804,12 +820,18 @@ impl Contract {
     }
 
     /// Oracle callback — finalises the raffle using the provided random seed.
+    /// The seed must be accompanied by an Ed25519 proof and public key.
     ///
     /// Only the oracle address that was configured at raffle creation may call
     /// this function.  The contract also requires that a randomness request was
     /// previously recorded (via `request_winner_selection` or `finalize_raffle`)
     /// so that an oracle cannot call this function unsolicited.
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    pub fn provide_randomness(
+        env: Env,
+        random_seed: u64,
+        public_key: BytesN<32>,
+        proof: BytesN<64>,
+    ) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
         // Verify the caller is the authorised oracle
@@ -839,6 +861,8 @@ impl Contract {
             return Err(Error::NoRandomnessRequest);
         }
 
+        verify_randomness_proof_internal(&env, &public_key, random_seed, &proof);
+
         // Optimize: Use NextTicketId as count instead of loading all tickets into Vec
         let total_tickets = get_ticket_count(&env);
         if total_tickets == 0 {
@@ -866,7 +890,11 @@ impl Contract {
             winning_ticket_ids.push_back(winner_index);
 
             env.events().publish(
-                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), winner_index),
+                (
+                    Symbol::new(&env, "WinnerDrawn"),
+                    winner.clone(),
+                    winner_index,
+                ),
                 WinnerDrawn {
                     winner: winner.clone(),
                     ticket_id: winner_index,
@@ -891,7 +919,9 @@ impl Contract {
             draw_timestamp: env.ledger().timestamp(),
             draw_sequence: env.ledger().sequence(),
         };
-        env.storage().instance().set(&DataKey::RandomnessSeed, &fairness_metadata);
+        env.storage()
+            .instance()
+            .set(&DataKey::RandomnessSeed, &fairness_metadata);
 
         raffle.status = RaffleStatus::Finalized;
         raffle.winners = winners.clone();
@@ -900,7 +930,9 @@ impl Contract {
         write_raffle(&env, &raffle);
 
         if !env.storage().persistent().has(&DataKey::FinishTime) {
-            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+            env.storage()
+                .persistent()
+                .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
         publish_event(
@@ -937,6 +969,16 @@ impl Contract {
         );
 
         Ok(winners.get(0).unwrap())
+    }
+
+    pub fn verify_randomness_proof(
+        env: Env,
+        public_key: BytesN<32>,
+        seed: u64,
+        proof: BytesN<64>,
+    ) -> bool {
+        verify_randomness_proof_internal(&env, &public_key, seed, &proof);
+        true
     }
 
     /// Trigger PRNG-based winner selection as a fallback when the oracle has not
@@ -1022,7 +1064,11 @@ impl Contract {
             winning_ticket_ids.push_back(winner_index);
 
             env.events().publish(
-                (Symbol::new(&env, "WinnerDrawn"), winner_ticket.owner.clone(), winner_index),
+                (
+                    Symbol::new(&env, "WinnerDrawn"),
+                    winner_ticket.owner.clone(),
+                    winner_index,
+                ),
                 WinnerDrawn {
                     winner: winner_ticket.owner.clone(),
                     ticket_id: winner_index,
@@ -1065,6 +1111,7 @@ impl Contract {
                 winning_ticket_ids,
                 total_tickets_sold: raffle.tickets_sold,
                 randomness_source: RandomnessSource::Internal,
+                randomness_type: RandomnessType::Fallback,
                 finalized_at: env.ledger().timestamp(),
             },
         );
@@ -1140,7 +1187,9 @@ impl Contract {
         write_raffle(&env, &raffle);
 
         if !env.storage().persistent().has(&DataKey::FinishTime) {
-            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+            env.storage()
+                .persistent()
+                .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
         // Interactions: external token transfers
@@ -1260,8 +1309,12 @@ impl Contract {
 
         // Admin or Creator can cancel
         match reason {
-            CancelReason::CreatorCancelled => { require_creator(&env)?; }
-            CancelReason::AdminCancelled => { require_admin(&env)?; }
+            CancelReason::CreatorCancelled => {
+                require_creator(&env)?;
+            }
+            CancelReason::AdminCancelled => {
+                require_admin(&env)?;
+            }
             CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
                 let factory: Address = env
                     .storage()
@@ -1291,7 +1344,9 @@ impl Contract {
         // Interaction: external token transfer — use try_transfer so a
         // malicious or broken token cannot permanently block cancellation.
         if !env.storage().persistent().has(&DataKey::FinishTime) {
-            env.storage().persistent().set(&DataKey::FinishTime, &env.ledger().timestamp());
+            env.storage()
+                .persistent()
+                .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
         // Interaction: external token transfer
@@ -1406,7 +1461,10 @@ impl Contract {
     }
 
     pub fn owner_of(env: Env, token_id: u32) -> Result<Address, Error> {
-        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(token_id));
+        let ticket_opt = env
+            .storage()
+            .persistent()
+            .get::<_, Ticket>(&DataKey::Ticket(token_id));
         if let Some(ticket) = ticket_opt {
             Ok(ticket.owner)
         } else {
@@ -1414,27 +1472,50 @@ impl Contract {
         }
     }
 
-    pub fn approve(env: Env, caller: Address, operator: Option<Address>, token_id: u32) -> Result<(), Error> {
+    pub fn approve(
+        env: Env,
+        caller: Address,
+        operator: Option<Address>,
+        token_id: u32,
+    ) -> Result<(), Error> {
         caller.require_auth();
-        let ticket_opt = env.storage().persistent().get::<_, Ticket>(&DataKey::Ticket(token_id));
+        let ticket_opt = env
+            .storage()
+            .persistent()
+            .get::<_, Ticket>(&DataKey::Ticket(token_id));
         let owner = ticket_opt.ok_or(Error::InvalidParameters)?.owner;
-        
-        let is_approved_for_all = env.storage().persistent().get::<_, bool>(&DataKey::ApprovedForAll(owner.clone(), caller.clone())).unwrap_or(false);
+
+        let is_approved_for_all = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ApprovedForAll(owner.clone(), caller.clone()))
+            .unwrap_or(false);
         if caller != owner && !is_approved_for_all {
             return Err(Error::NotAuthorized);
         }
 
         if let Some(op) = operator {
-            env.storage().persistent().set(&DataKey::Approved(token_id), &op);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Approved(token_id), &op);
         } else {
-            env.storage().persistent().remove(&DataKey::Approved(token_id));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Approved(token_id));
         }
         Ok(())
     }
 
-    pub fn set_approval_for_all(env: Env, caller: Address, operator: Address, approved: bool) -> Result<(), Error> {
+    pub fn set_approval_for_all(
+        env: Env,
+        caller: Address,
+        operator: Address,
+        approved: bool,
+    ) -> Result<(), Error> {
         caller.require_auth();
-        env.storage().persistent().set(&DataKey::ApprovedForAll(caller, operator), &approved);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedForAll(caller, operator), &approved);
         Ok(())
     }
 
@@ -1443,7 +1524,10 @@ impl Contract {
     }
 
     pub fn is_approved_for_all(env: Env, owner: Address, operator: Address) -> bool {
-        env.storage().persistent().get(&DataKey::ApprovedForAll(owner, operator)).unwrap_or(false)
+        env.storage()
+            .persistent()
+            .get(&DataKey::ApprovedForAll(owner, operator))
+            .unwrap_or(false)
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
@@ -1451,11 +1535,24 @@ impl Contract {
         do_transfer(&env, from, to, token_id)
     }
 
-    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+    pub fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        token_id: u32,
+    ) -> Result<(), Error> {
         spender.require_auth();
-        let is_approved_for_all = env.storage().persistent().get::<_, bool>(&DataKey::ApprovedForAll(from.clone(), spender.clone())).unwrap_or(false);
-        let individual_approval = env.storage().persistent().get::<_, Address>(&DataKey::Approved(token_id));
-        
+        let is_approved_for_all = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ApprovedForAll(from.clone(), spender.clone()))
+            .unwrap_or(false);
+        let individual_approval = env
+            .storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::Approved(token_id));
+
         if spender != from && !is_approved_for_all && individual_approval != Some(spender.clone()) {
             return Err(Error::NotAuthorized);
         }
@@ -1471,24 +1568,29 @@ impl Contract {
     /// Optimized: Load individual tickets from persistent storage instead of Vec
     pub fn get_tickets(env: Env, start: u32, count: u32) -> Vec<Ticket> {
         let total = get_ticket_count(&env);
-        
+
         if start >= total {
             return Vec::new(&env);
         }
-        
-        let end = if start + count > total { total } else { start + count };
+
+        let end = if start + count > total {
+            total
+        } else {
+            start + count
+        };
         let mut result = Vec::new(&env);
-        
+
         for i in start..end {
             let ticket_id = i + 1; // ticket IDs start at 1
-            if let Some(ticket) = env.storage()
+            if let Some(ticket) = env
+                .storage()
                 .persistent()
                 .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
             {
                 result.push_back(ticket);
             }
         }
-        
+
         result
     }
 
@@ -1501,7 +1603,7 @@ impl Contract {
     /// Returns all data used to select the winner for transparency
     pub fn get_fairness_proof(env: Env) -> Result<FairnessData, Error> {
         let raffle = read_raffle(&env)?;
-        
+
         if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
             return Err(Error::InvalidStateTransition);
         }
@@ -1611,15 +1713,16 @@ impl Contract {
             env.storage().persistent().remove(&DataKey::RefundStatus(n));
         }
         // Remove per-buyer ticket counts
-        for buyer in tickets_list.iter() {
-            env.storage().persistent().remove(&DataKey::TicketCount(buyer));
+        for ticket in tickets_list.iter() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::TicketCount(ticket.owner.clone()));
         }
         // Remove FinishTime
         env.storage().persistent().remove(&DataKey::FinishTime);
 
         // Remove instance storage entries (Factory and Admin removed last)
         env.storage().instance().remove(&DataKey::Raffle);
-        env.storage().instance().remove(&DataKey::Tickets);
         env.storage().instance().remove(&DataKey::NextTicketId);
         env.storage().instance().remove(&DataKey::Paused);
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {
