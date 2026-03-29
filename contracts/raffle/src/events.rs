@@ -244,9 +244,23 @@ pub struct AdminTransferAccepted {
     pub timestamp: u64,
 }
 
-// ============================================================================
-// CLEANUP EVENT
-// ============================================================================
+/// Emitted when a participant commits a hash during commit-reveal randomness
+#[derive(Clone)]
+#[contracttype]
+pub struct SeedCommitted {
+    pub participant: Address,
+    pub hash: soroban_sdk::BytesN<32>,
+    pub timestamp: u64,
+}
+
+/// Emitted when a participant reveals their secret during commit-reveal randomness
+#[derive(Clone)]
+#[contracttype]
+pub struct SeedRevealed {
+    pub participant: Address,
+    pub timestamp: u64,
+}
+
 
 /// Emitted when an old raffle's storage is wiped by the factory admin
 #[derive(Clone)]
