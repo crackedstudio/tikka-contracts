@@ -293,7 +293,7 @@ pub struct AdminOpCancelled {
 /// Emitted when raffle status changes
 #[derive(Clone)]
 #[contracttype]
-pub struct StatusChanged {
+pub struct RaffleStatusChanged {
     pub old_status: RaffleStatus,
     pub new_status: RaffleStatus,
     pub timestamp: u64,
