@@ -7,25 +7,27 @@ use soroban_sdk::{
 use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
-    DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, StatusChanged,
-    TicketPurchased, WinnerDrawn,
+    DrawTriggered,
+    PrizeClaimed,
+    PrizeDeposited,
+    RaffleCancelled,
+    RaffleCreated,
+    RaffleFinalized,
+    RandomnessFallbackTriggered,
+    RandomnessReceived,
+    RandomnessRequested,
+    RandomnessType,
+    StatusChanged,
+    TicketPurchased,
+    WinnerDrawn,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
-    RandomnessReceived, RandomnessRequested, RandomnessType, StatusChanged, TicketPurchased,
-};
-
 
 // Define a trait for Soroswap Router
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
 pub trait SoroswapRouter {
-
-// --- External Contract Traits ---
-#[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
-pub trait SoroswapRouterTrait {
-
     fn swap_exact_tokens_for_tokens(
         env: Env,
         amount_in: i128,
@@ -239,10 +241,6 @@ fn get_ticket_count(env: &Env) -> u32 {
         .instance()
         .get(&DataKey::NextTicketId)
         .unwrap_or(0u32)
-fn read_tickets(env: &Env) -> Vec<Ticket> {
-    env.storage()
-        .persistent()
-        .set(&DataKey::TicketOwner(ticket_number), owner);
 }
 
 fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
@@ -310,17 +308,15 @@ fn require_creator(env: &Env) -> Result<Address, Error> {
     let raffle = read_raffle(env)?;
     raffle.creator.require_auth();
     Ok(raffle.creator)
-fn require_not_paused(env: &Env) -> Result<(), Error> {
+}
 
+fn require_not_paused(env: &Env) -> Result<(), Error> {
     if env
         .storage()
         .instance()
         .get(&DataKey::Paused)
         .unwrap_or(false)
     {
-
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-
         return Err(Error::ContractPaused);
     }
     Ok(())
@@ -742,7 +738,87 @@ impl Contract {
     /// `randomness_requested` event for off-chain listeners.
     pub fn request_winner_selection(env: Env) -> Result<(), Error> {
         require_creator(&env)?;
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {(env: Env, random_seed: u64) -> Result<Address, Error> {
+
+        let mut raffle = read_raffle(&env)?;
+        
+        if raffle.status == RaffleStatus::Active {
+            let now = env.ledger().timestamp();
+            let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
+            let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
+            if !time_ended && !tickets_full {
+                return Err(Error::InvalidStateTransition);
+            }
+
+            raffle.status = RaffleStatus::Drawing;
+            publish_event(
+                &env,
+                "status_changed",
+                StatusChanged {
+                    old_status: RaffleStatus::Active,
+                    new_status: RaffleStatus::Drawing,
+                    timestamp: now,
+                },
+            );
+        } else if raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        if raffle.tickets_sold == 0 {
+            return Err(Error::NoTicketsSold);
+        }
+
+        let oracle = raffle
+            .oracle_address
+            .as_ref()
+            .ok_or(Error::OracleNotSet)?
+            .clone();
+
+        let already: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RandomnessRequested)
+            .unwrap_or(false);
+        if already {
+            return Err(Error::RandomnessAlreadyRequested);
+        }
+
+        write_raffle(&env, &raffle);
+        env.storage()
+            .instance()
+            .set(&DataKey::RandomnessRequested, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+
+        publish_event(
+            &env,
+            "draw_triggered",
+            DrawTriggered {
+                triggered_by: raffle.creator.clone(),
+                total_tickets_sold: raffle.tickets_sold,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        publish_event(
+            &env,
+            "randomness_requested",
+            RandomnessRequested {
+                oracle,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Oracle callback — finalises the raffle using the provided random seed.
+    ///
+    /// Only the oracle address that was configured at raffle creation may call
+    /// this function.  The contract also requires that a randomness request was
+    /// previously recorded (via `request_winner_selection` or `finalize_raffle`)
+    /// so that an oracle cannot call this function unsolicited.
+    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
         if raffle.randomness_source != RandomnessSource::External {

@@ -121,13 +121,15 @@ fn test_protocol_fees() {
     let env = Env::default();
     env.mock_all_auths();
     let treasury = Address::generate(&env);
+
+    // Use fee of 10% (1000 bp) on a ticket price of 10 => 1 unit per ticket
     let (client, _creator, _buyer, admin_client, _, _) = setup_raffle_env(
         &env,
         RandomnessSource::Internal,
         None,
-        500,
+        1000,
         Some(treasury.clone()),
-    ); // 5% fee
+    );
     let token_client = token::Client::new(&env, &admin_client.address);
 
     client.deposit_prize();
@@ -142,9 +144,124 @@ fn test_protocol_fees() {
     env.ledger().with_mut(|l| l.timestamp += 3600);
     client.claim_prize(&winner, &0);
 
-    // Prize: 100, Fee: 5% = 5, Winner: 95
-    assert_eq!(token_client.balance(&winner), 95i128);
+    // Prize flow unchanged by protocol fee on purchase.
+    assert_eq!(token_client.balance(&winner), 100i128);
     assert_eq!(token_client.balance(&treasury), 5i128);
+}
+
+#[test]
+fn test_calculate_protocol_fee_2_5_percent() {
+    let (fee, net) = calculate_protocol_fee(1000, 250).expect("fee calc");
+    assert_eq!(fee, 25);
+    assert_eq!(net, 975);
+}
+
+#[test]
+fn test_calculate_protocol_fee_small_amounts() {
+    let (fee, net) = calculate_protocol_fee(1, 250).expect("fee calc");
+    assert_eq!(fee, 0);
+    assert_eq!(net, 1);
+
+    let (fee, net) = calculate_protocol_fee(3, 250).expect("fee calc");
+    assert_eq!(fee, 0);
+    assert_eq!(net, 3);
+}
+
+#[test]
+fn test_calculate_protocol_fee_zero_and_max_bps() {
+    let (fee, net) = calculate_protocol_fee(1000, 0).expect("fee calc");
+    assert_eq!(fee, 0);
+    assert_eq!(net, 1000);
+
+    let (fee, net) = calculate_protocol_fee(1000, 10000).expect("fee calc");
+    assert_eq!(fee, 1000);
+    assert_eq!(net, 0);
+}
+
+#[test]
+fn test_unauthorized_set_fee_bps_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let (client, _, _, _, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        0,
+        Some(treasury.clone()),
+    );
+
+    let stranger = Address::generate(&env);
+    let result = env.as_contract(&stranger, || client.try_set_fee_bps(&250));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_protocol_fee_calculation_basic() {
+    let (fee, net) = calculate_protocol_fee(1000, 250).unwrap();
+    assert_eq!(fee, 25);
+    assert_eq!(net, 975);
+}
+
+#[test]
+fn test_protocol_fee_small_amount_rounding() {
+    let (fee, net) = calculate_protocol_fee(1, 250).unwrap();
+    assert_eq!(fee, 0);
+    assert_eq!(net, 1);
+}
+
+#[test]
+fn test_protocol_fee_max() {
+    let (fee, net) = calculate_protocol_fee(1000, 10000).unwrap();
+    assert_eq!(fee, 1000);
+    assert_eq!(net, 0);
+}
+
+#[test]
+#[should_panic] // Error(Contract, #5) - NotAuthorized
+fn test_set_fee_bps_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, buyer, _, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        0,
+        None,
+    );
+    env.as_contract(&buyer, || {
+        client.set_fee_bps(&500);
+    });
+}
+
+#[test]
+fn test_set_fee_bps_and_treasury_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let (client, _, _, _, _, factory_admin) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        0,
+        None,
+    );
+
+    // Set treasury first, then fee.
+    env.as_contract(&factory_admin, || {
+        client.set_treasury_address(&treasury);
+        client.set_fee_bps(&250);
+    });
+
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    let buyer = Address::generate(&env);
+    admin_client.mint(&buyer, &100i128);
+    client.buy_ticket(&buyer);
+
+    // 250 bps on ticket_price 10 => 0.25 rounds down to 0, but should not panic.
+    assert_eq!(token_client.balance(&treasury), 0i128);
 }
 
 #[test]
@@ -802,7 +919,7 @@ fn test_claim_with_protocol_fee_guard_released() {
         &env,
         RandomnessSource::Internal,
         None,
-        500,
+        1000,
         Some(treasury.clone()),
     );
     let token_client = token::Client::new(&env, &admin_client.address);
@@ -818,14 +935,14 @@ fn test_claim_with_protocol_fee_guard_released() {
     let winner = client.get_raffle().winners.get(0).unwrap();
     env.ledger().with_mut(|l| l.timestamp += 3600);
     let claimed = client.claim_prize(&winner, &0);
-    assert_eq!(claimed, 95i128);
+    assert_eq!(claimed, 100i128);
 
-    // Guard released even when fee transfer path is taken
+    // Guard released after prize claim.
     env.as_contract(&client.address, || {
         assert!(!env.storage().instance().has(&DataKey::ReentrancyGuard));
     });
 
-    assert_eq!(token_client.balance(&winner), 95i128);
+    assert_eq!(token_client.balance(&winner), 100i128);
     assert_eq!(token_client.balance(&treasury), 5i128);
 }
 
@@ -1628,6 +1745,8 @@ fn test_fallback_winner_can_claim_prize() {
     client.claim_prize(&winner, &0);
 
     assert_eq!(token_client.balance(&winner), 100i128);
+}
+
 // ============================================================================
 // AUTOMATED STATE CLEANUP TESTS
 // ============================================================================
@@ -1969,6 +2088,8 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
     let result = factory_client.get_raffles(&page(10, 0));
     assert_eq!(result.total, 1u32);
     assert_eq!(result.items.get(0).unwrap(), instance_b);
+}
+
 // --- 9. GOVERNANCE TESTS ---
 
 #[test]
