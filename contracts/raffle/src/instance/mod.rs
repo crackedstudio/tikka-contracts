@@ -490,41 +490,59 @@ impl Contract {
         Ok(())
     }
 
-    pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
+    pub fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32, Error> {
         require_not_paused(&env)?;
         buyer.require_auth();
+
+        if quantity == 0 {
+            return Err(Error::InvalidParameters);
+        }
+
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Open {
+        // --- 1. CHECKS ---
+        if raffle.status != RaffleStatus::Active {
             return Err(Error::RaffleInactive);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
             return Err(Error::RaffleExpired);
         }
-        if raffle.tickets_sold >= raffle.max_tickets {
+        
+        // Check total availability for the whole batch
+        if raffle.tickets_sold + quantity > raffle.max_tickets {
             return Err(Error::TicketsSoldOut);
         }
 
         let current_count = read_ticket_count(&env, &buyer);
-        if !raffle.allow_multiple && current_count > 0 {
+        // Respect allow_multiple: Block if they own tickets OR trying to buy > 1 in this batch
+        if !raffle.allow_multiple && (current_count > 0 || quantity > 1) {
             return Err(Error::MultipleTicketsNotAllowed);
         }
 
-        // Effects: update ALL state BEFORE external call (CEI pattern)
-        let ticket_id = next_ticket_id(&env);
+        // --- 2. EFFECTS ---
+        let mut ticket_ids = Vec::new(&env);
         let timestamp = env.ledger().timestamp();
+        let total_price = raffle.ticket_price
+            .checked_mul(quantity as i128)
+            .ok_or(Error::InvalidParameters)?;
 
-        let ticket = Ticket {
-            id: ticket_id,
-            owner: buyer.clone(),
-            purchase_time: timestamp,
-            ticket_number: raffle.tickets_sold + 1,
-        };
-        write_ticket(&env, &ticket);
+        for _ in 0..quantity {
+            let ticket_id = next_ticket_id(&env);
+            raffle.tickets_sold += 1;
 
-        raffle.tickets_sold += 1;
+            let ticket = Ticket {
+                id: ticket_id,
+                owner: buyer.clone(),
+                purchase_time: timestamp,
+                ticket_number: raffle.tickets_sold,
+            };
+            write_ticket(&env, &ticket);
+            ticket_ids.push_back(ticket_id);
+        }
 
+        // Auto-transition to Drawing if sold out
         if raffle.tickets_sold >= raffle.max_tickets {
+            let old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Drawing;
             publish_event(
                 &env,
@@ -532,12 +550,12 @@ impl Contract {
                 RaffleStatusChanged {
                     old_status: RaffleStatus::Open,
                     new_status: RaffleStatus::Drawing,
-                    timestamp: env.ledger().timestamp(),
+                    timestamp,
                 },
             );
         }
 
-        write_ticket_count(&env, &buyer, current_count + 1);
+        write_ticket_count(&env, &buyer, current_count + quantity);
         write_raffle(&env, &raffle);
 
         // Interaction: external token transfer — buyer pays for the ticket.
@@ -551,27 +569,25 @@ impl Contract {
             env.invoke_contract::<()>(
                 &factory_address,
                 &Symbol::new(&env, "record_volume"),
-                (raffle.payment_token.clone(), raffle.ticket_price).into_val(&env),
+                (raffle.payment_token.clone(), total_price).into_val(&env),
             );
         }
 
-        // Interaction: external token transfer
+        // Single atomic transfer for the entire batch
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
         token_client
-            .try_transfer(&buyer, &contract_address, &raffle.ticket_price)
+            .try_transfer(&buyer, &contract_address, &total_price)
             .map_err(|_| Error::TokenTransferFailed)?;
 
-        let mut ticket_ids = Vec::new(&env);
-        ticket_ids.push_back(ticket_id);
-
+        // Single event containing the range of IDs
         env.events().publish(
             (Symbol::new(&env, "TicketPurchased"), buyer.clone()),
             TicketPurchased {
                 buyer,
                 ticket_ids,
-                quantity: 1u32,
-                total_paid: raffle.ticket_price,
+                quantity,
+                total_paid: total_price,
                 timestamp,
             },
         );

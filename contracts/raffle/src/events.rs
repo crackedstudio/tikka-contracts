@@ -257,7 +257,6 @@ pub struct RaffleCleanedUp {
     pub finish_time: u64,
     pub cleaned_at: u64,
 }
-
 // TIME-LOCKED ADMIN OPERATION EVENTS
 // ============================================================================
 

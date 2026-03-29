@@ -76,6 +76,14 @@ pub struct ProtocolStats {
     pub total_raffles_created: u32,
     pub protocol_fee_bp: u32,
     pub paused: bool,
+
+    UniqueParticipant:(Address),
+    TotalUniqueParticipants: u32,
+    MinCreationDelay, // Global config (u64 seconds)
+    LastCreationTime(Address), // Per-user tracking
+    WhitelistedPartner(Address), // For admin bypass
+    CreatorVerification(Address),
+
     pub total_unique_participants: u32,
 }
 
