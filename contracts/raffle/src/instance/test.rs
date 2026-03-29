@@ -4,7 +4,7 @@ use super::*;
 use crate::{ContractError, RaffleFactory, RaffleFactoryClient};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Bytes, Env, IntoVal, String, Symbol,
+    token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
 };
 
 /// HELPER: Standardized environment setup
@@ -62,6 +62,7 @@ fn setup_raffle_env(
         treasury_address: treasury,
         swap_router: None,
         tikka_token: None,
+        metadata_hash: BytesN::from_array(env, &[1u8; 32]),
     };
 
     client.init(&factory, &factory_admin, &creator, &config);

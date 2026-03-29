@@ -1,6 +1,7 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes,
+    BytesN, Env, String, Symbol, Vec,
 };
 
 use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
@@ -9,6 +10,8 @@ use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
     RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
 };
+
+use crate::oracle::{RandomnessOracleClient, RandomnessRequest};
 
 // --- External Contract Traits ---
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
@@ -77,6 +80,10 @@ pub struct Raffle {
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
     pub finalized_at: Option<u64>,
+    /// SHA-256 hash of the off-chain metadata JSON (description, image, rules)
+    /// stored on IPFS. Committed at creation and immutable thereafter, ensuring
+    /// organizers cannot alter raffle terms after tickets are sold.
+    pub metadata_hash: BytesN<32>,
 }
 
 #[derive(Clone)]
@@ -96,6 +103,9 @@ pub struct RaffleConfig {
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
+    /// SHA-256 hash of the off-chain metadata JSON. Must be non-zero (all-zero
+    /// bytes are rejected as an unset sentinel value).
+    pub metadata_hash: BytesN<32>,
 }
 
 #[derive(Clone)]
@@ -133,6 +143,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    PendingRequestId, // u64 — stored when an External randomness request is in-flight
 }
 
 // --- Error Types ---
@@ -257,6 +268,129 @@ fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
+/// Builds a 32-byte PRNG seed from four independent sources:
+///   - `timestamp`  : ledger timestamp (8 bytes, little-endian)
+///   - `sequence`   : ledger sequence  (4 bytes, little-endian)
+///   - `raffle_id`  : contract address XDR bytes (folded into 32 bytes via XOR)
+///   - `network_id` : SHA-256 of network passphrase (32 bytes)
+///
+/// Each source occupies a distinct byte region or is XOR-folded so that
+/// changing any single source produces a completely different seed.
+/// This makes pre-draw manipulation significantly harder: an attacker would
+/// need to control timestamp, sequence, the contract address, AND the
+/// network passphrase simultaneously.
+fn build_internal_seed(env: &Env) -> BytesN<32> {
+    let mut seed = [0u8; 32];
+
+    // Source 1: timestamp — bytes 0..8
+    let ts = env.ledger().timestamp().to_le_bytes();
+    seed[0..8].copy_from_slice(&ts);
+
+    // Source 2: sequence — bytes 8..12
+    let seq = env.ledger().sequence().to_le_bytes();
+    seed[8..12].copy_from_slice(&seq);
+
+    // Source 3: raffle contract address — XDR-encode then XOR-fold into bytes 12..20
+    let addr_xdr: Bytes = env.current_contract_address().to_xdr(env);
+    let addr_len = addr_xdr.len() as usize;
+    for i in 0..addr_len {
+        let byte = addr_xdr.get(i as u32).unwrap_or(0);
+        seed[12 + (i % 8)] ^= byte;
+    }
+
+    // Source 4: network_id (SHA-256 of network passphrase) — XOR into all 32 bytes
+    let net: BytesN<32> = env.ledger().network_id();
+    let net_arr: [u8; 32] = net.into();
+    for i in 0..32 {
+        seed[i] ^= net_arr[i];
+    }
+
+    BytesN::from_array(env, &seed)
+}
+
+/// Shared winner-selection logic used by both `provide_randomness` (legacy
+/// direct call) and `receive_randomness` (typed oracle callback).
+///
+/// The oracle-supplied `random_seed` is mixed with the current ledger sources
+/// via XOR before reseeding the PRNG. This means even if an oracle is
+/// compromised, the attacker still needs to predict/control the ledger state
+/// at the exact finalization block.
+fn do_finalize_with_seed(env: &Env, random_seed: u64) -> Result<(), Error> {
+    let mut raffle = read_raffle(env)?;
+
+    let tickets = read_tickets(env);
+    if tickets.len() == 0 {
+        return Err(Error::NoTicketsSold);
+    }
+
+    // Mix oracle seed into the multi-source seed so neither party alone
+    // controls the outcome.
+    let mut base = build_internal_seed(env);
+    let mut base_arr: [u8; 32] = base.into();
+    let oracle_bytes = random_seed.to_le_bytes();
+    for i in 0..8 {
+        base_arr[i] ^= oracle_bytes[i];
+    }
+    base = BytesN::from_array(env, &base_arr);
+    env.prng().seed(base);
+
+    let mut winners = Vec::new(env);
+    let mut winning_ticket_ids = Vec::new(env);
+    let n = tickets.len() as u64;
+
+    for _ in 0..raffle.prizes.len() {
+        let winner_index = env.prng().gen_range(0u64..n) as u32;
+        let winner = tickets.get(winner_index).expect("Ticket out of bounds");
+        winners.push_back(winner);
+        winning_ticket_ids.push_back(winner_index);
+    }
+
+    let mut claimed_winners = Vec::new(env);
+    for _ in 0..raffle.prizes.len() {
+        claimed_winners.push_back(false);
+    }
+
+    raffle.status = RaffleStatus::Finalized;
+    raffle.winners = winners.clone();
+    raffle.claimed_winners = claimed_winners;
+    raffle.finalized_at = Some(env.ledger().timestamp());
+    write_raffle(env, &raffle);
+
+    publish_event(
+        env,
+        "randomness_received",
+        RandomnessReceived {
+            oracle: raffle.oracle_address.clone().ok_or(Error::InvalidParameters)?,
+            seed: random_seed,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    publish_event(
+        env,
+        "raffle_finalized",
+        RaffleFinalized {
+            winners,
+            winning_ticket_ids,
+            total_tickets_sold: raffle.tickets_sold,
+            randomness_source: RandomnessSource::External,
+            finalized_at: env.ledger().timestamp(),
+        },
+    );
+
+    publish_event(
+        env,
+        "status_changed",
+        StatusChanged {
+            old_status: RaffleStatus::Drawing,
+            new_status: RaffleStatus::Finalized,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    Ok(())
+}
+
 fn require_not_paused(env: &Env) -> Result<(), Error> {
     if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
         return Err(Error::ContractPaused);
@@ -342,6 +476,11 @@ impl Contract {
             return Err(Error::InvalidParameters);
         }
 
+        // Reject all-zero hash — it signals the caller forgot to set the field.
+        if config.metadata_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(Error::InvalidParameters);
+        }
+
         let raffle = Raffle {
             creator: creator.clone(),
             description: config.description.clone(),
@@ -364,6 +503,7 @@ impl Contract {
             swap_router: config.swap_router,
             tikka_token: config.tikka_token,
             finalized_at: None,
+            metadata_hash: config.metadata_hash.clone(),
         };
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
@@ -382,6 +522,7 @@ impl Contract {
                 prizes: config.prizes,
                 description: config.description,
                 randomness_source: config.randomness_source,
+                metadata_hash: config.metadata_hash,
             },
         );
 
@@ -556,6 +697,23 @@ impl Contract {
                 .as_ref()
                 .ok_or(Error::InvalidParameters)?
                 .clone();
+
+            let request_id = env.ledger().sequence() as u64;
+            let request = RandomnessRequest {
+                raffle_id: env.current_contract_address(),
+                request_id,
+                callback_address: env.current_contract_address(),
+            };
+
+            // Store so receive_randomness can validate the callback
+            env.storage()
+                .instance()
+                .set(&DataKey::PendingRequestId, &request_id);
+
+            // Dispatch via the typed oracle trait — hot-swappable provider
+            let oracle_client = RandomnessOracleClient::new(&env, &oracle);
+            oracle_client.request_randomness(&request);
+
             publish_event(
                 &env,
                 "randomness_requested",
@@ -570,15 +728,18 @@ impl Contract {
         let tickets = read_tickets(&env);
         let mut winners = Vec::new(&env);
         let mut winning_ticket_ids = Vec::new(&env);
-        let mut current_seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
+
+        // Reseed the PRNG with all four independent sources before drawing.
+        // Each call to gen_range advances the ChaCha20 state, so successive
+        // winners are independent draws from the same seeded stream.
+        env.prng().seed(build_internal_seed(&env));
+        let n = tickets.len() as u64;
 
         for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
+            let winner_index = env.prng().gen_range(0u64..n) as u32;
             let winner = tickets.get(winner_index).expect("Ticket out of bounds");
             winners.push_back(winner);
             winning_ticket_ids.push_back(winner_index);
-            // Change seed for the next winner
-            current_seed = current_seed.wrapping_add(1);
         }
 
         let mut claimed_winners = Vec::new(&env);
@@ -618,7 +779,7 @@ impl Contract {
     }
 
     pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
         match &raffle.oracle_address {
             Some(oracle) => oracle.require_auth(),
             None => return Err(Error::NotAuthorized),
@@ -630,70 +791,38 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
-            return Err(Error::NoTicketsSold);
+        do_finalize_with_seed(&env, random_seed)?;
+        Ok(read_raffle(&env)?.winners.get(0).unwrap())
+    }
+
+    /// Typed callback entry-point for oracle providers implementing
+    /// `RandomnessReceiverTrait`. Validates the `request_id` against the
+    /// pending request stored during `finalize_raffle` dispatch, then
+    /// finalises the draw with the supplied seed.
+    pub fn receive_randomness(env: Env, request_id: u64, random_seed: u64) -> Result<(), Error> {
+        let raffle = read_raffle(&env)?;
+        match &raffle.oracle_address {
+            Some(oracle) => oracle.require_auth(),
+            None => return Err(Error::NotAuthorized),
         }
 
-        let mut winners = Vec::new(&env);
-        let mut winning_ticket_ids = Vec::new(&env);
-        let mut current_seed = random_seed;
-
-        for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner = tickets
-                .get(winner_index)
-                .expect("Ticket out of bounds callback");
-            winners.push_back(winner);
-            winning_ticket_ids.push_back(winner_index);
-            // Change seed for the next winner
-            current_seed = current_seed.wrapping_add(1);
+        if raffle.status != RaffleStatus::Drawing
+            || raffle.randomness_source != RandomnessSource::External
+        {
+            return Err(Error::InvalidStateTransition);
         }
 
-        let mut claimed_winners = Vec::new(&env);
-        for _ in 0..raffle.prizes.len() {
-            claimed_winners.push_back(false);
+        let pending: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingRequestId)
+            .ok_or(Error::InvalidStateTransition)?;
+        if pending != request_id {
+            return Err(Error::InvalidParameters);
         }
+        env.storage().instance().remove(&DataKey::PendingRequestId);
 
-        raffle.status = RaffleStatus::Finalized;
-        raffle.winners = winners.clone();
-        raffle.claimed_winners = claimed_winners;
-        raffle.finalized_at = Some(env.ledger().timestamp());
-        write_raffle(&env, &raffle);
-
-        publish_event(
-            &env,
-            "randomness_received",
-            RandomnessReceived {
-                oracle: raffle.oracle_address.clone().ok_or(Error::InvalidParameters)?,
-                seed: random_seed,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        publish_event(
-            &env,
-            "raffle_finalized",
-            RaffleFinalized {
-                winners: winners.clone(),
-                winning_ticket_ids,
-                total_tickets_sold: raffle.tickets_sold,
-                randomness_source: RandomnessSource::External,
-                finalized_at: env.ledger().timestamp(),
-            },
-        );
-
-        publish_event(
-            &env,
-            "status_changed",
-            StatusChanged {
-                old_status: RaffleStatus::Drawing,
-                new_status: RaffleStatus::Finalized,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        Ok(winners.get(0).unwrap())
+        do_finalize_with_seed(&env, random_seed)
     }
 
     pub fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<i128, Error> {

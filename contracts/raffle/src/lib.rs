@@ -6,6 +6,7 @@ use soroban_sdk::{
 
 mod events;
 mod instance;
+pub mod oracle;
 pub mod types;
 pub use types::{PaginationParams, PageResult_Raffles, PageResult_Tickets, effective_limit};
 use instance::{RaffleConfig, RandomnessSource};
@@ -632,6 +633,7 @@ mod tests {
             treasury_address: None,
             swap_router: None,
             tikka_token: None,
+            metadata_hash: soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
         };
 
         instance_client.init(factory_addr, &admin, &creator, &config);
