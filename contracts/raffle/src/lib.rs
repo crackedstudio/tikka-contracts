@@ -99,6 +99,16 @@ fn require_admin(env: &Env) -> Result<Address, ContractError> {
     Ok(admin)
 }
 
+fn require_factory_admin(env: &Env) -> Result<Address, ContractError> {
+    let admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Admin)
+        .ok_or(ContractError::NotAuthorized)?;
+    admin.require_auth();
+    Ok(admin)
+}
+
 fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
     if env
         .storage()
@@ -186,8 +196,20 @@ impl RaffleFactory {
         env: Env,
         protocol_fee_bp: u32,
         treasury: Address,
-    ) -> Result<(), ContractError> {
+    ) -> Result<u32, ContractError> {
         let admin = require_factory_admin(&env)?;
+
+        if protocol_fee_bp > 10000 {
+            return Err(ContractError::InvalidParameters);
+        }
+
+        let mut op_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OpCounter)
+            .unwrap_or(0);
+        op_id = op_id.checked_add(1).ok_or(ContractError::ArithmeticOverflow)?;
+
         let old_fee_bp: u32 = env
             .storage()
             .persistent()

@@ -229,11 +229,23 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if Contract::is_paused(env.clone()) {
-        return Err(Error::ContractPaused);
+fn calculate_protocol_fee(amount: i128, fee_bp: u32) -> Result<(i128, i128), Error> {
+    // fee is computed in basis points, where 10,000 bp = 100%.
+    // This avoids floating point and supports precise financial calculations.
+    if fee_bp > 10_000 {
+        return Err(Error::InvalidParameters);
     }
-    Ok(())
+    if amount < 0 {
+        return Err(Error::InvalidParameters);
+    }
+
+    let fee = amount
+        .checked_mul(fee_bp as i128)
+        .ok_or(Error::ArithmeticOverflow)?
+        .checked_div(10_000)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let net = amount.checked_sub(fee).ok_or(Error::ArithmeticOverflow)?;
+    Ok((fee, net))
 }
 
 fn get_ticket_count(env: &Env) -> u32 {
@@ -489,6 +501,28 @@ impl Contract {
         Ok(())
     }
 
+    pub fn set_fee_bps(env: Env, fee_bp: u32) -> Result<(), Error> {
+        let mut raffle = read_raffle(&env)?;
+        require_admin(&env)?;
+
+        if fee_bp > 10_000 {
+            return Err(Error::InvalidParameters);
+        }
+
+        raffle.protocol_fee_bp = fee_bp;
+        write_raffle(&env, &raffle);
+        Ok(())
+    }
+
+    pub fn set_treasury_address(env: Env, treasury: Address) -> Result<(), Error> {
+        let mut raffle = read_raffle(&env)?;
+        require_admin(&env)?;
+
+        raffle.treasury_address = Some(treasury);
+        write_raffle(&env, &raffle);
+        Ok(())
+    }
+
     pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
         require_not_paused(&env)?;
         buyer.require_auth();
@@ -508,6 +542,12 @@ impl Contract {
         if !raffle.allow_multiple && current_count > 0 {
             return Err(Error::MultipleTicketsNotAllowed);
         }
+
+        let (fee_amount, _net_amount) = calculate_protocol_fee(raffle.ticket_price, raffle.protocol_fee_bp)?;
+        let treasury_address = raffle
+            .treasury_address
+            .clone()
+            .ok_or(Error::InvalidParameters)?;
 
         // Effects: update ALL state BEFORE external call (CEI pattern)
         let ticket_id = next_ticket_id(&env);
@@ -550,12 +590,19 @@ impl Contract {
             );
         }
 
-        // Interaction: external token transfer
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
+
         token_client
             .try_transfer(&buyer, &contract_address, &raffle.ticket_price)
             .map_err(|_| Error::TokenTransferFailed)?;
+
+        // Route protocol fee to treasury from contract's balance.
+        if fee_amount > 0 {
+            token_client
+                .try_transfer(&contract_address, &treasury_address, &fee_amount)
+                .map_err(|_| Error::TokenTransferFailed)?;
+        }
 
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
