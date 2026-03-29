@@ -3,9 +3,10 @@
 use super::*;
 use crate::events::{RaffleFinalized, RandomnessType};
 use crate::{ContractError, RaffleFactory, RaffleFactoryClient};
+use crate::types::PaginationParams;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Bytes, Env, IntoVal, String, Symbol, TryFromVal,
+    token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
 /// HELPER: Standardized environment setup
@@ -86,6 +87,23 @@ fn raffle_finalized_event(env: &Env, contract_address: &Address) -> RaffleFinali
     }
 
     panic!("raffle_finalized event not found");
+}
+
+fn sign_seed_for_oracle(env: &Env, seed: u64) -> (BytesN<32>, BytesN<64>) {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let verifying_key = signing_key.verifying_key().to_bytes();
+    let signature = signing_key.sign(&seed.to_be_bytes()).to_bytes();
+
+    (
+        BytesN::from_array(env, &verifying_key),
+        BytesN::from_array(env, &signature),
+    )
+}
+
+fn page(limit: u32, offset: u32) -> PaginationParams {
+    PaginationParams { limit, offset }
 }
 
 // --- 1. FUNCTIONAL FLOW TESTS ---
@@ -185,9 +203,10 @@ fn test_vrf_raffle_flow() {
     let seed = 12345u64;
     let expected_winner_idx = (seed % 5) as u32;
     let expected_winner = buyers.get(expected_winner_idx).unwrap();
+    let (public_key, proof) = sign_seed_for_oracle(&env, seed);
 
     env.as_contract(&oracle, || {
-        client.provide_randomness(&seed);
+        client.provide_randomness(&seed, &public_key, &proof);
     });
 
     let raffle_post = client.get_raffle();
@@ -314,7 +333,10 @@ fn test_raffle_finalized_event_audit() {
     client.finalize_raffle();
 
     let finalized_event = raffle_finalized_event(&env, &client.address);
-    assert_eq!(finalized_event.randomness_source, RandomnessSource::Internal);
+    assert_eq!(
+        finalized_event.randomness_source,
+        RandomnessSource::Internal
+    );
     assert_eq!(finalized_event.randomness_type, RandomnessType::Prng);
     assert_eq!(finalized_event.finalized_at, expected_timestamp);
 }
@@ -417,9 +439,10 @@ fn test_randomness_received_event() {
     }
 
     client.finalize_raffle();
+    let (public_key, proof) = sign_seed_for_oracle(&env, 12345u64);
 
     env.as_contract(&oracle, || {
-        client.provide_randomness(&12345u64);
+        client.provide_randomness(&12345u64, &public_key, &proof);
     });
 
     // Check that randomness_received event was emitted
@@ -453,12 +476,16 @@ fn test_external_raffle_finalized_event_uses_vrf_randomness_type() {
     }
 
     client.finalize_raffle();
+    let (public_key, proof) = sign_seed_for_oracle(&env, 12345u64);
     env.as_contract(&oracle, || {
-        client.provide_randomness(&12345u64);
+        client.provide_randomness(&12345u64, &public_key, &proof);
     });
 
     let finalized_event = raffle_finalized_event(&env, &client.address);
-    assert_eq!(finalized_event.randomness_source, RandomnessSource::External);
+    assert_eq!(
+        finalized_event.randomness_source,
+        RandomnessSource::External
+    );
     assert_eq!(finalized_event.randomness_type, RandomnessType::Vrf);
 }
 
@@ -898,8 +925,7 @@ fn test_track_multiple_unique_participants() {
 fn test_deposit_prize_cei_state_active_after_call() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
 
     client.deposit_prize();
 
@@ -1008,21 +1034,25 @@ fn test_nft_metadata() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-    
+
     assert_eq!(client.name(), String::from_str(&env, "Tikka Raffle Ticket"));
     assert_eq!(client.symbol(), String::from_str(&env, "TIKKA_TKT"));
-    assert_eq!(client.token_uri(&1u32), String::from_str(&env, "https://tikka.app/api/ticket"));
+    assert_eq!(
+        client.token_uri(&1u32),
+        String::from_str(&env, "https://tikka.app/api/ticket")
+    );
 }
 
 #[test]
 fn test_nft_transfer_and_balance() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-    
+    let (client, _, buyer, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    
+
     assert_eq!(client.balance(&buyer), 1);
     assert_eq!(client.owner_of(&1u32), buyer);
 
@@ -1032,7 +1062,7 @@ fn test_nft_transfer_and_balance() {
     assert_eq!(client.balance(&buyer), 0);
     assert_eq!(client.balance(&new_owner), 1);
     assert_eq!(client.owner_of(&1u32), new_owner);
-    
+
     // Attempting unauthorized transfer
     let hacker = Address::generate(&env);
     let res = client.try_transfer(&hacker, &new_owner, &1u32);
@@ -1043,8 +1073,9 @@ fn test_nft_transfer_and_balance() {
 fn test_nft_approvals_and_transfer_from() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-    
+    let (client, _, buyer, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
@@ -1065,8 +1096,9 @@ fn test_nft_approvals_and_transfer_from() {
 fn test_nft_set_approval_for_all() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-    
+    let (client, _, buyer, _, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
@@ -1084,8 +1116,9 @@ fn test_nft_set_approval_for_all() {
 fn test_nft_winner_after_transfer() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _, buyer, admin_client, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
-    
+    let (client, _, buyer, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
@@ -1113,7 +1146,7 @@ fn test_nft_winner_after_transfer() {
 fn test_tiered_prizes() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let creator = Address::generate(&env);
     let admin = Address::generate(&env);
     let factory_admin = Address::generate(&env);
@@ -1168,7 +1201,7 @@ fn test_tiered_prizes() {
 
     let raffle = client.get_raffle();
     assert_eq!(raffle.winners.len(), 3);
-    
+
     env.ledger().with_mut(|l| l.timestamp += 3600);
 
     let token_client = token::Client::new(&env, &token_id);
@@ -1211,8 +1244,13 @@ fn test_request_winner_selection_happy_path() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _creator, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _creator, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1227,8 +1265,9 @@ fn test_request_winner_selection_happy_path() {
     assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
 
     // Oracle provides the seed — raffle should finalise
+    let (public_key, proof) = sign_seed_for_oracle(&env, 99999u64);
     env.as_contract(&oracle, || {
-        client.provide_randomness(&99999u64);
+        client.provide_randomness(&99999u64, &public_key, &proof);
     });
 
     assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
@@ -1295,9 +1334,10 @@ fn test_request_winner_selection_from_active_after_time_expired() {
     client.request_winner_selection();
 
     assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
+    let (public_key, proof) = sign_seed_for_oracle(&env, 42u64);
 
     env.as_contract(&oracle, || {
-        client.provide_randomness(&42u64);
+        client.provide_randomness(&42u64, &public_key, &proof);
     });
 
     assert_eq!(client.get_raffle().status, RaffleStatus::Finalized);
@@ -1330,13 +1370,19 @@ fn test_request_winner_selection_rejected_while_active() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _, _, _, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _, _, _, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     // Buy only 1 ticket — raffle is still Active (not full, no end_time)
     let b = Address::generate(&env);
-    let admin_client_local = token::StellarAssetClient::new(&env, &client.get_raffle().payment_token);
+    let admin_client_local =
+        token::StellarAssetClient::new(&env, &client.get_raffle().payment_token);
     admin_client_local.mint(&b, &10i128);
     client.buy_ticket(&b);
 
@@ -1351,8 +1397,13 @@ fn test_request_winner_selection_blocks_duplicate() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1375,8 +1426,13 @@ fn test_provide_randomness_rejects_unsolicited_callback() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1388,7 +1444,10 @@ fn test_provide_randomness_rejects_unsolicited_callback() {
     // Raffle is in Drawing state but request_winner_selection was never called
     // (we manually transition by buying all tickets — but no oracle request was made)
     // The oracle should NOT be able to call provide_randomness
-    let result = env.as_contract(&oracle, || client.try_provide_randomness(&12345u64));
+    let (public_key, proof) = sign_seed_for_oracle(&env, 12345u64);
+    let result = env.as_contract(&oracle, || {
+        client.try_provide_randomness(&12345u64, &public_key, &proof)
+    });
     assert_eq!(result, Err(Ok(Error::NoRandomnessRequest)));
 }
 
@@ -1399,8 +1458,13 @@ fn test_provide_randomness_verifies_oracle_and_finalises() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1413,11 +1477,59 @@ fn test_provide_randomness_verifies_oracle_and_finalises() {
 
     // Oracle responds with a deterministic seed
     let seed = 7u64;
-    let first_winner = env.as_contract(&oracle, || client.provide_randomness(&seed));
+    let (public_key, proof) = sign_seed_for_oracle(&env, seed);
+    let first_winner = env.as_contract(&oracle, || {
+        client.provide_randomness(&seed, &public_key, &proof)
+    });
 
     let raffle = client.get_raffle();
     assert_eq!(raffle.status, RaffleStatus::Finalized);
     assert_eq!(raffle.winners.get(0).unwrap(), first_winner);
+}
+
+#[test]
+fn test_verify_randomness_proof_accepts_valid_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    let seed = 424242u64;
+    let (public_key, proof) = sign_seed_for_oracle(&env, seed);
+    assert!(client.verify_randomness_proof(&public_key, &seed, &proof));
+}
+
+#[test]
+fn test_provide_randomness_rejects_invalid_proof() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = register_oracle(&env);
+    let (client, _, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
+
+    client.deposit_prize();
+    for _ in 0..5 {
+        let b = Address::generate(&env);
+        admin_client.mint(&b, &10i128);
+        client.buy_ticket(&b);
+    }
+
+    client.request_winner_selection();
+
+    let seed = 2025u64;
+    let (public_key, _) = sign_seed_for_oracle(&env, seed);
+    let invalid_proof = BytesN::from_array(&env, &[0u8; 64]);
+    let result = env.as_contract(&oracle, || {
+        client.try_provide_randomness(&seed, &public_key, &invalid_proof)
+    });
+
+    assert!(result.is_err());
 }
 
 /// Full oracle flow: request_winner_selection → provide_randomness → claim_prize.
@@ -1427,8 +1539,13 @@ fn test_full_oracle_flow_end_to_end() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _creator, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _creator, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     let token_client = token::Client::new(&env, &admin_client.address);
 
@@ -1447,7 +1564,10 @@ fn test_full_oracle_flow_end_to_end() {
     assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
 
     // Step 2: oracle provides randomness (seed 0 → picks ticket at index 0)
-    let winner = env.as_contract(&oracle, || client.provide_randomness(&0u64));
+    let (public_key, proof) = sign_seed_for_oracle(&env, 0u64);
+    let winner = env.as_contract(&oracle, || {
+        client.provide_randomness(&0u64, &public_key, &proof)
+    });
 
     // Step 3: winner claims prize after lockup
     env.ledger().with_mut(|l| l.timestamp += 3600);
@@ -1466,8 +1586,13 @@ fn setup_drawing_external(
     ledgers_to_advance: u32,
 ) -> (ContractClient<'_>, Address, Address, token::Client<'_>) {
     let oracle = register_oracle(env);
-    let (client, creator, _, admin_client, _, _) =
-        setup_raffle_env(env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, creator, _, admin_client, _, _) = setup_raffle_env(
+        env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1479,7 +1604,8 @@ fn setup_drawing_external(
     client.request_winner_selection();
 
     // Advance ledger sequence to simulate time passing
-    env.ledger().with_mut(|l| l.sequence_number += ledgers_to_advance);
+    env.ledger()
+        .with_mut(|l| l.sequence_number += ledgers_to_advance);
 
     let token_client = token::Client::new(env, &admin_client.address);
     (client, creator, oracle, token_client)
@@ -1507,8 +1633,13 @@ fn test_fallback_admin_can_trigger() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, _creator, _, admin_client, _, admin) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, _creator, _, admin_client, _, admin) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1570,8 +1701,13 @@ fn test_fallback_fails_without_pending_request() {
     env.mock_all_auths();
 
     let oracle = register_oracle(&env);
-    let (client, creator, _, admin_client, _, _) =
-        setup_raffle_env(&env, RandomnessSource::External, Some(oracle.clone()), 0, None);
+    let (client, creator, _, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::External,
+        Some(oracle.clone()),
+        0,
+        None,
+    );
 
     client.deposit_prize();
     for _ in 0..5 {
@@ -1610,7 +1746,10 @@ fn test_oracle_callback_rejected_after_fallback() {
     client.trigger_randomness_fallback(&creator);
 
     // Oracle tries to respond after fallback has already finalised the raffle
-    let result = env.as_contract(&oracle, || client.try_provide_randomness(&999u64));
+    let (public_key, proof) = sign_seed_for_oracle(&env, 999u64);
+    let result = env.as_contract(&oracle, || {
+        client.try_provide_randomness(&999u64, &public_key, &proof)
+    });
     assert!(result.is_err()); // InvalidStateTransition since status is now Finalized
 }
 
@@ -1629,6 +1768,8 @@ fn test_fallback_winner_can_claim_prize() {
     client.claim_prize(&winner, &0);
 
     assert_eq!(token_client.balance(&winner), 100i128);
+}
+
 // ============================================================================
 // AUTOMATED STATE CLEANUP TESTS
 // ============================================================================
@@ -1636,7 +1777,13 @@ fn test_fallback_winner_can_claim_prize() {
 /// Helper: run a raffle to Finalized state and return the instance client + address
 fn setup_finalized_raffle<'a>(
     env: &'a Env,
-) -> (ContractClient<'a>, Address, Address, token::StellarAssetClient<'a>, Address) {
+) -> (
+    ContractClient<'a>,
+    Address,
+    Address,
+    token::StellarAssetClient<'a>,
+    Address,
+) {
     let (client, creator, buyer, admin_client, factory, _factory_admin) =
         setup_raffle_env(env, RandomnessSource::Internal, None, 0, None);
 
@@ -1724,7 +1871,7 @@ fn test_finish_time_not_overwritten_on_second_terminal() {
 
     // Advance time and claim — should NOT overwrite FinishTime
     env.ledger().with_mut(|l| l.timestamp = 9_000);
-    client.claim_prize(&buyer);
+    client.claim_prize(&buyer, &0);
 
     assert_eq!(client.get_finish_time().unwrap(), first_finish);
 }
@@ -1760,13 +1907,18 @@ fn test_wipe_storage_rejected_by_non_factory() {
 /// Helper: build a factory with a real deployed raffle instance at Finalized state
 fn setup_factory_with_finalized_raffle(
     env: &Env,
-) -> (RaffleFactoryClient<'_>, Address, ContractClient<'_>, Address) {
+) -> (
+    RaffleFactoryClient<'_>,
+    Address,
+    ContractClient<'_>,
+    Address,
+) {
     let admin = Address::generate(env);
     let treasury = Address::generate(env);
     let creator = Address::generate(env);
 
     // Register the instance contract wasm
-    let instance_wasm_hash = env.register(Contract, ());
+    let _instance_wasm_hash = env.register(Contract, ());
     // We can't get a real wasm hash in unit tests, so we use the direct-deploy approach:
     // register factory and create raffle via factory, but since deploy_v2 needs a real
     // wasm hash we instead register the instance directly and test clean_old_raffle
@@ -1794,10 +1946,17 @@ fn setup_factory_with_finalized_raffle(
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
+        prizes: {
+            let mut v = soroban_sdk::Vec::new(env);
+            v.push_back(10000u32);
+            v
+        },
         randomness_source: RandomnessSource::Internal,
         oracle_address: None,
         protocol_fee_bp: 0,
         treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
     };
     instance_client.init(&factory_id, &admin, &creator, &config);
 
@@ -1818,7 +1977,7 @@ fn setup_factory_with_finalized_raffle(
         instances.push_back(instance_id.clone());
         env.storage()
             .persistent()
-            .set(&DataKey::RaffleInstances, &instances);
+            .set(&crate::DataKey::RaffleInstances, &instances);
     });
 
     (factory_client, admin, instance_client, instance_id)
@@ -1832,18 +1991,14 @@ fn test_clean_old_raffle_invalid_raffle_id() {
 
     // No raffles registered — any id is out of bounds
     let result = factory.try_clean_old_raffle(&0u32);
-    assert_eq!(
-        result.unwrap_err().unwrap(),
-        ContractError::InvalidRaffleId
-    );
+    assert_eq!(result.unwrap_err().unwrap(), ContractError::InvalidRaffleId);
 }
 
 #[test]
 fn test_clean_old_raffle_not_eligible_before_threshold() {
     let env = Env::default();
     env.mock_all_auths();
-    let (factory, _admin, _instance, _instance_id) =
-        setup_factory_with_finalized_raffle(&env);
+    let (factory, _admin, _instance, _instance_id) = setup_factory_with_finalized_raffle(&env);
 
     // finish_time = 1_000, now = 1_001 — well under 90 days
     env.ledger().with_mut(|l| l.timestamp = 1_001);
@@ -1858,11 +2013,11 @@ fn test_clean_old_raffle_not_eligible_before_threshold() {
 fn test_clean_old_raffle_succeeds_after_threshold() {
     let env = Env::default();
     env.mock_all_auths();
-    let (factory, _admin, _instance, _instance_id) =
-        setup_factory_with_finalized_raffle(&env);
+    let (factory, _admin, _instance, _instance_id) = setup_factory_with_finalized_raffle(&env);
 
     // finish_time = 1_000, advance past 90 days
-    env.ledger().with_mut(|l| l.timestamp = 1_000 + 7_776_000 + 1);
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + 7_776_000 + 1);
     factory.clean_old_raffle(&0u32);
 
     // Registry should now be empty
@@ -1874,18 +2029,15 @@ fn test_clean_old_raffle_succeeds_after_threshold() {
 fn test_clean_old_raffle_double_call_rejected() {
     let env = Env::default();
     env.mock_all_auths();
-    let (factory, _admin, _instance, _instance_id) =
-        setup_factory_with_finalized_raffle(&env);
+    let (factory, _admin, _instance, _instance_id) = setup_factory_with_finalized_raffle(&env);
 
-    env.ledger().with_mut(|l| l.timestamp = 1_000 + 7_776_000 + 1);
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + 7_776_000 + 1);
     factory.clean_old_raffle(&0u32);
 
     // Second call — registry is now empty, id 0 is out of bounds
     let result = factory.try_clean_old_raffle(&0u32);
-    assert_eq!(
-        result.unwrap_err().unwrap(),
-        ContractError::InvalidRaffleId
-    );
+    assert_eq!(result.unwrap_err().unwrap(), ContractError::InvalidRaffleId);
 }
 
 #[test]
@@ -1919,10 +2071,17 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
+        prizes: {
+            let mut v = soroban_sdk::Vec::new(&env);
+            v.push_back(10000u32);
+            v
+        },
         randomness_source: RandomnessSource::Internal,
         oracle_address: None,
         protocol_fee_bp: 0,
         treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
     };
     client_a.init(&factory_id, &admin, &creator_a, &config_a);
     client_a.deposit_prize();
@@ -1945,10 +2104,17 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
+        prizes: {
+            let mut v = soroban_sdk::Vec::new(&env);
+            v.push_back(10000u32);
+            v
+        },
         randomness_source: RandomnessSource::Internal,
         oracle_address: None,
         protocol_fee_bp: 0,
         treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
     };
     client_b.init(&factory_id, &admin, &creator_b, &config_b);
 
@@ -1959,7 +2125,7 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         instances.push_back(instance_b.clone());
         env.storage()
             .persistent()
-            .set(&DataKey::RaffleInstances, &instances);
+            .set(&crate::DataKey::RaffleInstances, &instances);
     });
 
     // Advance past 90 days from instance A's finish_time
@@ -1970,6 +2136,8 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
     let result = factory_client.get_raffles(&page(10, 0));
     assert_eq!(result.total, 1u32);
     assert_eq!(result.items.get(0).unwrap(), instance_b);
+}
+
 // --- 9. GOVERNANCE TESTS ---
 
 #[test]
@@ -1989,7 +2157,9 @@ fn test_instance_ownership_transfer_flow() {
     // Verify pending
     env.as_contract(&client.address, || {
         assert_eq!(
-            env.storage().instance().get::<_, Address>(&DataKey::PendingAdmin),
+            env.storage()
+                .instance()
+                .get::<_, Address>(&DataKey::PendingAdmin),
             Some(new_owner.clone())
         );
     });

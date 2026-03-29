@@ -8,11 +8,12 @@ Tikka is a decentralized raffle platform built on Stellar using Soroban smart co
 
 ## 🚀 Key Features
 
-### **🎲 On-Chain Winner Selection (Demo)**
+### **🎲 On-Chain Winner Selection**
 
--   Deterministic winner selection derived from ledger data (timestamp + sequence)
--   Simple and transparent process for a demo contract
--   Designed for clarity, not production-grade randomness
+-   Internal draws use Soroban `env.prng()` with a multi-source seed:
+    `timestamp + sequence + raffle_id + tickets_sold`
+-   Deterministic replay for identical raffle and ledger inputs
+-   Intended for low-stakes raffles; high-stakes draws should use oracle randomness
 
 ### **💰 Token-Based Tickets and Prizes**
 
@@ -71,7 +72,8 @@ Raffle Ends → Finalize → Select Winner
 ```
 
 -   Winner is selected from sold tickets
--   Selection uses ledger-derived data for demo purposes
+-   Internal mode uses Soroban PRNG seeded with multiple ledger and raffle fields
+-   External/oracle mode remains available for stronger trust assumptions
 
 ### **5. Prize Distribution**
 
@@ -98,7 +100,7 @@ flowchart TD
     Token -->|"transfer(ticket_price)"| Raffle
 
     Raffle -->|"finalize_raffle()"| Raffle
-    Raffle -->|"select_winner(ledger_data)"| Raffle
+    Raffle -->|"select_winner(prng_seeded_entropy)"| Raffle
 
     Buyer -->|"claim_prize()"| Raffle
     Raffle -->|"transfer(prize)"| Token
@@ -151,7 +153,8 @@ pub struct Raffle {
 
 -   Only one winner per raffle
 -   Prize and ticket payments use the same Stellar asset
--   Winner selection is deterministic and not production-grade randomness
+-   Internal PRNG is suitable for low-stakes raffles (e.g., sub-500 XLM prizes)
+-   For high-stakes raffles, prefer the external oracle/VRF randomness path
 
 ## 🔒 Metadata Integrity (metadata_hash)
 
@@ -270,4 +273,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ on Stellar**
-

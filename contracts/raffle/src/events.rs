@@ -256,6 +256,8 @@ pub struct RaffleCleanedUp {
     pub cleaned_by: Address,
     pub finish_time: u64,
     pub cleaned_at: u64,
+}
+
 // TIME-LOCKED ADMIN OPERATION EVENTS
 // ============================================================================
 
@@ -295,7 +297,7 @@ pub struct AdminOpCancelled {
 /// Emitted when raffle status changes
 #[derive(Clone)]
 #[contracttype]
-pub struct StatusChanged {
+pub struct RaffleStatusChanged {
     pub old_status: RaffleStatus,
     pub new_status: RaffleStatus,
     pub timestamp: u64,
