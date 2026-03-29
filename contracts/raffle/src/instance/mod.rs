@@ -8,8 +8,8 @@ use crate::types::{effective_limit, FairnessData, PageResult_Tickets, Pagination
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, RandomnessType,
-    StatusChanged, TicketPurchased, WinnerDrawn,
+    RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested,
+    TicketPurchased, WinnerDrawn,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
@@ -34,12 +34,10 @@ pub struct Contract;
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum RaffleStatus {
-    Proposed = 0,
-    Active = 1,
-    Drawing = 2,
-    Finalized = 3,
-    Claimed = 4,
-    Cancelled = 5,
+    Open = 0,
+    Drawing = 1,
+    Finalized = 2,
+    Cancelled = 3,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -409,7 +407,7 @@ impl Contract {
             prize_amount: config.prize_amount,
             prizes: config.prizes.clone(),
             tickets_sold: 0,
-            status: RaffleStatus::Proposed,
+            status: RaffleStatus::Open,
             prize_deposited: false,
             winners: Vec::new(&env),
             claimed_winners: Vec::new(&env),
@@ -449,7 +447,7 @@ impl Contract {
         require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Proposed {
+        if raffle.status != RaffleStatus::Open {
             return Err(Error::InvalidStateTransition);
         }
         if raffle.prize_deposited {
@@ -458,7 +456,6 @@ impl Contract {
 
         // Effects: update state BEFORE external call (CEI pattern)
         raffle.prize_deposited = true;
-        raffle.status = RaffleStatus::Active;
         write_raffle(&env, &raffle);
 
         // Interaction: external token transfer — creator deposits the prize pool.
@@ -479,16 +476,6 @@ impl Contract {
             },
         );
 
-        publish_event(
-            &env,
-            "status_changed",
-            StatusChanged {
-                old_status: RaffleStatus::Proposed,
-                new_status: RaffleStatus::Active,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
         Ok(())
     }
 
@@ -497,7 +484,7 @@ impl Contract {
         buyer.require_auth();
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Active {
+        if raffle.status != RaffleStatus::Open {
             return Err(Error::RaffleInactive);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
@@ -531,8 +518,8 @@ impl Contract {
             publish_event(
                 &env,
                 "status_changed",
-                StatusChanged {
-                    old_status: RaffleStatus::Active,
+                RaffleStatusChanged {
+                    old_status: RaffleStatus::Open,
                     new_status: RaffleStatus::Drawing,
                     timestamp: env.ledger().timestamp(),
                 },
@@ -585,7 +572,7 @@ impl Contract {
         require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status == RaffleStatus::Active {
+        if raffle.status == RaffleStatus::Open {
             if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
                 || raffle.tickets_sold >= raffle.max_tickets
             {
@@ -593,8 +580,8 @@ impl Contract {
                 publish_event(
                     &env,
                     "status_changed",
-                    StatusChanged {
-                        old_status: RaffleStatus::Active,
+                    RaffleStatusChanged {
+                        old_status: RaffleStatus::Open,
                         new_status: RaffleStatus::Drawing,
                         timestamp: env.ledger().timestamp(),
                     },
@@ -733,7 +720,7 @@ impl Contract {
         publish_event(
             &env,
             "status_changed",
-            StatusChanged {
+            RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
                 new_status: RaffleStatus::Finalized,
                 timestamp: env.ledger().timestamp(),
@@ -760,7 +747,7 @@ impl Contract {
         }
 
         // Transition Active → Drawing if the raffle end conditions are satisfied
-        if raffle.status == RaffleStatus::Active {
+        if raffle.status == RaffleStatus::Open {
             let now = env.ledger().timestamp();
             let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
             let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
@@ -771,8 +758,8 @@ impl Contract {
             publish_event(
                 &env,
                 "status_changed",
-                StatusChanged {
-                    old_status: RaffleStatus::Active,
+                RaffleStatusChanged {
+                    old_status: RaffleStatus::Open,
                     new_status: RaffleStatus::Drawing,
                     timestamp: now,
                 },
@@ -974,7 +961,7 @@ impl Contract {
         publish_event(
             &env,
             "status_changed",
-            StatusChanged {
+            RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
                 new_status: RaffleStatus::Finalized,
                 timestamp: env.ledger().timestamp(),
@@ -1132,7 +1119,7 @@ impl Contract {
         publish_event(
             &env,
             "status_changed",
-            StatusChanged {
+            RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
                 new_status: RaffleStatus::Finalized,
                 timestamp: env.ledger().timestamp(),
@@ -1147,7 +1134,7 @@ impl Contract {
         let mut raffle = read_raffle(&env)?;
 
         // Checks
-        if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
+        if raffle.status != RaffleStatus::Finalized {
             return Err(Error::InvalidStateTransition);
         }
 
@@ -1197,10 +1184,6 @@ impl Contract {
             }
         }
 
-        let old_status = raffle.status.clone();
-        if all_claimed {
-            raffle.status = RaffleStatus::Claimed;
-        }
         write_raffle(&env, &raffle);
 
         if !env.storage().persistent().has(&DataKey::FinishTime) {
@@ -1318,18 +1301,6 @@ impl Contract {
             },
         );
 
-        if old_status != raffle.status {
-            publish_event(
-                &env,
-                "status_changed",
-                StatusChanged {
-                    old_status,
-                    new_status: raffle.status.clone(),
-                    timestamp: env.ledger().timestamp(),
-                },
-            );
-        }
-
         Ok(net_amount)
     }
 
@@ -1355,7 +1326,6 @@ impl Contract {
         }
 
         if raffle.status == RaffleStatus::Finalized
-            || raffle.status == RaffleStatus::Claimed
             || raffle.status == RaffleStatus::Cancelled
         {
             return Err(Error::InvalidStateTransition);
@@ -1402,7 +1372,7 @@ impl Contract {
         publish_event(
             &env,
             "status_changed",
-            StatusChanged {
+            RaffleStatusChanged {
                 old_status,
                 new_status: RaffleStatus::Cancelled,
                 timestamp: env.ledger().timestamp(),
