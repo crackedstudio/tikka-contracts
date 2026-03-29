@@ -102,6 +102,9 @@ pub struct RaffleConfig {
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
+    /// SHA-256 hash of the off-chain metadata JSON. Must be non-zero (all-zero
+    /// bytes are rejected as an unset sentinel value).
+    pub metadata_hash: BytesN<32>,
 }
 
 #[derive(Clone)]
@@ -398,6 +401,11 @@ impl Contract {
             return Err(Error::InvalidParameters);
         }
 
+        // Reject all-zero hash — it signals the caller forgot to set the field.
+        if config.metadata_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(Error::InvalidParameters);
+        }
+
         let raffle = Raffle {
             creator: creator.clone(),
             description: config.description.clone(),
@@ -438,6 +446,7 @@ impl Contract {
                 prizes: config.prizes,
                 description: config.description,
                 randomness_source: config.randomness_source,
+                metadata_hash: config.metadata_hash,
             },
         );
 
@@ -656,6 +665,13 @@ impl Contract {
         let winning_ticket_ids =
             selector.select_winner_indices(&env, total_tickets, raffle.prizes.len() as u32);
         let mut winners = Vec::new(&env);
+        let mut winning_ticket_ids = Vec::new(&env);
+
+        // Reseed the PRNG with all four independent sources before drawing.
+        // Each call to gen_range advances the ChaCha20 state, so successive
+        // winners are independent draws from the same seeded stream.
+        env.prng().seed(build_internal_seed(&env));
+        let n = tickets.len() as u64;
 
         for i in 0..winning_ticket_ids.len() {
             let winner_index = winning_ticket_ids.get(i).unwrap();
@@ -906,9 +922,10 @@ impl Contract {
             );
         }
 
-        let mut claimed_winners = Vec::new(&env);
-        for _ in 0..raffle.prizes.len() {
-            claimed_winners.push_back(false);
+        if raffle.status != RaffleStatus::Drawing
+            || raffle.randomness_source != RandomnessSource::External
+        {
+            return Err(Error::InvalidStateTransition);
         }
 
         // Store fairness metadata for transparency
@@ -968,7 +985,7 @@ impl Contract {
             },
         );
 
-        Ok(winners.get(0).unwrap())
+        do_finalize_with_seed(&env, random_seed)
     }
 
     pub fn verify_randomness_proof(

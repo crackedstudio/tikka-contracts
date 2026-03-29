@@ -9,6 +9,7 @@ use soroban_sdk::{
 
 mod events;
 mod instance;
+pub mod oracle;
 pub mod types;
 use instance::{RaffleConfig, RandomnessSource};
 pub use types::{
@@ -1092,6 +1093,7 @@ mod tests {
             treasury_address: None,
             swap_router: None,
             tikka_token: None,
+            metadata_hash: soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
         };
 
         instance_client.init(factory_addr, &admin, &creator, &config);

@@ -64,6 +64,7 @@ fn setup_raffle_env(
         treasury_address: treasury,
         swap_router: None,
         tikka_token: None,
+        metadata_hash: BytesN::from_array(env, &[1u8; 32]),
     };
 
     client.init(&factory, &factory_admin, &creator, &config);

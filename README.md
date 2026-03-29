@@ -156,7 +156,73 @@ pub struct Raffle {
 -   Internal PRNG is suitable for low-stakes raffles (e.g., sub-500 XLM prizes)
 -   For high-stakes raffles, prefer the external oracle/VRF randomness path
 
-## 🌐 Deployed Contracts
+## 🔒 Metadata Integrity (metadata_hash)
+
+Every raffle requires a `metadata_hash: BytesN<32>` — a SHA-256 hash of the off-chain metadata JSON stored on IPFS. This hash is committed on-chain at creation and is immutable, so organizers cannot alter the description, image, or rules after tickets are sold.
+
+### Metadata JSON format
+
+```json
+{
+  "name": "My Raffle",
+  "description": "Full rules and description here",
+  "image": "ipfs://Qm...",
+  "rules": "..."
+}
+```
+
+### Generating the hash
+
+**Linux / macOS**
+
+```bash
+# 1. Create your metadata file
+cat > metadata.json << 'EOF'
+{"name":"My Raffle","description":"...","image":"ipfs://Qm...","rules":"..."}
+EOF
+
+# 2. Hash it (outputs hex)
+sha256sum metadata.json
+# or on macOS:
+shasum -a 256 metadata.json
+```
+
+**Node.js**
+
+```js
+const crypto = require("crypto");
+const fs = require("fs");
+const hash = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync("metadata.json"))
+  .digest("hex");
+console.log(hash); // 64-char hex string → 32 bytes
+```
+
+**Python**
+
+```python
+import hashlib, json
+
+meta = {"name": "My Raffle", "description": "...", "image": "ipfs://Qm...", "rules": "..."}
+# Use compact, sorted JSON for reproducibility
+raw = json.dumps(meta, separators=(',', ':'), sort_keys=True).encode()
+print(hashlib.sha256(raw).hexdigest())
+```
+
+### Converting hex → `BytesN<32>` for the contract call
+
+```bash
+# Stellar CLI example — pass as a hex-encoded bytes argument
+stellar contract invoke ... -- \
+  --metadata_hash "$(sha256sum metadata.json | cut -d' ' -f1)"
+```
+
+> **Important:** Use a canonical JSON serialization (compact, keys sorted) so the hash is reproducible by anyone who downloads the metadata from IPFS.
+
+---
+
+
 
 ### **Stellar Testnet**
 
