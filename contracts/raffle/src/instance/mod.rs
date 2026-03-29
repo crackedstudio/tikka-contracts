@@ -1,7 +1,7 @@
 // Instance submodule
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, IntoVal, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, IntoVal, String, Symbol, Vec,
 };
 
 use self::randomness::{OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy};
@@ -16,11 +16,6 @@ use crate::events::{
 /// Number of ledgers after a randomness request before the fallback can be triggered.
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
 mod randomness;
-
-
-// Define a trait for Soroswap Router
-#[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
-pub trait SoroswapRouter {
 
 // --- External Contract Traits ---
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
@@ -138,6 +133,17 @@ where
         (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
         event,
     );
+}
+
+fn verify_randomness_proof_internal(
+    env: &Env,
+    public_key: &BytesN<32>,
+    seed: u64,
+    proof: &BytesN<64>,
+) {
+    let message: Bytes = seed.to_xdr(env);
+    // ed25519_verify traps on invalid signature, rejecting the randomness submit.
+    env.crypto().ed25519_verify(public_key, &message, proof);
 }
 
 #[derive(Clone)]
@@ -817,12 +823,18 @@ impl Contract {
     }
 
     /// Oracle callback — finalises the raffle using the provided random seed.
+    /// The seed must be accompanied by an Ed25519 proof and public key.
     ///
     /// Only the oracle address that was configured at raffle creation may call
     /// this function.  The contract also requires that a randomness request was
     /// previously recorded (via `request_winner_selection` or `finalize_raffle`)
     /// so that an oracle cannot call this function unsolicited.
-    pub fn provide_randomness(env: Env, random_seed: u64) -> Result<Address, Error> {
+    pub fn provide_randomness(
+        env: Env,
+        random_seed: u64,
+        public_key: BytesN<32>,
+        proof: BytesN<64>,
+    ) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
         // Verify the caller is the authorised oracle
@@ -851,6 +863,8 @@ impl Contract {
         if !request_pending {
             return Err(Error::NoRandomnessRequest);
         }
+
+        verify_randomness_proof_internal(&env, &public_key, random_seed, &proof);
 
         // Optimize: Use NextTicketId as count instead of loading all tickets into Vec
         let total_tickets = get_ticket_count(&env);
@@ -957,6 +971,16 @@ impl Contract {
         Ok(winners.get(0).unwrap())
     }
 
+    pub fn verify_randomness_proof(
+        env: Env,
+        public_key: BytesN<32>,
+        seed: u64,
+        proof: BytesN<64>,
+    ) -> bool {
+        verify_randomness_proof_internal(&env, &public_key, seed, &proof);
+        true
+    }
+
     /// Trigger PRNG-based winner selection as a fallback when the oracle has not
     /// responded within `ORACLE_TIMEOUT_LEDGERS` ledgers of the original request.
     ///
@@ -1040,7 +1064,7 @@ impl Contract {
             env.events().publish(
                 (
                     Symbol::new(&env, "WinnerDrawn"),
-                    winner.clone(),
+                    winner_ticket.owner.clone(),
                     winner_index,
                 ),
                 WinnerDrawn {
@@ -1695,7 +1719,6 @@ impl Contract {
 
         // Remove instance storage entries (Factory and Admin removed last)
         env.storage().instance().remove(&DataKey::Raffle);
-        env.storage().instance().remove(&DataKey::Tickets);
         env.storage().instance().remove(&DataKey::NextTicketId);
         env.storage().instance().remove(&DataKey::Paused);
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {

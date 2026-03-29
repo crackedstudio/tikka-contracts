@@ -3,15 +3,17 @@
 pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Env, IntoVal, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, IntoVal,
+    String, Symbol, Vec,
 };
 
 mod events;
 mod instance;
 pub mod types;
-pub use types::{FairnessData, PaginationParams, PageResult_Raffles, PageResult_Tickets, effective_limit};
 use instance::{RaffleConfig, RandomnessSource};
+pub use types::{
+    effective_limit, FairnessData, PageResult_Raffles, PageResult_Tickets, PaginationParams,
+};
 
 #[contract]
 pub struct RaffleFactory;
@@ -20,7 +22,7 @@ pub struct RaffleFactory;
 #[derive(Clone)]
 #[contracttype]
 pub enum AdminOp {
-    SetConfig { protocol_fee_bp: u32, treasury: Address },
+    SetConfig(u32, Address),
 }
 
 /// A queued administrative operation.
@@ -30,6 +32,17 @@ pub struct PendingOp {
     pub op: AdminOp,
     pub effective_timestamp: u64,
     pub proposed_by: Address,
+}
+
+pub const CHECKPOINT_INTERVAL: u32 = 1_000;
+
+#[derive(Clone)]
+#[contracttype]
+pub struct StateCheckpoint {
+    pub index: u32,
+    pub raffle_count: u32,
+    pub ledger_timestamp: u64,
+    pub aggregate_hash: soroban_sdk::BytesN<32>,
 }
 
 #[derive(Clone)]
@@ -42,8 +55,17 @@ pub enum DataKey {
     Treasury,
     Paused,
     PendingAdmin,
+    PendingOp(u32),
+    OpCounter,
+    Checkpoint(u32),
+    LatestCheckpointIndex,
 
     TotalRafflesCreated,
+    UniqueParticipant(Address),
+    TotalUniqueParticipants,
+    MinCreationDelay,
+    LastCreationTime(Address),
+    WhitelistedPartner(Address),
     TotalVolumePerAsset(Address),
 }
 
@@ -53,14 +75,7 @@ pub struct ProtocolStats {
     pub total_raffles_created: u32,
     pub protocol_fee_bp: u32,
     pub paused: bool,
-
-    UniqueParticipant(Address),
-    TotalUniqueParticipants,
-    MinCreationDelay, // Global config (u64 seconds)
-    LastCreationTime(Address), // Per-user tracking
-    WhitelistedPartner(Address), // For admin bypass
-    CreatorVerification(Address),
-
+    pub total_unique_participants: u32,
 }
 
 #[contracterror]
@@ -72,13 +87,17 @@ pub enum ContractError {
     ContractPaused = 3,
     InvalidParameters = 4,
     RaffleNotFound = 5,
-    
+
     // Admin errors (11-20)
     AdminTransferPending = 11,
     NoPendingTransfer = 12,
 
     // rate error
     RateLimitExceeded = 13,
+    NoPendingOp = 14,
+    TimelockNotElapsed = 15,
+    InvalidRaffleId = 16,
+    RaffleNotEligible = 17,
 }
 
 fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
@@ -99,6 +118,10 @@ fn require_admin(env: &Env) -> Result<Address, ContractError> {
         .ok_or(ContractError::NotAuthorized)?;
     admin.require_auth();
     Ok(admin)
+}
+
+fn require_factory_admin(env: &Env) -> Result<Address, ContractError> {
+    require_admin(env)
 }
 
 fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
@@ -134,7 +157,7 @@ fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
         index,
         raffle_count,
         ledger_timestamp,
-        aggregate_hash: aggregate_hash.clone(),
+        aggregate_hash: aggregate_hash.clone().into(),
     };
 
     env.storage()
@@ -151,7 +174,7 @@ fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
             index,
             raffle_count,
             ledger_timestamp,
-            aggregate_hash,
+            aggregate_hash: aggregate_hash.into(),
         },
     );
 }
@@ -188,24 +211,19 @@ impl RaffleFactory {
         env: Env,
         protocol_fee_bp: u32,
         treasury: Address,
-    ) -> Result<(), ContractError> {
+    ) -> Result<u32, ContractError> {
         let admin = require_factory_admin(&env)?;
-        let old_fee_bp: u32 = env
+        let op_id = env
             .storage()
             .persistent()
-            .get(&DataKey::ProtocolFeeBP)
-            .unwrap_or(0);
-        let old_treasury: Option<Address> = env.storage().persistent().get(&DataKey::Treasury);
+            .get::<_, u32>(&DataKey::OpCounter)
+            .unwrap_or(0)
+            .saturating_add(1);
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::OpCounter, &op_id);
+        env.storage().persistent().set(&DataKey::OpCounter, &op_id);
 
         let effective_timestamp = env.ledger().timestamp() + TIMELOCK_DELAY_SECONDS;
-        let op = AdminOp::SetConfig {
-            protocol_fee_bp,
-            treasury: treasury.clone(),
-        };
+        let op = AdminOp::SetConfig(protocol_fee_bp, treasury.clone());
         let pending = PendingOp {
             op: op.clone(),
             effective_timestamp,
@@ -243,10 +261,7 @@ impl RaffleFactory {
         }
 
         match pending.op.clone() {
-            AdminOp::SetConfig {
-                protocol_fee_bp,
-                treasury,
-            } => {
+            AdminOp::SetConfig(protocol_fee_bp, treasury) => {
                 env.storage()
                     .persistent()
                     .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
@@ -277,11 +292,7 @@ impl RaffleFactory {
     pub fn cancel_config_change(env: Env, op_id: u32) -> Result<(), ContractError> {
         let admin = require_factory_admin(&env)?;
 
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::PendingOp(op_id))
-        {
+        if !env.storage().persistent().has(&DataKey::PendingOp(op_id)) {
             return Err(ContractError::NoPendingOp);
         }
 
@@ -303,9 +314,7 @@ impl RaffleFactory {
     }
 
     pub fn get_pending_op(env: Env, op_id: u32) -> Option<PendingOp> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::PendingOp(op_id))
+        env.storage().persistent().get(&DataKey::PendingOp(op_id))
     }
 
     pub fn get_op_counter(env: Env) -> u32 {
@@ -316,39 +325,44 @@ impl RaffleFactory {
     }
 
     pub fn create_raffle(
-    env: Env,
-    creator: Address,
-    config: RaffleConfig,
-) -> Result<Address, ContractError> {
-    creator.require_auth();
-    require_factory_not_paused(&env)?;
+        env: Env,
+        creator: Address,
+        config: RaffleConfig,
+    ) -> Result<Address, ContractError> {
+        creator.require_auth();
+        require_factory_not_paused(&env)?;
 
-    // Check if the creator is whitelisted
-    let is_whitelisted = env.storage()
-        .persistent()
-        .get(&DataKey::WhitelistedPartner(creator.clone()))
-        .unwrap_or(false);
-
-    if !is_whitelisted {
-        let now = env.ledger().timestamp();
-        let min_delay = env.storage()
+        // Check if the creator is whitelisted
+        let is_whitelisted = env
+            .storage()
             .persistent()
-            .get(&DataKey::MinCreationDelay)
-            .unwrap_or(300); // Default to 5 minutes (300s)
+            .get(&DataKey::WhitelistedPartner(creator.clone()))
+            .unwrap_or(false);
 
-        let last_creation: u64 = env.storage()
-            .persistent()
-            .get(&DataKey::LastCreationTime(creator.clone()))
-            .unwrap_or(0);
+        if !is_whitelisted {
+            let now = env.ledger().timestamp();
+            let min_delay = env
+                .storage()
+                .persistent()
+                .get(&DataKey::MinCreationDelay)
+                .unwrap_or(300); // Default to 5 minutes (300s)
 
-        // Enforce the delay
-        if now < last_creation + min_delay {
-            return Err(ContractError::RateLimitExceeded);
+            let last_creation: u64 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LastCreationTime(creator.clone()))
+                .unwrap_or(0);
+
+            // Enforce the delay
+            if now < last_creation + min_delay {
+                return Err(ContractError::RateLimitExceeded);
+            }
+
+            // Update the last creation timestamp
+            env.storage()
+                .persistent()
+                .set(&DataKey::LastCreationTime(creator.clone()), &now);
         }
-
-        // Update the last creation timestamp
-        env.storage().persistent().set(&DataKey::LastCreationTime(creator.clone()), &now);
-    }
 
         let wasm_hash: soroban_sdk::BytesN<32> = env
             .storage()
@@ -369,45 +383,29 @@ impl RaffleFactory {
             .get(&DataKey::RaffleInstances)
             .unwrap();
 
-        // Use parameters to avoid warnings
-        let mut final_config = config.clone();
-
-        let _ = RaffleConfig {
-            description,
-            end_time,
-            max_tickets,
-            allow_multiple,
-            ticket_price,
-            payment_token,
-            prize_amount,
-            randomness_source,
-            oracle_address,
-            protocol_fee_bp,
-            treasury_address: Some(treasury),
-            swap_router: None,
-            tikka_token: None,
-        };
-
         let mut final_config = config;
         final_config.protocol_fee_bp = protocol_fee_bp;
         final_config.treasury_address = Some(treasury);
 
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         let factory_address = env.current_contract_address();
-        
+
         // Salt for deployment
-         let salt = env.crypto().sha256(&(creator.clone(), config.description.clone()).to_xdr(&env));
-         let raffle_address = env.deployer().with_address(factory_address.clone(), salt).deploy(wasm_hash);
+        let salt = env
+            .crypto()
+            .sha256(&(creator.clone(), final_config.description.clone()).to_xdr(&env));
+        let raffle_address = env
+            .deployer()
+            .with_address(factory_address.clone(), salt)
+            .deploy(wasm_hash);
 
         let client = instance::ContractClient::new(&env, &raffle_address);
         client.init(&factory_address, &admin, &creator, &final_config);
-
 
         instances.push_back(raffle_address.clone());
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
-
 
         // Update global stats
         let mut count: u32 = env
@@ -420,10 +418,7 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::TotalRafflesCreated, &count);
 
-        Ok(creator)
-
         Ok(raffle_address)
-
     }
 
     pub fn get_protocol_stats(env: Env) -> ProtocolStats {
@@ -442,11 +437,17 @@ impl RaffleFactory {
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false);
+        let total_unique_participants: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalUniqueParticipants)
+            .unwrap_or(0);
 
         ProtocolStats {
             total_raffles_created,
             protocol_fee_bp,
             paused,
+            total_unique_participants,
         }
     }
 
@@ -505,7 +506,11 @@ impl RaffleFactory {
         }
 
         let has_more = (offset + items.len()) < total;
-        PageResult_Raffles { items, total, has_more }
+        PageResult_Raffles {
+            items,
+            total,
+            has_more,
+        }
     }
 
     pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResult_Raffles {
@@ -534,7 +539,11 @@ impl RaffleFactory {
         }
 
         let has_more = (offset + items.len()) < total;
-        PageResult_Raffles { items, total, has_more }
+        PageResult_Raffles {
+            items,
+            total,
+            has_more,
+        }
     }
 
     pub fn pause(env: Env) -> Result<(), ContractError> {
@@ -637,9 +646,7 @@ impl RaffleFactory {
     }
 
     pub fn get_checkpoint(env: Env, index: u32) -> Option<StateCheckpoint> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Checkpoint(index))
+        env.storage().persistent().get(&DataKey::Checkpoint(index))
     }
 
     pub fn get_latest_checkpoint_index(env: Env) -> u32 {
@@ -647,6 +654,8 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::LatestCheckpointIndex)
             .unwrap_or(0u32)
+    }
+
     pub fn accept_ownership(env: Env) -> Result<(), ContractError> {
         Self::accept_admin(env)
     }
@@ -703,19 +712,35 @@ impl RaffleFactory {
 
     /// Get fairness proof data for a finalized raffle
     /// Returns all data used to select the winner for transparency
-    pub fn get_fairness_proof(env: Env, instance_address: Address) -> Result<FairnessData, ContractError> {
+    pub fn get_fairness_proof(
+        env: Env,
+        instance_address: Address,
+    ) -> Result<FairnessData, ContractError> {
         let instance_client = instance::ContractClient::new(&env, &instance_address);
-        instance_client.get_fairness_proof().map_err(|_| ContractError::RaffleNotFound)
+        Ok(instance_client.get_fairness_proof())
+    }
+
     // rate
     pub fn set_creation_delay(env: Env, delay_seconds: u64) -> Result<(), ContractError> {
         require_factory_admin(&env)?;
-        env.storage().persistent().set(&DataKey::MinCreationDelay, &delay_seconds);
+        env.storage()
+            .persistent()
+            .set(&DataKey::MinCreationDelay, &delay_seconds);
         Ok(())
     }
 
-    pub fn set_whitelist_status(env: Env, partner: Address, status: bool) -> Result<(), ContractError> {
+    pub fn set_whitelist_status(
+        env: Env,
+        partner: Address,
+        status: bool,
+    ) -> Result<(), ContractError> {
         require_factory_admin(&env)?;
-        env.storage().persistent().set(&DataKey::WhitelistedPartner(partner), &status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WhitelistedPartner(partner), &status);
+        Ok(())
+    }
+
     /// Deletes all on-chain data for a raffle that has been in a terminal state
     /// for more than 90 days (7,776,000 seconds), reclaiming storage rent.
     pub fn clean_old_raffle(env: Env, raffle_id: u32) -> Result<(), ContractError> {
@@ -746,8 +771,13 @@ impl RaffleFactory {
         // 4. Wipe instance storage
         instance_client.wipe_storage();
 
-        // 5. Registry compaction (swap-remove)
-        instances.swap_remove(raffle_id);
+        // 5. Registry compaction (swap-remove equivalent for soroban_sdk::Vec)
+        let last_index = instances.len().saturating_sub(1);
+        if raffle_id != last_index {
+            let last_item = instances.get(last_index).unwrap();
+            instances.set(raffle_id, last_item);
+        }
+        instances.remove(last_index);
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
@@ -772,8 +802,8 @@ impl RaffleFactory {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events},
-        Address, Bytes, BytesN, Env, String,
+        testutils::{Address as _, Events, Ledger},
+        Address, Bytes, BytesN, Env, String, TryFromVal,
     };
 
     // -------------------------------------------------------------------------
@@ -821,35 +851,25 @@ mod tests {
         (creator, config)
     }
 
-
     // Test case that attempts to create two raffles back-to-back. The second attempt should fail with RateLimitExceeded. Then we fast forward time and try again, which should succeed.
     #[test]
     fn test_create_raffle_rate_limiting() {
         let env = Env::default();
         env.mock_all_auths();
-        
+
         //  Setup
-        let (client, admin, _) = setup_factory(&env);
-        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
-            make_raffle_args(&env);
+        let (client, _admin, _) = setup_factory(&env);
+        let (creator, config) = make_raffle_args(&env);
 
         // Set a 5-minute limit (300 seconds)
         client.set_creation_delay(&300u64);
 
         //  First creation (should succeed)
-        let res1 = client.try_create_raffle(
-            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
-            &ticket_price, &payment_token, &prize_amount, 
-            &instance::RandomnessSource::Internal, &None
-        );
+        let res1 = client.try_create_raffle(&creator, &config);
         assert!(res1.is_ok());
 
         //  Immediate second creation (should fail)
-        let res2 = client.try_create_raffle(
-            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
-            &ticket_price, &payment_token, &prize_amount, 
-            &instance::RandomnessSource::Internal, &None
-        );
+        let res2 = client.try_create_raffle(&creator, &config);
         assert_eq!(res2, Err(Ok(ContractError::RateLimitExceeded)));
 
         //  Advance time by 301 seconds
@@ -858,11 +878,7 @@ mod tests {
         });
 
         //  Third creation (should succeed now)
-        let res3 = client.try_create_raffle(
-            &creator, &desc, &end_time, &max_tickets, &allow_multiple, 
-            &ticket_price, &payment_token, &prize_amount, 
-            &instance::RandomnessSource::Internal, &None
-        );
+        let res3 = client.try_create_raffle(&creator, &config);
         assert!(res3.is_ok());
     }
 
@@ -871,14 +887,14 @@ mod tests {
     fn test_whitelisted_partner_bypass() {
         let env = Env::default();
         env.mock_all_auths();
-        let (client, admin, _) = setup_factory(&env);
-        let (creator, desc, _, _, _, _, _, _) = make_raffle_args(&env);
+        let (client, _admin, _) = setup_factory(&env);
+        let (creator, config) = make_raffle_args(&env);
 
         client.set_whitelist_status(&creator, &true);
 
         // Create two raffles in the same ledger timestamp
-        let res1 = client.try_create_raffle(/* ...args... */);
-        let res2 = client.try_create_raffle(/* ...args... */);
+        let res1 = client.try_create_raffle(&creator, &config);
+        let res2 = client.try_create_raffle(&creator, &config);
 
         assert!(res1.is_ok());
         assert!(res2.is_ok()); // Should succeed because of whitelist
@@ -1049,10 +1065,7 @@ mod tests {
     // Helper: register a RaffleInstance and initialise it with the given factory
     // address. Returns the instance client.
     // =========================================================================
-    fn setup_instance<'a>(
-        env: &'a Env,
-        factory_addr: &Address,
-    ) -> instance::ContractClient<'a> {
+    fn setup_instance<'a>(env: &'a Env, factory_addr: &Address) -> instance::ContractClient<'a> {
         let admin = Address::generate(env);
         let creator = Address::generate(env);
         let token_admin = Address::generate(env);
@@ -1169,7 +1182,7 @@ mod tests {
         env.mock_all_auths();
         let admin = Address::generate(&env);
         let treasury = Address::generate(&env);
-        let wasm_hash = Bytes::from_slice(&env, &[0u8; 32]);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
@@ -1245,7 +1258,7 @@ mod tests {
         // Do NOT call mock_all_auths — view functions must work without auth
         let admin = Address::generate(&env);
         let treasury = Address::generate(&env);
-        let wasm_hash = Bytes::from_slice(&env, &[0u8; 32]);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
@@ -1287,21 +1300,8 @@ mod tests {
     fn create_n_raffles(env: &Env, client: &RaffleFactoryClient<'_>, n: u32) {
         env.budget().reset_unlimited();
         for _ in 0..n {
-            let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
-                make_raffle_args(env);
-            client
-                .create_raffle(
-                    &creator,
-                    &desc,
-                    &end_time,
-                    &max_tickets,
-                    &allow_multiple,
-                    &ticket_price,
-                    &payment_token,
-                    &prize_amount,
-                    &instance::RandomnessSource::Internal,
-                    &None,
-                );
+            let (creator, config) = make_raffle_args(env);
+            client.create_raffle(&creator, &config);
         }
     }
 
@@ -1362,7 +1362,7 @@ mod tests {
         input.extend_from_array(&1_000u32.to_be_bytes());
         input.extend_from_array(&ledger_seq.to_be_bytes());
         input.extend_from_array(&ledger_ts.to_be_bytes());
-        let expected_hash = env.crypto().sha256(&input);
+        let expected_hash: BytesN<32> = env.crypto().sha256(&input).into();
 
         assert_eq!(cp.aggregate_hash, expected_hash);
     }
@@ -1403,7 +1403,7 @@ mod tests {
         // Initialise with auth mocked, then drop mock for query calls
         let admin = Address::generate(&env);
         let treasury = Address::generate(&env);
-        let wasm_hash = Bytes::from_slice(&env, &[0u8; 32]);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
         env.mock_all_auths();
@@ -1434,20 +1434,8 @@ mod tests {
         client.pause();
 
         // The 1000th raffle should be rejected
-        let (creator, desc, end_time, max_tickets, allow_multiple, ticket_price, payment_token, prize_amount) =
-            make_raffle_args(&env);
-        let result = client.try_create_raffle(
-            &creator,
-            &desc,
-            &end_time,
-            &max_tickets,
-            &allow_multiple,
-            &ticket_price,
-            &payment_token,
-            &prize_amount,
-            &instance::RandomnessSource::Internal,
-            &None,
-        );
+        let (creator, config) = make_raffle_args(&env);
+        let result = client.try_create_raffle(&creator, &config);
 
         assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
         // No checkpoint should have been created
@@ -1491,14 +1479,17 @@ mod tests {
             }
             // Decode the event payload as CheckpointCreated
             let event_data: events::CheckpointCreated =
-                soroban_sdk::FromVal::from_val(&env, data);
+                soroban_sdk::FromVal::from_val(&env, &data);
             event_data.index == cp.index
                 && event_data.raffle_count == cp.raffle_count
                 && event_data.ledger_timestamp == cp.ledger_timestamp
                 && event_data.aggregate_hash == cp.aggregate_hash
         });
 
-        assert!(found, "checkpoint_created event not found or payload mismatch");
+        assert!(
+            found,
+            "checkpoint_created event not found or payload mismatch"
+        );
     }
 
     // =========================================================================
@@ -1513,8 +1504,12 @@ mod tests {
 
         create_n_raffles(&env, &client, 2_000);
 
-        let cp1 = client.get_checkpoint(&1u32).expect("checkpoint 1 must exist");
-        let cp2 = client.get_checkpoint(&2u32).expect("checkpoint 2 must exist");
+        let cp1 = client
+            .get_checkpoint(&1u32)
+            .expect("checkpoint 1 must exist");
+        let cp2 = client
+            .get_checkpoint(&2u32)
+            .expect("checkpoint 2 must exist");
 
         assert_eq!(cp1.index, 1u32);
         assert_eq!(cp1.raffle_count, 1_000u32);
