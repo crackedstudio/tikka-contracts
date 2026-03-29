@@ -54,8 +54,8 @@ pub struct ProtocolStats {
     pub protocol_fee_bp: u32,
     pub paused: bool,
 
-    UniqueParticipant(Address),
-    TotalUniqueParticipants,
+    UniqueParticipant:(Address),
+    TotalUniqueParticipants: u32,
     MinCreationDelay, // Global config (u64 seconds)
     LastCreationTime(Address), // Per-user tracking
     WhitelistedPartner(Address), // For admin bypass
@@ -420,7 +420,7 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::TotalRafflesCreated, &count);
 
-        Ok(creator)
+        Ok(creator);
 
         Ok(raffle_address)
 
@@ -647,6 +647,8 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::LatestCheckpointIndex)
             .unwrap_or(0u32)
+    }
+
     pub fn accept_ownership(env: Env) -> Result<(), ContractError> {
         Self::accept_admin(env)
     }
@@ -706,6 +708,8 @@ impl RaffleFactory {
     pub fn get_fairness_proof(env: Env, instance_address: Address) -> Result<FairnessData, ContractError> {
         let instance_client = instance::ContractClient::new(&env, &instance_address);
         instance_client.get_fairness_proof().map_err(|_| ContractError::RaffleNotFound)
+    }
+
     // rate
     pub fn set_creation_delay(env: Env, delay_seconds: u64) -> Result<(), ContractError> {
         require_factory_admin(&env)?;
@@ -716,6 +720,8 @@ impl RaffleFactory {
     pub fn set_whitelist_status(env: Env, partner: Address, status: bool) -> Result<(), ContractError> {
         require_factory_admin(&env)?;
         env.storage().persistent().set(&DataKey::WhitelistedPartner(partner), &status);
+    }
+    
     /// Deletes all on-chain data for a raffle that has been in a terminal state
     /// for more than 90 days (7,776,000 seconds), reclaiming storage rent.
     pub fn clean_old_raffle(env: Env, raffle_id: u32) -> Result<(), ContractError> {

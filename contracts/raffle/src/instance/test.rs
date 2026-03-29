@@ -52,7 +52,7 @@ fn setup_raffle_env(
         description: String::from_str(env, "Audit Raffle"),
         end_time: 0,
         max_tickets: 5,
-        allow_multiple: false,
+        allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id,
         prize_amount: 100i128,
@@ -259,7 +259,7 @@ fn test_raffle_created_event() {
         description: String::from_str(&env, "Test Raffle"),
         end_time: 0,
         max_tickets: 5,
-        allow_multiple: false,
+        allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id,
         prize_amount: 100i128,
@@ -1789,7 +1789,7 @@ fn setup_factory_with_finalized_raffle(
         description: String::from_str(env, "Cleanup Test Raffle"),
         end_time: 0,
         max_tickets: 2,
-        allow_multiple: false,
+        allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
@@ -1914,7 +1914,7 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         description: String::from_str(&env, "A"),
         end_time: 0,
         max_tickets: 1,
-        allow_multiple: false,
+        allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
@@ -1940,7 +1940,7 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         description: String::from_str(&env, "B"),
         end_time: 0,
         max_tickets: 1,
-        allow_multiple: false,
+        allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
         prize_amount: 100i128,
@@ -2035,4 +2035,61 @@ fn test_instance_accept_without_proposal() {
     env.as_contract(&stranger, || {
         client.accept_ownership();
     });
+}
+
+#[test]
+fn test_multi_ticket_batch_purchase() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Note: If setup_raffle_env hardcodes allow_multiple to false, 
+    // you may need to update the helper or config manually.
+    let (client, _, buyer, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    
+    // Give buyer enough for 3 tickets (3 * 10 = 30)
+    admin_client.mint(&buyer, &30i128);
+
+    // Purchase 3 tickets in one transaction
+    // Note: This test assumes you updated setup_raffle_env or the raffle config 
+    // to have allow_multiple: true.
+    let total_sold = client.buy_tickets(&buyer, &3u32);
+
+    assert_eq!(total_sold, 3);
+    assert_eq!(token_client.balance(&buyer), 1000i128); // 1000 minted initially + 30 - 30
+    assert_eq!(client.balance(&buyer), 3);
+    
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.tickets_sold, 3);
+}
+
+#[test]
+fn test_batch_purchase_whale_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Setup: Internal randomness, no fees
+    let (client, _, buyer, admin_client, _, _) = 
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    
+    // Fund the buyer for a 5-ticket batch (5 * 10 = 50)
+    admin_client.mint(&buyer, &50i128);
+
+    // Purchase batch
+    let total_sold = client.buy_tickets(&buyer, &5u32);
+
+    // Assertions
+    assert_eq!(total_sold, 5);
+    assert_eq!(token_client.balance(&buyer), 1000i128); // 1000 (initial) + 50 (mint) - 50 (paid)
+    assert_eq!(client.balance(&buyer), 5); // NFT balance check
+    
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.tickets_sold, 5);
+    assert!(matches!(raffle.status, RaffleStatus::Drawing)); // Sold out (max_tickets is 5)
 }
