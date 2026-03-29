@@ -150,7 +150,31 @@ fn test_protocol_fees() {
 }
 
 #[test]
-fn test_calculate_protocol_fee_2_5_percent() {
+fn test_zero_fee_raffle_without_treasury_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _creator, _buyer, admin_client, _, _) = setup_raffle_env(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        0,
+        None,
+    );
+
+    let token_client = token::Client::new(&env, &admin_client.address);
+    client.deposit_prize();
+
+    let buyer = Address::generate(&env);
+    admin_client.mint(&buyer, &10i128);
+    let tickets_sold = client.buy_ticket(&buyer);
+
+    assert_eq!(tickets_sold, 1);
+    assert_eq!(token_client.balance(&buyer), 0i128);
+}
+
+#[test]
+fn test_protocol_fee_calculate_2_5_percent() {
     let (fee, net) = calculate_protocol_fee(1000, 250).expect("fee calc");
     assert_eq!(fee, 25);
     assert_eq!(net, 975);

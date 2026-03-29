@@ -543,11 +543,18 @@ impl Contract {
             return Err(Error::MultipleTicketsNotAllowed);
         }
 
-        let (fee_amount, _net_amount) = calculate_protocol_fee(raffle.ticket_price, raffle.protocol_fee_bp)?;
-        let treasury_address = raffle
-            .treasury_address
-            .clone()
-            .ok_or(Error::InvalidParameters)?;
+        let (fee_amount, _net_amount) =
+            calculate_protocol_fee(raffle.ticket_price, raffle.protocol_fee_bp)?;
+        let treasury_address = if fee_amount > 0 {
+            Some(
+                raffle
+                    .treasury_address
+                    .clone()
+                    .ok_or(Error::InvalidParameters)?,
+            )
+        } else {
+            None
+        };
 
         // Effects: update ALL state BEFORE external call (CEI pattern)
         let ticket_id = next_ticket_id(&env);
@@ -599,9 +606,13 @@ impl Contract {
 
         // Route protocol fee to treasury from contract's balance.
         if fee_amount > 0 {
-            token_client
-                .try_transfer(&contract_address, &treasury_address, &fee_amount)
-                .map_err(|_| Error::TokenTransferFailed)?;
+            if let Some(treasury_address) = treasury_address {
+                token_client
+                    .try_transfer(&contract_address, &treasury_address, &fee_amount)
+                    .map_err(|_| Error::TokenTransferFailed)?;
+            } else {
+                return Err(Error::InvalidParameters);
+            }
         }
 
         let mut ticket_ids = Vec::new(&env);
