@@ -4,6 +4,7 @@ use soroban_sdk::{
     Env, IntoVal, String, Symbol, Vec,
 };
 
+use self::randomness::{OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy};
 use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
@@ -14,6 +15,7 @@ use crate::events::{
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
+mod randomness;
 
 // --- External Contract Traits ---
 #[soroban_sdk::contractclient(name = "SoroswapRouterClient")]
@@ -644,18 +646,22 @@ impl Contract {
             return Ok(());
         }
 
-        // Optimize: Use NextTicketId as count instead of loading all tickets into Vec
         let total_tickets = get_ticket_count(&env);
+        let selector = PrngWinnerSelection::new(
+            env.ledger().timestamp(),
+            env.ledger().sequence(),
+            env.current_contract_address(),
+            raffle.tickets_sold,
+        );
+        let winning_ticket_ids =
+            selector.select_winner_indices(&env, total_tickets, raffle.prizes.len() as u32);
         let mut winners = Vec::new(&env);
-        let mut winning_ticket_ids = Vec::new(&env);
-        let mut current_seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
 
-        for i in 0..raffle.prizes.len() as u32 {
-            let winner_index = (current_seed % total_tickets as u64) as u32;
+        for i in 0..winning_ticket_ids.len() {
+            let winner_index = winning_ticket_ids.get(i).unwrap();
             let ticket_id = winner_index + 1;
             let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
             winners.push_back(winner.clone());
-            winning_ticket_ids.push_back(winner_index);
 
             env.events().publish(
                 (
@@ -670,9 +676,6 @@ impl Contract {
                     timestamp: env.ledger().timestamp(),
                 },
             );
-
-            // Change seed for the next winner
-            current_seed = current_seed.wrapping_add(1);
         }
 
         let mut claimed_winners = Vec::new(&env);
@@ -682,7 +685,7 @@ impl Contract {
 
         // Store fairness metadata for transparency
         let fairness_metadata = FairnessMetadata {
-            seed: current_seed,
+            seed: selector.seed_fingerprint(&env),
             randomness_source: raffle.randomness_source.clone(),
             winning_ticket_indices: winning_ticket_ids.clone(),
             draw_timestamp: env.ledger().timestamp(),
@@ -877,17 +880,16 @@ impl Contract {
             .instance()
             .remove(&DataKey::RandomnessRequestLedger);
 
+        let selector = OracleSeedWinnerSelection::new(random_seed);
+        let winning_ticket_ids =
+            selector.select_winner_indices(&env, total_tickets, raffle.prizes.len() as u32);
         let mut winners = Vec::new(&env);
-        let mut winning_ticket_ids = Vec::new(&env);
-        let mut current_seed = random_seed;
 
-        for i in 0..raffle.prizes.len() as u32 {
-            let winner_index = (current_seed % total_tickets as u64) as u32;
-            // Load only the winning ticket, not all tickets
+        for i in 0..winning_ticket_ids.len() {
+            let winner_index = winning_ticket_ids.get(i).unwrap();
             let ticket_id = winner_index + 1; // ticket IDs start at 1
             let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
             winners.push_back(winner.clone());
-            winning_ticket_ids.push_back(winner_index);
 
             env.events().publish(
                 (
@@ -902,8 +904,6 @@ impl Contract {
                     timestamp: env.ledger().timestamp(),
                 },
             );
-
-            current_seed = current_seed.wrapping_add(1);
         }
 
         let mut claimed_winners = Vec::new(&env);
@@ -1032,8 +1032,8 @@ impl Contract {
             return Err(Error::FallbackTooEarly);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
+        let total_tickets = get_ticket_count(&env);
+        if total_tickets == 0 {
             return Err(Error::NoTicketsSold);
         }
 
@@ -1045,23 +1045,21 @@ impl Contract {
             .instance()
             .remove(&DataKey::RandomnessRequestLedger);
 
-        // Derive fallback seed from ledger data (same PRNG as internal randomness)
-        let seed = env
-            .ledger()
-            .timestamp()
-            .wrapping_add(env.ledger().sequence() as u64);
-
+        let selector = PrngWinnerSelection::new(
+            env.ledger().timestamp(),
+            env.ledger().sequence(),
+            env.current_contract_address(),
+            raffle.tickets_sold,
+        );
+        let winning_ticket_ids =
+            selector.select_winner_indices(&env, total_tickets, raffle.prizes.len() as u32);
         let mut winners = Vec::new(&env);
-        let mut winning_ticket_ids = Vec::new(&env);
-        let mut current_seed = seed;
 
-        for i in 0..raffle.prizes.len() as u32 {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner_ticket = tickets
-                .get(winner_index)
-                .expect("Ticket out of bounds fallback");
-            winners.push_back(winner_ticket.owner.clone());
-            winning_ticket_ids.push_back(winner_index);
+        for i in 0..winning_ticket_ids.len() {
+            let winner_index = winning_ticket_ids.get(i).unwrap();
+            let ticket_id = winner_index + 1;
+            let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
+            winners.push_back(winner.clone());
 
             env.events().publish(
                 (
@@ -1070,14 +1068,12 @@ impl Contract {
                     winner_index,
                 ),
                 WinnerDrawn {
-                    winner: winner_ticket.owner.clone(),
+                    winner,
                     ticket_id: winner_index,
                     tier_index: i,
                     timestamp: env.ledger().timestamp(),
                 },
             );
-
-            current_seed = current_seed.wrapping_add(1);
         }
 
         let mut claimed_winners = Vec::new(&env);
@@ -1096,7 +1092,7 @@ impl Contract {
             "randomness_fallback_triggered",
             RandomnessFallbackTriggered {
                 triggered_by: caller,
-                seed_used: seed,
+                seed_used: selector.seed_fingerprint(&env),
                 request_ledger,
                 fallback_ledger: current_ledger,
                 timestamp: env.ledger().timestamp(),
@@ -1713,10 +1709,10 @@ impl Contract {
             env.storage().persistent().remove(&DataKey::RefundStatus(n));
         }
         // Remove per-buyer ticket counts
-        for ticket in tickets_list.iter() {
+        for buyer in tickets_list.iter() {
             env.storage()
                 .persistent()
-                .remove(&DataKey::TicketCount(ticket.owner.clone()));
+                .remove(&DataKey::TicketCount(buyer));
         }
         // Remove FinishTime
         env.storage().persistent().remove(&DataKey::FinishTime);
