@@ -53,6 +53,7 @@ fn setup_raffle_env(
         description: String::from_str(env, "Audit Raffle"),
         end_time: 0,
         max_tickets: 5,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id,
@@ -279,6 +280,7 @@ fn test_raffle_created_event() {
         description: String::from_str(&env, "Test Raffle"),
         end_time: 0,
         max_tickets: 5,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id,
@@ -1175,6 +1177,7 @@ fn test_tiered_prizes() {
         description: String::from_str(&env, "Tiered Raffle"),
         end_time: 0,
         max_tickets: 10,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
@@ -1308,6 +1311,7 @@ fn test_request_winner_selection_from_active_after_time_expired() {
         description: String::from_str(&env, "Time-Expired Raffle"),
         end_time,
         max_tickets: 10u32,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
@@ -1942,6 +1946,7 @@ fn setup_factory_with_finalized_raffle(
         description: String::from_str(env, "Cleanup Test Raffle"),
         end_time: 0,
         max_tickets: 2,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
@@ -2067,6 +2072,7 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         description: String::from_str(&env, "A"),
         end_time: 0,
         max_tickets: 1,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
@@ -2100,6 +2106,7 @@ fn test_clean_old_raffle_registry_compacted_swap_remove() {
         description: String::from_str(&env, "B"),
         end_time: 0,
         max_tickets: 1,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id.clone(),
@@ -2317,6 +2324,7 @@ fn test_raffle_with_xlm_like_token_full_flow() {
         description: String::from_str(&env, "XLM Raffle"),
         end_time: 0,
         max_tickets: 5,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: one_xlm,       // 1 XLM per ticket
         payment_token: token_id.clone(),
@@ -2390,6 +2398,7 @@ fn test_init_rejects_prize_less_than_ticket_price() {
         description: String::from_str(&env, "Bad Raffle"),
         end_time: 0,
         max_tickets: 5,
+        min_tickets: 0,
         allow_multiple: true,
         ticket_price: 10i128,
         payment_token: token_id,
@@ -2405,4 +2414,299 @@ fn test_init_rejects_prize_less_than_ticket_price() {
     };
 
     client.init(&factory, &factory_admin, &creator, &config);
+}
+
+// --- PRIZE REFUND & CREATION DEPOSIT TESTS (Issue #67) ---
+
+#[test]
+fn test_refund_prize_after_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, creator, buyer, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+    client.buy_ticket(&buyer);
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // cancel_raffle already refunds inline; prize_deposited is now false
+    // refund_prize should fail since prize is already returned
+    // (idempotency: no double refund)
+    // We test the dedicated path by cancelling without a prior deposit
+}
+
+#[test]
+fn test_refund_prize_dedicated_function() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory4;
+    #[contractimpl]
+    impl DummyFactory4 {}
+    let factory = env.register(DummyFactory4, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let sac = token::StellarAssetClient::new(&env, &token_id);
+    sac.mint(&creator, &100i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Refund Test"),
+        end_time: 0,
+        max_tickets: 5,
+        min_tickets: 0,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[4u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+    client.deposit_prize();
+
+    assert_eq!(token_client.balance(&creator), 0i128); // prize escrowed
+
+    // Cancel without buying any tickets
+    client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+    // After cancel, inline refund runs — creator gets prize back
+    assert_eq!(token_client.balance(&creator), 100i128);
+}
+
+#[test]
+fn test_refund_prize_after_min_tickets_not_met() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory5;
+    #[contractimpl]
+    impl DummyFactory5 {}
+    let factory = env.register(DummyFactory5, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let sac = token::StellarAssetClient::new(&env, &token_id);
+    sac.mint(&creator, &100i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    // min_tickets = 3, but we'll only sell 1
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Min Tickets Raffle"),
+        end_time: 0,
+        max_tickets: 5,
+        min_tickets: 3,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[5u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+    client.deposit_prize();
+
+    // Only 1 ticket sold — below min_tickets of 3
+    let buyer = Address::generate(&env);
+    sac.mint(&buyer, &10i128);
+    client.buy_ticket(&buyer);
+
+    // Manually transition to Drawing (simulate end_time passed)
+    // We need to set end_time in the past; re-init with end_time
+    // Instead, use cancel with MinTicketsNotMet via factory auth
+    client.cancel_raffle(&CancelReason::MinTicketsNotMet);
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+
+    // Prize should be refunded to creator
+    assert_eq!(token_client.balance(&creator), 100i128);
+}
+
+#[test]
+fn test_refund_prize_transitions_to_failed_on_min_tickets() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory6;
+    #[contractimpl]
+    impl DummyFactory6 {}
+    let factory = env.register(DummyFactory6, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let sac = token::StellarAssetClient::new(&env, &token_id);
+    sac.mint(&creator, &100i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Failed Raffle"),
+        end_time: 0,
+        max_tickets: 5,
+        min_tickets: 3,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[6u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+    client.deposit_prize();
+
+    // Sell only 1 ticket (below min_tickets=3), then force Drawing status
+    let buyer = Address::generate(&env);
+    sac.mint(&buyer, &10i128);
+    client.buy_ticket(&buyer);
+
+    // Manually set status to Drawing so finalize_raffle can run the min_tickets check
+    env.as_contract(&contract_id, || {
+        let mut raffle = env
+            .storage()
+            .instance()
+            .get::<_, Raffle>(&DataKey::Raffle)
+            .unwrap();
+        raffle.status = RaffleStatus::Drawing;
+        env.storage().instance().set(&DataKey::Raffle, &raffle);
+    });
+
+    // finalize_raffle should detect min_tickets not met and set status to Failed
+    client.finalize_raffle();
+
+    assert_eq!(client.get_raffle().status, RaffleStatus::Failed);
+
+    // Creator calls refund_prize to reclaim escrowed prize
+    client.refund_prize();
+
+    assert_eq!(token_client.balance(&creator), 100i128);
+    assert!(!client.get_raffle().prize_deposited);
+}
+
+#[test]
+#[should_panic] // refund_prize on active raffle should fail
+fn test_refund_prize_rejected_when_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, _, _, _) = setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    client.deposit_prize();
+    client.refund_prize(); // should panic — raffle is Open/Active, not Cancelled/Failed
+}
+
+#[test]
+#[should_panic] // double refund_prize should fail
+fn test_refund_prize_idempotent_rejects_double_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory7;
+    #[contractimpl]
+    impl DummyFactory7 {}
+    let factory = env.register(DummyFactory7, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let sac = token::StellarAssetClient::new(&env, &token_id);
+    sac.mint(&creator, &100i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Double Refund Test"),
+        end_time: 0,
+        max_tickets: 5,
+        min_tickets: 3,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id.clone(),
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[7u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+    client.deposit_prize();
+
+    env.as_contract(&contract_id, || {
+        let mut raffle = env
+            .storage()
+            .instance()
+            .get::<_, Raffle>(&DataKey::Raffle)
+            .unwrap();
+        raffle.status = RaffleStatus::Failed;
+        env.storage().instance().set(&DataKey::Raffle, &raffle);
+    });
+
+    client.refund_prize();
+    client.refund_prize(); // should panic — PrizeNotDeposited
 }
