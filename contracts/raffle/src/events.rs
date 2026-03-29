@@ -1,6 +1,7 @@
 use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
 
 use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
+use crate::AdminOp;
 
 // ============================================================================
 // LIFECYCLE EVENTS
@@ -70,6 +71,15 @@ pub struct RandomnessReceived {
     pub timestamp: u64,
 }
 
+/// Exact draw-quality label used for winner selection
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum RandomnessType {
+    Prng = 0,
+    Vrf = 1,
+    Fallback = 2,
+}
+
 /// Emitted when the raffle winner is determined
 #[derive(Clone)]
 #[contracttype]
@@ -78,7 +88,18 @@ pub struct RaffleFinalized {
     pub winning_ticket_ids: Vec<u32>,
     pub total_tickets_sold: u32,
     pub randomness_source: RandomnessSource,
+    pub randomness_type: RandomnessType,
     pub finalized_at: u64,
+}
+
+/// Emitted for each draw determining a winner
+#[derive(Clone)]
+#[contracttype]
+pub struct WinnerDrawn {
+    pub winner: Address,
+    pub ticket_id: u32,
+    pub tier_index: u32,
+    pub timestamp: u64,
 }
 
 /// Emitted when a raffle is cancelled by the creator
@@ -98,6 +119,16 @@ pub struct TicketRefunded {
     pub buyer: Address,
     pub ticket_id: u32,
     pub amount: i128,
+    pub timestamp: u64,
+}
+
+/// Emitted when a creator's verification status is updated
+#[derive(Clone)]
+#[contracttype]
+pub struct CreatorVerified {
+    pub creator: Address,
+    pub is_verified: bool,
+    pub admin: Address,
     pub timestamp: u64,
 }
 
@@ -127,6 +158,17 @@ pub struct BuybackAndBurnExecuted {
 // ============================================================================
 // ADMIN EVENTS
 // ============================================================================
+
+/// Emitted when the oracle timeout elapses and PRNG is used as fallback
+#[derive(Clone)]
+#[contracttype]
+pub struct RandomnessFallbackTriggered {
+    pub triggered_by: Address,
+    pub seed_used: u64,
+    pub request_ledger: u32,
+    pub fallback_ledger: u32,
+    pub timestamp: u64,
+}
 
 /// Emitted when the oracle address is updated
 #[derive(Clone)]
@@ -203,6 +245,50 @@ pub struct AdminTransferAccepted {
 }
 
 // ============================================================================
+// CLEANUP EVENT
+// ============================================================================
+
+/// Emitted when an old raffle's storage is wiped by the factory admin
+#[derive(Clone)]
+#[contracttype]
+pub struct RaffleCleanedUp {
+    pub raffle_address: Address,
+    pub cleaned_by: Address,
+    pub finish_time: u64,
+    pub cleaned_at: u64,
+// TIME-LOCKED ADMIN OPERATION EVENTS
+// ============================================================================
+
+/// Emitted when an admin operation is proposed
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpProposed {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub effective_timestamp: u64,
+    pub proposed_by: Address,
+}
+
+/// Emitted when an admin operation is executed
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpExecuted {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub executed_by: Address,
+    pub executed_at: u64,
+}
+
+/// Emitted when an admin operation is cancelled
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminOpCancelled {
+    pub op_id: u32,
+    pub cancelled_by: Address,
+    pub cancelled_at: u64,
+}
+
+// ============================================================================
 // INTERNAL STATE CHANGE EVENT
 // ============================================================================
 
@@ -213,4 +299,18 @@ pub struct StatusChanged {
     pub old_status: RaffleStatus,
     pub new_status: RaffleStatus,
     pub timestamp: u64,
+}
+
+// ============================================================================
+// CHECKPOINT EVENTS
+// ============================================================================
+
+/// Emitted when a periodic state checkpoint is created (every 1,000 raffles)
+#[derive(Clone)]
+#[contracttype]
+pub struct CheckpointCreated {
+    pub index: u32,
+    pub raffle_count: u32,
+    pub ledger_timestamp: u64,
+    pub aggregate_hash: soroban_sdk::BytesN<32>,
 }
