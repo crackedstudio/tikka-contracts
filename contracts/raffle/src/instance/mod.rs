@@ -9,7 +9,7 @@ use crate::types::{effective_limit, FairnessData, PageResult_Tickets, Pagination
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
     RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, StatusChanged,
-    TicketPurchased,
+    TicketPurchased, WinnerDrawn,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
@@ -427,9 +427,8 @@ impl Contract {
         env.storage().instance().set(&DataKey::Factory, &factory);
         env.storage().instance().set(&DataKey::Admin, &admin);
 
-        publish_event(
-            &env,
-            "raffle_created",
+        env.events().publish(
+            (Symbol::new(&env, "RaffleCreated"), creator.clone()),
             RaffleCreated {
                 creator,
                 end_time: config.end_time,
@@ -471,9 +470,8 @@ impl Contract {
             .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
 
-        publish_event(
-            &env,
-            "prize_deposited",
+        env.events().publish(
+            (Symbol::new(&env, "PrizeDeposited"), raffle.creator.clone()),
             PrizeDeposited {
                 creator: raffle.creator.clone(),
                 amount: raffle.prize_amount,
@@ -566,9 +564,8 @@ impl Contract {
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
 
-        publish_event(
-            &env,
-            "ticket_purchased",
+        env.events().publish(
+            (Symbol::new(&env, "TicketPurchased"), buyer.clone()),
             TicketPurchased {
                 buyer,
                 ticket_ids,
@@ -663,11 +660,23 @@ impl Contract {
         let mut winning_ticket_ids = Vec::new(&env);
         let mut current_seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
 
-        for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner_ticket = tickets.get(winner_index).expect("Ticket out of bounds");
-            winners.push_back(winner_ticket.owner);
+        for i in 0..raffle.prizes.len() as u32 {
+            let winner_index = (current_seed % total_tickets as u64) as u32;
+            let ticket_id = winner_index + 1;
+            let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
+            winners.push_back(winner.clone());
             winning_ticket_ids.push_back(winner_index);
+
+            env.events().publish(
+                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), winner_index),
+                WinnerDrawn {
+                    winner: winner.clone(),
+                    ticket_id: winner_index,
+                    tier_index: i,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+
             // Change seed for the next winner
             current_seed = current_seed.wrapping_add(1);
         }
@@ -867,13 +876,24 @@ impl Contract {
         let mut winning_ticket_ids = Vec::new(&env);
         let mut current_seed = random_seed;
 
-        for _ in 0..raffle.prizes.len() {
+        for i in 0..raffle.prizes.len() as u32 {
             let winner_index = (current_seed % total_tickets as u64) as u32;
             // Load only the winning ticket, not all tickets
             let ticket_id = winner_index + 1; // ticket IDs start at 1
             let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
-            winners.push_back(winner);
+            winners.push_back(winner.clone());
             winning_ticket_ids.push_back(winner_index);
+
+            env.events().publish(
+                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), winner_index),
+                WinnerDrawn {
+                    winner: winner.clone(),
+                    ticket_id: winner_index,
+                    tier_index: i,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+
             current_seed = current_seed.wrapping_add(1);
         }
 
@@ -1012,13 +1032,24 @@ impl Contract {
         let mut winning_ticket_ids = Vec::new(&env);
         let mut current_seed = seed;
 
-        for _ in 0..raffle.prizes.len() {
+        for i in 0..raffle.prizes.len() as u32 {
             let winner_index = (current_seed % tickets.len() as u64) as u32;
             let winner_ticket = tickets
                 .get(winner_index)
                 .expect("Ticket out of bounds fallback");
             winners.push_back(winner_ticket.owner.clone());
             winning_ticket_ids.push_back(winner_index);
+
+            env.events().publish(
+                (Symbol::new(&env, "WinnerDrawn"), winner_ticket.owner.clone(), winner_index),
+                WinnerDrawn {
+                    winner: winner_ticket.owner.clone(),
+                    ticket_id: winner_index,
+                    tier_index: i,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+
             current_seed = current_seed.wrapping_add(1);
         }
 
@@ -1232,9 +1263,8 @@ impl Contract {
 
         release_guard(&env);
 
-        publish_event(
-            &env,
-            "prize_claimed",
+        env.events().publish(
+            (Symbol::new(&env, "PrizeClaimed"), winner.clone()),
             PrizeClaimed {
                 winner: winner.clone(),
                 tier_index,

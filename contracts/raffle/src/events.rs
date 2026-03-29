@@ -90,6 +90,16 @@ pub struct RaffleFinalized {
     pub finalized_at: u64,
 }
 
+/// Emitted for each draw determining a winner
+#[derive(Clone)]
+#[contracttype]
+pub struct WinnerDrawn {
+    pub winner: Address,
+    pub ticket_id: u32,
+    pub tier_index: u32,
+    pub timestamp: u64,
+}
+
 /// Emitted when a raffle is cancelled by the creator
 #[derive(Clone)]
 #[contracttype]
