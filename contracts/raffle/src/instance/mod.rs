@@ -57,6 +57,7 @@ pub enum CancelReason {
 pub enum RandomnessSource {
     Internal = 0,
     External = 1,
+    CommitReveal = 2,
 }
 
 #[derive(Clone)]
@@ -172,6 +173,10 @@ pub enum DataKey {
     TicketOwner(u32),        // ticket_number -> Address
     FinishTime,
     PendingAdmin,
+    CommitHash(Address),     // commit-reveal: hash committed by participant
+    CommitCount,             // commit-reveal: number of commits received
+    RevealedSecret(Address), // commit-reveal: revealed secret bytes
+    RevealCount,             // commit-reveal: number of reveals received
 }
 
 // --- Error Types ---
@@ -222,6 +227,12 @@ pub enum Error {
     // Admin errors (51-60)
     AdminTransferPending = 51,
     NoPendingTransfer = 52,
+    // Commit-reveal errors (61-70)
+    AlreadyCommitted = 61,
+    NotCommitted = 62,
+    CommitHashMismatch = 63,
+    AlreadyRevealed = 64,
+    CommitRevealNotReady = 65,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -1174,6 +1185,246 @@ impl Contract {
 
         publish_event(
             &env,
+            "status_changed",
+            RaffleStatusChanged {
+                old_status: RaffleStatus::Drawing,
+                new_status: RaffleStatus::Finalized,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn commit_seed(env: Env, participant: Address, hash: BytesN<32>) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        participant.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        if raffle.randomness_source != RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+        if raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStateTransition);
+        }
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::CommitHash(participant.clone()))
+        {
+            return Err(Error::AlreadyCommitted);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::CommitHash(participant.clone()), &hash);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CommitCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::CommitCount, &(count + 1));
+
+        publish_event(
+            &env,
+            "seed_committed",
+            SeedCommitted {
+                participant,
+                hash,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn reveal_seed(env: Env, participant: Address, secret: Bytes) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        participant.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        if raffle.randomness_source != RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+        if raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        let committed_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::CommitHash(participant.clone()))
+            .ok_or(Error::NotCommitted)?;
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::RevealedSecret(participant.clone()))
+        {
+            return Err(Error::AlreadyRevealed);
+        }
+
+        // Verify hash(secret) == committed hash
+        let actual_hash = env.crypto().sha256(&secret);
+        if actual_hash != committed_hash {
+            return Err(Error::CommitHashMismatch);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::RevealedSecret(participant.clone()), &secret);
+        let reveal_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RevealCount)
+            .unwrap_or(0);
+        let new_reveal_count = reveal_count + 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::RevealCount, &new_reveal_count);
+
+        let commit_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CommitCount)
+            .unwrap_or(0);
+
+        publish_event(
+            &env,
+            "seed_revealed",
+            SeedRevealed {
+                participant,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        // If all commits have been revealed, derive the seed and finalize
+        if commit_count > 0 && new_reveal_count >= commit_count {
+            Contract::finalize_commit_reveal(&env, &mut read_raffle(&env)?)?;
+        }
+
+        Ok(())
+    }
+
+    fn finalize_commit_reveal(env: &Env, raffle: &mut Raffle) -> Result<(), Error> {
+        let commit_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CommitCount)
+            .unwrap_or(0);
+        if commit_count == 0 {
+            return Err(Error::CommitRevealNotReady);
+        }
+
+        // XOR all revealed secrets to derive the seed
+        let mut seed: u64 = 0;
+        // We iterate over all stored commits and read their corresponding reveals
+        // Since we can't enumerate keys, we rely on the fact that finalize is only
+        // called when reveal_count >= commit_count, meaning all participants revealed.
+        // The seed is accumulated via the PRNG seeded with each secret in sequence.
+        let mut seed_bytes = Bytes::new(env);
+        // Collect all revealed secrets by re-reading from storage via commit keys
+        // We use the raffle's ticket owners as the participant set for enumeration
+        let total_tickets = get_ticket_count(env);
+        let mut seen = soroban_sdk::Map::<Address, bool>::new(env);
+        for ticket_id in 1..=total_tickets {
+            if let Some(owner) = get_ticket_owner(env, ticket_id) {
+                if seen.contains_key(owner.clone()) {
+                    continue;
+                }
+                seen.set(owner.clone(), true);
+                if let Some(secret) = env
+                    .storage()
+                    .instance()
+                    .get::<_, Bytes>(&DataKey::RevealedSecret(owner))
+                {
+                    for byte in secret.iter() {
+                        seed_bytes.push_back(byte);
+                    }
+                }
+            }
+        }
+
+        // Derive final seed: sha256 of all concatenated secrets, take first 8 bytes as u64
+        let hash = env.crypto().sha256(&seed_bytes);
+        let hash_arr = hash.to_array();
+        seed = u64::from_be_bytes([
+            hash_arr[0], hash_arr[1], hash_arr[2], hash_arr[3],
+            hash_arr[4], hash_arr[5], hash_arr[6], hash_arr[7],
+        ]);
+
+        let total_tickets = get_ticket_count(env);
+        if total_tickets == 0 {
+            return Err(Error::NoTicketsSold);
+        }
+
+        let selector = OracleSeedWinnerSelection::new(seed);
+        let winning_ticket_ids =
+            selector.select_winner_indices(env, total_tickets, raffle.prizes.len() as u32);
+        let mut winners = Vec::new(env);
+
+        for i in 0..winning_ticket_ids.len() {
+            let winner_index = winning_ticket_ids.get(i).unwrap();
+            let ticket_id = winner_index + 1;
+            let winner = get_ticket_owner(env, ticket_id).ok_or(Error::TicketNotFound)?;
+            winners.push_back(winner.clone());
+
+            env.events().publish(
+                (Symbol::new(env, "WinnerDrawn"), winner.clone(), winner_index),
+                WinnerDrawn {
+                    winner: winner.clone(),
+                    ticket_id: winner_index,
+                    tier_index: i,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
+
+        let mut claimed_winners = Vec::new(env);
+        for _ in 0..raffle.prizes.len() {
+            claimed_winners.push_back(false);
+        }
+
+        let fairness_metadata = FairnessMetadata {
+            seed,
+            randomness_source: raffle.randomness_source.clone(),
+            winning_ticket_indices: winning_ticket_ids.clone(),
+            draw_timestamp: env.ledger().timestamp(),
+            draw_sequence: env.ledger().sequence(),
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::RandomnessSeed, &fairness_metadata);
+
+        raffle.status = RaffleStatus::Finalized;
+        raffle.winners = winners.clone();
+        raffle.claimed_winners = claimed_winners;
+        raffle.finalized_at = Some(env.ledger().timestamp());
+        write_raffle(env, raffle);
+
+        if !env.storage().persistent().has(&DataKey::FinishTime) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::FinishTime, &env.ledger().timestamp());
+        }
+
+        publish_event(
+            env,
+            "raffle_finalized",
+            RaffleFinalized {
+                winners,
+                winning_ticket_ids,
+                total_tickets_sold: raffle.tickets_sold,
+                randomness_source: RandomnessSource::CommitReveal,
+                randomness_type: RandomnessType::Vrf,
+                finalized_at: env.ledger().timestamp(),
+            },
+        );
+
+        publish_event(
+            env,
             "status_changed",
             RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
