@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
 
 use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
 use crate::AdminOp;
@@ -20,12 +20,24 @@ pub struct RaffleCreated {
     pub prizes: Vec<u32>,
     pub description: String,
     pub randomness_source: RandomnessSource,
+    /// SHA-256 hash of the off-chain metadata (description, image, rules) on IPFS.
+    pub metadata_hash: BytesN<32>,
 }
 
 /// Emitted when the creator deposits the prize pool
 #[derive(Clone)]
 #[contracttype]
 pub struct PrizeDeposited {
+    pub creator: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when the creator reclaims the prize after cancellation or failure
+#[derive(Clone)]
+#[contracttype]
+pub struct PrizeRefunded {
     pub creator: Address,
     pub amount: i128,
     pub token: Address,
@@ -242,9 +254,23 @@ pub struct AdminTransferAccepted {
     pub timestamp: u64,
 }
 
-// ============================================================================
-// CLEANUP EVENT
-// ============================================================================
+/// Emitted when a participant commits a hash during commit-reveal randomness
+#[derive(Clone)]
+#[contracttype]
+pub struct SeedCommitted {
+    pub participant: Address,
+    pub hash: soroban_sdk::BytesN<32>,
+    pub timestamp: u64,
+}
+
+/// Emitted when a participant reveals their secret during commit-reveal randomness
+#[derive(Clone)]
+#[contracttype]
+pub struct SeedRevealed {
+    pub participant: Address,
+    pub timestamp: u64,
+}
+
 
 /// Emitted when an old raffle's storage is wiped by the factory admin
 #[derive(Clone)]
@@ -255,7 +281,6 @@ pub struct RaffleCleanedUp {
     pub finish_time: u64,
     pub cleaned_at: u64,
 }
-
 // TIME-LOCKED ADMIN OPERATION EVENTS
 // ============================================================================
 
@@ -295,7 +320,7 @@ pub struct AdminOpCancelled {
 /// Emitted when raffle status changes
 #[derive(Clone)]
 #[contracttype]
-pub struct StatusChanged {
+pub struct RaffleStatusChanged {
     pub old_status: RaffleStatus,
     pub new_status: RaffleStatus,
     pub timestamp: u64,
