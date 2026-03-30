@@ -2264,3 +2264,145 @@ fn test_batch_purchase_whale_flow() {
     assert_eq!(raffle.tickets_sold, 5);
     assert!(matches!(raffle.status, RaffleStatus::Drawing)); // Sold out (max_tickets is 5)
 }
+
+// --- MULTI-ASSET SUPPORT TESTS (Issue #66) ---
+
+/// Helper: create a raffle with a custom token that has a specific decimal count.
+/// Soroban's register_stellar_asset_contract_v2 always gives 7 decimals (XLM-like),
+/// so we use it for both tests and verify decimals via get_token_decimals.
+#[test]
+fn test_get_token_decimals_returns_correct_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, _, admin_client, _, _) =
+        setup_raffle_env(&env, RandomnessSource::Internal, None, 0, None);
+
+    // Stellar asset contracts default to 7 decimals (same as XLM stroops)
+    let decimals = client.get_token_decimals();
+    assert_eq!(decimals, 7u32);
+    let _ = admin_client; // suppress unused warning
+}
+
+#[test]
+fn test_raffle_with_xlm_like_token_full_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory2;
+    #[contractimpl]
+    impl DummyFactory2 {}
+    let factory = env.register(DummyFactory2, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let sac = token::StellarAssetClient::new(&env, &token_id);
+
+    // XLM has 7 decimals: 1 XLM = 10_000_000 stroops
+    let one_xlm: i128 = 10_000_000;
+    sac.mint(&creator, &(100 * one_xlm)); // 100 XLM for prize
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "XLM Raffle"),
+        end_time: 0,
+        max_tickets: 5,
+        allow_multiple: true,
+        ticket_price: one_xlm,       // 1 XLM per ticket
+        payment_token: token_id.clone(),
+        prize_amount: 100 * one_xlm, // 100 XLM prize
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[2u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+
+    // decimals should be 7
+    assert_eq!(client.get_token_decimals(), 7u32);
+
+    client.deposit_prize();
+
+    for _ in 0..5 {
+        let buyer = Address::generate(&env);
+        sac.mint(&buyer, &one_xlm);
+        client.buy_ticket(&buyer);
+    }
+
+    client.finalize_raffle();
+
+    let raffle = client.get_raffle();
+    let winner = raffle.winners.get(0).unwrap();
+    env.ledger().with_mut(|l| l.timestamp += 3600);
+    let claimed = client.claim_prize(&winner, &0);
+
+    // Winner should receive 100 XLM in stroops
+    assert_eq!(claimed, 100 * one_xlm);
+
+    let token_client = token::Client::new(&env, &token_id);
+    assert_eq!(token_client.balance(&winner), 100 * one_xlm + one_xlm); // prize + their own ticket refund not applicable (they paid)
+    // Actually winner paid 1 XLM for ticket and got 100 XLM prize back
+    assert_eq!(token_client.balance(&winner), 100 * one_xlm);
+}
+
+#[test]
+#[should_panic] // prize_amount < ticket_price should be rejected
+fn test_init_rejects_prize_less_than_ticket_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+
+    #[contract]
+    pub struct DummyFactory3;
+    #[contractimpl]
+    impl DummyFactory3 {}
+    let factory = env.register(DummyFactory3, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let mut prizes = Vec::new(&env);
+    prizes.push_back(10000u32);
+
+    // prize_amount (5) < ticket_price (10) — should panic
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Bad Raffle"),
+        end_time: 0,
+        max_tickets: 5,
+        allow_multiple: true,
+        ticket_price: 10i128,
+        payment_token: token_id,
+        prize_amount: 5i128, // less than ticket_price
+        prizes,
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[3u8; 32]),
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+}

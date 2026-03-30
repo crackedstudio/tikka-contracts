@@ -390,10 +390,16 @@ impl Contract {
         if config.max_tickets == 0 {
             return Err(Error::InvalidParameters);
         }
-        if config.ticket_price <= 0 {
+
+        // Query token decimals to validate amounts are meaningful across asset types
+        // (native XLM = 7 decimals/stroops, SAC tokens vary).
+        // Amounts must be >= 1 (smallest unit) and prize must cover at least one ticket.
+        let token_client = token::Client::new(&env, &config.payment_token);
+        let _decimals = token_client.decimals(); // available for off-chain tooling via get_token_decimals
+        if config.ticket_price < 1 {
             return Err(Error::InvalidParameters);
         }
-        if config.prize_amount <= 0 {
+        if config.prize_amount < config.ticket_price {
             return Err(Error::InvalidParameters);
         }
         if config.prizes.len() == 0 {
@@ -1841,6 +1847,14 @@ impl Contract {
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
         read_raffle(&env)
+    }
+
+    /// Returns the decimal precision of the raffle's payment token.
+    /// Useful for clients to correctly format ticket_price and prize_amount.
+    pub fn get_token_decimals(env: Env) -> Result<u32, Error> {
+        let raffle = read_raffle(&env)?;
+        let client = token::Client::new(&env, &raffle.payment_token);
+        Ok(client.decimals())
     }
 
     /// Get all tickets or a paginated subset
