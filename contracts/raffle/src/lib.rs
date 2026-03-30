@@ -379,11 +379,7 @@ impl RaffleFactory {
             .get(&DataKey::InstanceWasmHash)
             .unwrap();
 
-        let protocol_fee_bp: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ProtocolFeeBP)
-            .unwrap_or(0);
+        let protocol_fee_bp: u32 = env.storage().persistent().get(&DataKey::ProtocolFeeBP).unwrap_or(0);
         let treasury: Address = env.storage().persistent().get(&DataKey::Treasury).unwrap();
 
         let mut instances: Vec<Address> = env

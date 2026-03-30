@@ -246,11 +246,23 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if Contract::is_paused(env.clone()) {
-        return Err(Error::ContractPaused);
+fn calculate_protocol_fee(amount: i128, fee_bp: u32) -> Result<(i128, i128), Error> {
+    // fee is computed in basis points, where 10,000 bp = 100%.
+    // This avoids floating point and supports precise financial calculations.
+    if fee_bp > 10_000 {
+        return Err(Error::InvalidParameters);
     }
-    Ok(())
+    if amount < 0 {
+        return Err(Error::InvalidParameters);
+    }
+
+    let fee = amount
+        .checked_mul(fee_bp as i128)
+        .ok_or(Error::ArithmeticOverflow)?
+        .checked_div(10_000)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let net = amount.checked_sub(fee).ok_or(Error::ArithmeticOverflow)?;
+    Ok((fee, net))
 }
 
 fn get_ticket_count(env: &Env) -> u32 {
@@ -597,6 +609,7 @@ impl Contract {
         // Single atomic transfer for the entire batch
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
+
         token_client
             .try_transfer(&buyer, &contract_address, &total_price)
             .map_err(|_| Error::TokenTransferFailed)?;
