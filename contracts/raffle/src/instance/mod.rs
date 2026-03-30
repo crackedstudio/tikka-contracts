@@ -8,9 +8,9 @@ use self::randomness::{OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSel
 use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
-    DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
-    RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested,
-    SeedCommitted, SeedRevealed, TicketPurchased, WinnerDrawn,
+    DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
+    RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
+    RandomnessRequested, SeedCommitted, SeedRevealed, TicketPurchased, WinnerDrawn,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
@@ -40,6 +40,7 @@ pub enum RaffleStatus {
     Drawing = 1,
     Finalized = 2,
     Cancelled = 3,
+    Failed = 4, // min_tickets threshold not met at draw time
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -66,6 +67,7 @@ pub struct Raffle {
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32, // 0 = no minimum; if > 0 and not met at draw, raffle fails
     pub allow_multiple: bool,
     pub ticket_price: i128,
     pub payment_token: Address,
@@ -92,6 +94,7 @@ pub struct RaffleConfig {
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32, // 0 = no minimum
     pub allow_multiple: bool,
     pub ticket_price: i128,
     pub payment_token: Address,
@@ -428,6 +431,7 @@ impl Contract {
             description: config.description.clone(),
             end_time: config.end_time,
             max_tickets: config.max_tickets,
+            min_tickets: config.min_tickets,
             allow_multiple: config.allow_multiple,
             ticket_price: config.ticket_price,
             payment_token: config.payment_token.clone(),
@@ -639,6 +643,23 @@ impl Contract {
 
         if raffle.tickets_sold == 0 {
             return Err(Error::NoTicketsSold);
+        }
+
+        // If a minimum ticket threshold was set and not met, mark as Failed
+        // so the creator can reclaim the prize via refund_prize.
+        if raffle.min_tickets > 0 && raffle.tickets_sold < raffle.min_tickets {
+            raffle.status = RaffleStatus::Failed;
+            write_raffle(&env, &raffle);
+            publish_event(
+                &env,
+                "status_changed",
+                RaffleStatusChanged {
+                    old_status: RaffleStatus::Drawing,
+                    new_status: RaffleStatus::Failed,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+            return Ok(());
         }
 
         publish_event(
@@ -1613,6 +1634,7 @@ impl Contract {
 
         if raffle.status == RaffleStatus::Finalized
             || raffle.status == RaffleStatus::Cancelled
+            || raffle.status == RaffleStatus::Failed
         {
             return Err(Error::InvalidStateTransition);
         }
@@ -1661,6 +1683,51 @@ impl Contract {
             RaffleStatusChanged {
                 old_status,
                 new_status: RaffleStatus::Cancelled,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Refund the escrowed prize back to the creator.
+    /// Only callable by the creator when the raffle is Cancelled or Failed.
+    /// Safe to call multiple times — idempotent once prize_deposited is false.
+    pub fn refund_prize(env: Env) -> Result<(), Error> {
+        let mut raffle = read_raffle(&env)?;
+        raffle.creator.require_auth();
+
+        if raffle.status != RaffleStatus::Cancelled && raffle.status != RaffleStatus::Failed {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        if !raffle.prize_deposited {
+            return Err(Error::PrizeNotDeposited);
+        }
+
+        // Effects first (CEI)
+        raffle.prize_deposited = false;
+        write_raffle(&env, &raffle);
+
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client
+            .try_transfer(&contract_address, &raffle.creator, &raffle.prize_amount)
+            .map_err(|_| {
+                // Roll back so creator can retry after token is fixed
+                let mut r = raffle.clone();
+                r.prize_deposited = true;
+                write_raffle(&env, &r);
+                Error::TokenTransferFailed
+            })?;
+
+        publish_event(
+            &env,
+            "prize_refunded",
+            PrizeRefunded {
+                creator: raffle.creator.clone(),
+                amount: raffle.prize_amount,
+                token: raffle.payment_token.clone(),
                 timestamp: env.ledger().timestamp(),
             },
         );

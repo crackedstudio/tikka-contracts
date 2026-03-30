@@ -34,6 +34,16 @@ pub struct PrizeDeposited {
     pub timestamp: u64,
 }
 
+/// Emitted when the creator reclaims the prize after cancellation or failure
+#[derive(Clone)]
+#[contracttype]
+pub struct PrizeRefunded {
+    pub creator: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub timestamp: u64,
+}
+
 /// Emitted when a user purchases one or more tickets
 #[derive(Clone)]
 #[contracttype]
