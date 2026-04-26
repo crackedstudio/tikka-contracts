@@ -703,7 +703,7 @@ fn test_creator_can_deposit_prize() {
 
     // Should succeed — creator auth is mocked
     client.deposit_prize();
-    assert_eq!(client.get_raffle().status, RaffleStatus::Open);
+    assert_eq!(client.get_raffle().status, RaffleStatus::Active);
 }
 
 /// require_creator: creator can finalize raffle
@@ -1092,7 +1092,7 @@ fn test_deposit_prize_cei_state_active_after_call() {
     client.deposit_prize();
 
     let raffle = client.get_raffle();
-    assert!(raffle.status == RaffleStatus::Open);
+    assert!(raffle.status == RaffleStatus::Active);
     assert!(raffle.prize_deposited);
 }
 

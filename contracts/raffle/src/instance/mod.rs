@@ -36,7 +36,7 @@ pub struct Contract;
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum RaffleStatus {
-    Open = 0,
+    Active = 0,
     Drawing = 1,
     Finalized = 2,
     Cancelled = 3,
@@ -471,7 +471,7 @@ impl Contract {
             prize_amount: config.prize_amount,
             prizes: config.prizes.clone(),
             tickets_sold: 0,
-            status: RaffleStatus::Open,
+            status: RaffleStatus::Active,
             prize_deposited: false,
             winners: Vec::new(&env),
             claimed_winners: Vec::new(&env),
@@ -512,7 +512,7 @@ impl Contract {
         require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Open {
+        if raffle.status != RaffleStatus::Active {
             return Err(Error::InvalidStateTransition);
         }
         if raffle.prize_deposited {
@@ -561,8 +561,11 @@ impl Contract {
         let mut raffle = read_raffle(&env)?;
 
         // --- 1. CHECKS ---
-        if raffle.status != RaffleStatus::Open {
+        if raffle.status != RaffleStatus::Active {
             return Err(Error::RaffleInactive);
+        }
+        if !raffle.prize_deposited {
+            return Err(Error::InvalidStateTransition);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
             return Err(Error::RaffleExpired);
@@ -608,7 +611,7 @@ impl Contract {
                 &env,
                 "status_changed",
                 RaffleStatusChanged {
-                    old_status: RaffleStatus::Open,
+                    old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp,
                 },
@@ -668,7 +671,7 @@ impl Contract {
         require_creator(&env)?;
         let mut raffle = read_raffle(&env)?;
 
-        if raffle.status == RaffleStatus::Open {
+        if raffle.status == RaffleStatus::Active {
             if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
                 || raffle.tickets_sold >= raffle.max_tickets
             {
@@ -677,7 +680,7 @@ impl Contract {
                     &env,
                     "status_changed",
                     RaffleStatusChanged {
-                        old_status: RaffleStatus::Open,
+                        old_status: RaffleStatus::Active,
                         new_status: RaffleStatus::Drawing,
                         timestamp: env.ledger().timestamp(),
                     },
@@ -861,7 +864,7 @@ impl Contract {
         }
 
         // Transition Active → Drawing if the raffle end conditions are satisfied
-        if raffle.status == RaffleStatus::Open {
+        if raffle.status == RaffleStatus::Active {
             let now = env.ledger().timestamp();
             let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
             let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
@@ -873,7 +876,7 @@ impl Contract {
                 &env,
                 "status_changed",
                 RaffleStatusChanged {
-                    old_status: RaffleStatus::Open,
+                    old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp: now,
                 },
