@@ -168,6 +168,7 @@ pub enum Error {
     MultipleTicketsNotAllowed = 32,
     NoTicketsSold = 33,
     TicketNotFound = 34,
+    TicketAlreadyRefunded = 35,
     
     // System errors (41-50)
     ArithmeticOverflow = 41,
@@ -880,18 +881,31 @@ impl Contract {
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
 
-        // Admin or Creator can cancel
         match reason {
-            CancelReason::CreatorCancelled => raffle.creator.require_auth(),
-            CancelReason::AdminCancelled
-            | CancelReason::OracleTimeout
-            | CancelReason::MinTicketsNotMet => {
-                let _factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
-                if reason == CancelReason::AdminCancelled {
-                    raffle.creator.require_auth();
-                } else {
-                    raffle.creator.require_auth();
+            CancelReason::CreatorCancelled => {
+                // Creator can only cancel if no tickets have been sold yet
+                raffle.creator.require_auth();
+                if raffle.tickets_sold > 0 {
+                    return Err(Error::NotAuthorized);
                 }
+            }
+            CancelReason::AdminCancelled => {
+                // Factory/admin can cancel at any time
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotAuthorized)?;
+                admin.require_auth();
+            }
+            CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+                // Factory can trigger these system cancellations
+                let factory: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Factory)
+                    .ok_or(Error::NotAuthorized)?;
+                factory.require_auth();
             }
         }
 
@@ -912,7 +926,7 @@ impl Contract {
         }
         write_raffle(&env, &raffle);
 
-        // Interaction: external token transfer
+        // Interaction: return prize to creator
         if should_refund_prize {
             let token_client = token::Client::new(&env, &raffle.payment_token);
             let contract_address = env.current_contract_address();
@@ -946,19 +960,23 @@ impl Contract {
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
         let raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Cancelled {
+        // Allow refunds for Cancelled raffles, or Active/Drawing raffles that have expired
+        // without being finalized (failed raffle scenario)
+        let is_cancelled = raffle.status == RaffleStatus::Cancelled;
+        let is_expired_and_failed = (raffle.status == RaffleStatus::Active
+            || raffle.status == RaffleStatus::Drawing)
+            && raffle.end_time != 0
+            && env.ledger().timestamp() > raffle.end_time;
+
+        if !is_cancelled && !is_expired_and_failed {
             return Err(Error::InvalidStateTransition);
         }
 
-        let ticket_opt = env
+        let ticket = env
             .storage()
             .persistent()
-            .get::<_, Ticket>(&DataKey::Ticket(ticket_id));
-        if ticket_opt.is_none() {
-            // Re-using InvalidParameters for missing ticket to avoid adding new error enum right now
-            return Err(Error::InvalidParameters);
-        }
-        let ticket = ticket_opt.unwrap();
+            .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
+            .ok_or(Error::TicketNotFound)?;
 
         ticket.owner.require_auth();
 
@@ -967,9 +985,8 @@ impl Contract {
             .persistent()
             .get(&DataKey::RefundStatus(ticket_id))
             .unwrap_or(false);
-        // Enforce idempotency
         if is_refunded {
-            return Err(Error::InvalidStateTransition);
+            return Err(Error::TicketAlreadyRefunded);
         }
 
         // Reentrancy guard
