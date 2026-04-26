@@ -151,8 +151,17 @@ impl RaffleFactory {
 
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         let factory_address = env.current_contract_address();
+
+        let salt = env.crypto().sha256(
+            &env.current_contract_address().to_xdr(&env).slice(0..32),
+        );
+        let raffle_address = env
+            .deployer()
+            .with_current_contract(salt)
+            .deploy_v2(wasm_hash, ());
+
         let client = instance::ContractClient::new(&env, &raffle_address);
-        client.init(&factory_address, &admin, &creator, &config);
+        client.init(&factory_address, &admin, &creator, &final_config);
 
         instances.push_back(raffle_address.clone());
         env.storage()

@@ -133,6 +133,7 @@ pub enum DataKey {
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
+    AccumulatedFees, // total protocol fees held in contract
 }
 
 // --- Error Types ---
@@ -160,6 +161,7 @@ pub enum Error {
     ContractPaused = 23,
     InvalidStateTransition = 24,
     RaffleExpired = 25,
+    RaffleEnded = 26,
     
     // Ticket errors (31-40)
     InsufficientTickets = 31,
@@ -493,6 +495,21 @@ impl Contract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&buyer, &contract_address, &raffle.ticket_price);
 
+        // Accumulate protocol fee from ticket revenue
+        if raffle.protocol_fee_bp > 0 {
+            let ticket_fee = (raffle.ticket_price * raffle.protocol_fee_bp as i128) / 10000;
+            if ticket_fee > 0 {
+                let current_fees: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AccumulatedFees)
+                    .unwrap_or(0i128);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AccumulatedFees, &(current_fees + ticket_fee));
+            }
+        }
+
         let mut ticket_ids = Vec::new(&env);
         ticket_ids.push_back(ticket_id);
 
@@ -817,12 +834,16 @@ impl Contract {
                         },
                     );
                 }
-            } else if raffle.treasury_address.is_some() {
-                token_client.transfer(
-                    &contract_address,
-                    &raffle.treasury_address.clone().unwrap(),
-                    &platform_fee,
-                );
+            } else {
+                // Accumulate fees for later withdrawal via withdraw_fees
+                let current_fees: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AccumulatedFees)
+                    .unwrap_or(0i128);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AccumulatedFees, &(current_fees + platform_fee));
             }
         }
 
@@ -1130,6 +1151,61 @@ impl Contract {
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
+    }
+
+    pub fn withdraw_fees(env: Env) -> Result<i128, Error> {
+        require_not_paused(&env)?;
+
+        // Only admin can withdraw fees
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        let treasury = raffle.treasury_address.ok_or(Error::InvalidParameters)?;
+
+        let accumulated: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AccumulatedFees)
+            .unwrap_or(0i128);
+
+        if accumulated <= 0 {
+            return Ok(0);
+        }
+
+        // Effects: zero out fees BEFORE external call (CEI pattern)
+        env.storage()
+            .instance()
+            .set(&DataKey::AccumulatedFees, &0i128);
+
+        // Interaction: transfer to treasury
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &treasury, &accumulated);
+
+        publish_event(
+            &env,
+            "fees_withdrawn",
+            crate::events::FeesWithdrawn {
+                recipient: treasury,
+                amount: accumulated,
+                token: raffle.payment_token,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(accumulated)
+    }
+
+    pub fn get_accumulated_fees(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::AccumulatedFees)
+            .unwrap_or(0i128)
     }
 
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
