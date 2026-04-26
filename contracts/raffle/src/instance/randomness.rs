@@ -40,13 +40,14 @@ impl PrngWinnerSelection {
     }
 
     fn seed_bytes(&self, env: &Env) -> soroban_sdk::Bytes {
-        (
+        let xdr = (
             self.timestamp,
             self.sequence,
             self.raffle_id.clone(),
             self.tickets_sold,
         )
-            .to_xdr(env)
+            .to_xdr(env);
+        env.crypto().sha256(&xdr).into()
     }
 }
 
@@ -108,7 +109,10 @@ mod tests {
         let raffle_id = Address::generate(&env);
         let strategy = PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id, 17);
 
-        let indices = strategy.select_winner_indices(&env, 17, 25);
+        let contract_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let indices = env.as_contract(&contract_id, || {
+            strategy.select_winner_indices(&env, 17, 25)
+        });
         assert_eq!(indices.len(), 25);
         for idx in indices.iter() {
             assert!(idx < 17);
@@ -120,10 +124,15 @@ mod tests {
         let env = Env::default();
         let raffle_id = Address::generate(&env);
 
-        let first = PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id.clone(), 17)
-            .select_winner_indices(&env, 17, 8);
-        let second = PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id, 17)
-            .select_winner_indices(&env, 17, 8);
+        let contract_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address(); // just to have a contract
+        let first = env.as_contract(&contract_id, || {
+            PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id.clone(), 17)
+                .select_winner_indices(&env, 17, 8)
+        });
+        let second = env.as_contract(&contract_id, || {
+            PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id, 17)
+                .select_winner_indices(&env, 17, 8)
+        });
 
         assert_eq!(first, second);
     }

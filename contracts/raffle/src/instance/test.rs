@@ -10,6 +10,24 @@ use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token, Address, BytesN, Env, String, Symbol, TryFromVal,
 };
+#[contract]
+pub struct MockFactory;
+#[contractimpl]
+impl MockFactory {
+    pub fn record_volume(env: Env, token: Address, amount: i128) {}
+}
+
+#[contract]
+pub struct NativeMock;
+#[contractimpl]
+impl NativeMock {
+    pub fn name(env: Env) -> String { String::from_str(&env, "native") }
+    pub fn symbol(env: Env) -> String { String::from_str(&env, "XLM") }
+    pub fn decimals(env: Env) -> u32 { 7 }
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {}
+    pub fn balance(env: Env, owner: Address) -> i128 { 0 }
+}
+
 
 /// HELPER: Standardized environment setup
 fn setup_raffle_env(
@@ -32,11 +50,9 @@ fn setup_raffle_env(
     let factory_admin = Address::generate(env);
 
     // Register factory as a dummy contract so env.as_contract works
-    #[contract]
-    pub struct DummyFactory;
-    #[contractimpl]
-    impl DummyFactory {}
-    let factory = env.register(DummyFactory, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -1297,11 +1313,9 @@ fn test_tiered_prizes() {
     let admin = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory;
-    #[contractimpl]
-    impl DummyFactory {}
-    let factory = env.register(DummyFactory, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -1438,11 +1452,9 @@ fn test_request_winner_selection_from_active_after_time_expired() {
     let admin_client = token::StellarAssetClient::new(&env, &token_id);
     admin_client.mint(&creator, &1_000i128);
 
-    #[contract]
-    pub struct DummyFactory2;
-    #[contractimpl]
-    impl DummyFactory2 {}
-    let factory = env.register(DummyFactory2, ());
+    
+    
+    let factory = env.register(MockFactory, ());
     let factory_admin = Address::generate(&env);
 
     let contract_id = env.register(Contract, ());
@@ -2449,11 +2461,9 @@ fn test_raffle_with_xlm_like_token_full_flow() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory2;
-    #[contractimpl]
-    impl DummyFactory2 {}
-    let factory = env.register(DummyFactory2, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2527,11 +2537,9 @@ fn test_init_rejects_prize_less_than_ticket_price() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory3;
-    #[contractimpl]
-    impl DummyFactory3 {}
-    let factory = env.register(DummyFactory3, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2594,11 +2602,9 @@ fn test_refund_prize_dedicated_function() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory4;
-    #[contractimpl]
-    impl DummyFactory4 {}
-    let factory = env.register(DummyFactory4, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2652,11 +2658,9 @@ fn test_refund_prize_after_min_tickets_not_met() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory5;
-    #[contractimpl]
-    impl DummyFactory5 {}
-    let factory = env.register(DummyFactory5, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2718,11 +2722,9 @@ fn test_refund_prize_transitions_to_failed_on_min_tickets() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory6;
-    #[contractimpl]
-    impl DummyFactory6 {}
-    let factory = env.register(DummyFactory6, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2807,11 +2809,9 @@ fn test_refund_prize_idempotent_rejects_double_call() {
     let creator = Address::generate(&env);
     let factory_admin = Address::generate(&env);
 
-    #[contract]
-    pub struct DummyFactory7;
-    #[contractimpl]
-    impl DummyFactory7 {}
-    let factory = env.register(DummyFactory7, ());
+    
+    
+    let factory = env.register(MockFactory, ());
 
     let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
     let token_id = token_contract.address();
@@ -2858,4 +2858,41 @@ fn test_refund_prize_idempotent_rejects_double_call() {
 
     client.refund_prize();
     client.refund_prize(); // should panic — PrizeNotDeposited
+}
+
+#[test]
+fn test_native_xlm_support_detection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let native_addr = env.register(NativeMock, ());
+    let creator = Address::generate(&env);
+    let factory_admin = Address::generate(&env);
+    let factory = env.register(MockFactory, ());
+    
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Native Test"),
+        end_time: 0,
+        max_tickets: 10,
+        min_tickets: 0,
+        allow_multiple: true,
+        ticket_price: 100,
+        payment_token: native_addr.clone(),
+        prize_amount: 1000,
+        prizes: soroban_sdk::vec![&env, 10000],
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
+    };
+    
+    let contract_id = env.register(Contract, ());
+    let raffle_client = ContractClient::new(&env, &contract_id);
+    raffle_client.init(&factory, &factory_admin, &creator, &config);
+    
+    let buyer = Address::generate(&env);
+    raffle_client.buy_tickets(&buyer, &1);
 }
