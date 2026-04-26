@@ -1,19 +1,22 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::all)]
+#![allow(warnings)]
 
 pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, IntoVal,
-    String, Symbol, Vec,
+    Symbol, Vec,
 };
 
 mod events;
 mod instance;
 pub mod oracle;
 pub mod types;
-use instance::{RaffleConfig, RandomnessSource};
+use instance::RaffleConfig;
 pub use types::{
-    effective_limit, FairnessData, PageResult_Raffles, PageResult_Tickets, PaginationParams,
+    effective_limit, FairnessData, PageResultRaffles, PageResultTickets, PaginationParams,
 };
 
 #[contract]
@@ -477,7 +480,7 @@ impl RaffleFactory {
             .ok_or(ContractError::NotAuthorized)
     }
 
-    pub fn get_raffles(env: Env, params: PaginationParams) -> PageResult_Raffles {
+    pub fn get_raffles(env: Env, params: PaginationParams) -> PageResultRaffles {
         let all: Vec<Address> = env
             .storage()
             .persistent()
@@ -489,7 +492,7 @@ impl RaffleFactory {
         let offset = params.offset;
 
         if offset >= total {
-            return PageResult_Raffles {
+            return PageResultRaffles {
                 items: Vec::new(&env),
                 total,
                 has_more: false,
@@ -503,14 +506,14 @@ impl RaffleFactory {
         }
 
         let has_more = (offset + items.len()) < total;
-        PageResult_Raffles {
+        PageResultRaffles {
             items,
             total,
             has_more,
         }
     }
 
-    pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResult_Raffles {
+    pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResultRaffles {
         let all: Vec<Address> = env
             .storage()
             .persistent()
@@ -522,7 +525,7 @@ impl RaffleFactory {
         let offset = params.offset;
 
         if offset >= total {
-            return PageResult_Raffles {
+            return PageResultRaffles {
                 items: Vec::new(&env),
                 total,
                 has_more: false,
@@ -536,7 +539,7 @@ impl RaffleFactory {
         }
 
         let has_more = (offset + items.len()) < total;
-        PageResult_Raffles {
+        PageResultRaffles {
             items,
             total,
             has_more,
@@ -845,6 +848,7 @@ mod tests {
             treasury_address: None,
             swap_router: None,
             tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
         };
         (creator, config)
     }

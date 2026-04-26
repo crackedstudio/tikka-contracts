@@ -5,12 +5,12 @@ use soroban_sdk::{
 };
 
 use self::randomness::{OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy};
-use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
+use crate::types::FairnessData;
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
-    RandomnessRequested, SeedCommitted, SeedRevealed, TicketPurchased, WinnerDrawn,
+    RandomnessRequested, SeedCommitted, SeedRevealed, TicketPurchased, WinnerDrawn, RandomnessType,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
@@ -235,6 +235,13 @@ pub enum Error {
     CommitHashMismatch = 63,
     AlreadyRevealed = 64,
     CommitRevealNotReady = 65,
+}
+
+fn require_not_paused(env: &Env) -> Result<(), Error> {
+    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        return Err(Error::ContractPaused);
+    }
+    Ok(())
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -511,7 +518,7 @@ impl Contract {
 
 
         // --- 1. CHECKS ---
-        if raffle.status != RaffleStatus::Active {
+        if raffle.status != RaffleStatus::Open {
             return Err(Error::RaffleInactive);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
@@ -662,13 +669,6 @@ impl Contract {
         let winning_ticket_ids =
             selector.select_winner_indices(&env, total_tickets, raffle.prizes.len() as u32);
         let mut winners = Vec::new(&env);
-        let mut winning_ticket_ids = Vec::new(&env);
-
-        // Reseed the PRNG with all four independent sources before drawing.
-        // Each call to gen_range advances the ChaCha20 state, so successive
-        // winners are independent draws from the same seeded stream.
-        env.prng().seed(build_internal_seed(&env));
-        let n = tickets.len() as u64;
 
         for i in 0..winning_ticket_ids.len() {
             let winner_index = winning_ticket_ids.get(i).unwrap();
@@ -926,6 +926,11 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
+        let mut claimed_winners = Vec::new(&env);
+        for _ in 0..raffle.prizes.len() {
+            claimed_winners.push_back(false);
+        }
+
         // Store fairness metadata for transparency
         let fairness_metadata = FairnessMetadata {
             seed: random_seed,
@@ -983,7 +988,7 @@ impl Contract {
             },
         );
 
-        do_finalize_with_seed(&env, random_seed)
+        Ok(oracle)
     }
 
     pub fn verify_randomness_proof(
@@ -1079,7 +1084,7 @@ impl Contract {
             env.events().publish(
                 (
                     Symbol::new(&env, "WinnerDrawn"),
-                    winner_ticket.owner.clone(),
+                    winner.clone(),
                     winner_index,
                 ),
                 WinnerDrawn {
@@ -1212,7 +1217,8 @@ impl Contract {
 
         // Verify hash(secret) == committed hash
         let actual_hash = env.crypto().sha256(&secret);
-        if actual_hash != committed_hash {
+        let actual_hash_bytes = BytesN::from_array(&env, &actual_hash.to_array());
+        if actual_hash_bytes != committed_hash {
             return Err(Error::CommitHashMismatch);
         }
 
@@ -1459,7 +1465,6 @@ impl Contract {
                 rollback.set(tier_index, false);
                 let mut r = raffle.clone();
                 r.claimed_winners = rollback;
-                r.status = old_status.clone();
                 write_raffle(&env, &r);
                 release_guard(&env);
                 Error::TokenTransferFailed
@@ -1816,7 +1821,7 @@ impl Contract {
     pub fn get_fairness_proof(env: Env) -> Result<FairnessData, Error> {
         let raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
+        if raffle.status != RaffleStatus::Finalized {
             return Err(Error::InvalidStateTransition);
         }
 
@@ -1925,10 +1930,10 @@ impl Contract {
             env.storage().persistent().remove(&DataKey::RefundStatus(n));
         }
         // Remove per-buyer ticket counts
-        for buyer in tickets_list.iter() {
+        for ticket in tickets_list.iter() {
             env.storage()
                 .persistent()
-                .remove(&DataKey::TicketCount(buyer));
+                .remove(&DataKey::TicketCount(ticket.owner));
         }
         // Remove FinishTime
         env.storage().persistent().remove(&DataKey::FinishTime);

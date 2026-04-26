@@ -1,0 +1,1400 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/contracts/raffle/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/fuzz/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+    Checking hello-world v0.0.0 (/home/oseh/Applications/tikka-contracts/contracts/raffle)
+error[E0425]: cannot find value `admin_client` in this scope
+   --> contracts/raffle/src/instance/test.rs:300:50
+    |
+300 |     let token_client = token::Client::new(&env, &admin_client.address);
+    |                                                  ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `admin_client` in this scope
+   --> contracts/raffle/src/instance/test.rs:304:5
+    |
+304 |     admin_client.mint(&buyer, &100i128);
+    |     ^^^^^^^^^^^^ help: a local variable with a similar name exists: `token_client`
+
+warning: unused import: `String`
+ --> contracts/raffle/src/lib.rs:8:5
+  |
+8 |     String, Symbol, Vec,
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `PageResult_Tickets`, `PaginationParams`, and `effective_limit`
+ --> contracts/raffle/src/instance/mod.rs:8:20
+  |
+8 | use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
+  |                    ^^^^^^^^^^^^^^^                ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Bytes` and `IntoVal`
+ --> contracts/raffle/src/instance/test.rs:9:21
+  |
+9 |     token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, TryFromVal,
+  |                     ^^^^^               ^^^^^^^
+
+warning: type `ArbitraryPageResult_Raffles` should have an upper camel case name
+  --> contracts/raffle/src/types.rs:37:12
+   |
+37 | pub struct PageResult_Raffles {
+   |            ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `ArbitraryPageResultRaffles`
+   |
+   = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: type `ArbitraryPageResult_Tickets` should have an upper camel case name
+  --> contracts/raffle/src/types.rs:46:12
+   |
+46 | pub struct PageResult_Tickets {
+   |            ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `ArbitraryPageResultTickets`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:125:16
+    |
+125 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:159:16
+    |
+159 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:190:31
+    |
+190 |     let tickets_sold = client.buy_ticket(&buyer);
+    |                               ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `try_set_fee_bps` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:239:55
+    |
+239 |     let result = env.as_contract(&stranger, || client.try_set_fee_bps(&250));
+    |                                                       ^^^^^^^^^^^^^^^ method not found in `instance::ContractClient<'_>`
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `try_set_fee_bps` not found for this struct
+
+error[E0599]: no method named `set_fee_bps` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:277:16
+    |
+277 |         client.set_fee_bps(&500);
+    |                ^^^^^^^^^^^ method not found in `instance::ContractClient<'_>`
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `set_fee_bps` not found for this struct
+
+error[E0599]: no method named `set_treasury_address` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:296:16
+    |
+296 |         client.set_treasury_address(&treasury);
+    |                ^^^^^^^^^^^^^^^^^^^^ method not found in `instance::ContractClient<'_>`
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `set_treasury_address` not found for this struct
+
+error[E0599]: no method named `set_fee_bps` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:297:16
+    |
+297 |         client.set_fee_bps(&250);
+    |                ^^^^^^^^^^^ method not found in `instance::ContractClient<'_>`
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `set_fee_bps` not found for this struct
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:305:12
+    |
+305 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:337:16
+    |
+337 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:382:12
+    |
+382 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:395:12
+    |
+395 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:396:12
+    |
+396 |     client.buy_ticket(&buyer); // Should fail
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+   --> contracts/raffle/src/instance/test.rs:420:18
+    |
+420 |     let config = RaffleConfig {
+    |                  ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:473:16
+    |
+473 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:499:12
+    |
+499 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:517:16
+    |
+517 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:549:16
+    |
+549 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:581:16
+    |
+581 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:618:16
+    |
+618 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:647:16
+    |
+647 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:668:12
+    |
+668 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `Active` found for enum `instance::RaffleStatus` in the current scope
+   --> contracts/raffle/src/instance/test.rs:687:58
+    |
+687 |     assert_eq!(client.get_raffle().status, RaffleStatus::Active);
+    |                                                          ^^^^^^ variant or associated item not found in `instance::RaffleStatus`
+    |
+   ::: contracts/raffle/src/instance/mod.rs:38:1
+    |
+ 38 | pub enum RaffleStatus {
+    | --------------------- variant or associated item `Active` not found for this enum
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:702:16
+    |
+702 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:718:12
+    |
+718 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:740:12
+    |
+740 |     client.buy_ticket(&creator);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:757:12
+    |
+757 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:787:12
+    |
+787 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:806:12
+    |
+806 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:830:12
+    |
+830 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:851:16
+    |
+851 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:875:12
+    |
+875 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:899:12
+    |
+899 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:902:12
+    |
+902 |     client.buy_ticket(&buyer2);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:929:16
+    |
+929 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:954:12
+    |
+954 |     client.buy_ticket(&buyer);
+    |            ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+   --> contracts/raffle/src/instance/test.rs:985:16
+    |
+985 |         client.buy_ticket(&b);
+    |                ^^^^^^^^^^
+    |
+   ::: contracts/raffle/src/instance/mod.rs:33:1
+    |
+ 33 | #[contract]
+    | ----------- method `buy_ticket` not found for this struct
+    |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+   --> contracts/raffle/src/instance/mod.rs:395:1
+    |
+395 | #[contractimpl]
+    | ^^^^^^^^^^^^^^^
+    = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `Active` found for enum `instance::RaffleStatus` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1076:44
+     |
+1076 |     assert!(raffle.status == RaffleStatus::Active);
+     |                                            ^^^^^^ variant or associated item not found in `instance::RaffleStatus`
+     |
+    ::: contracts/raffle/src/instance/mod.rs:38:1
+     |
+  38 | pub enum RaffleStatus {
+     | --------------------- variant or associated item `Active` not found for this enum
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1091:29
+     |
+1091 |     let sold_count = client.buy_ticket(&buyer1);
+     |                             ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1099:30
+     |
+1099 |     let sold_count2 = client.buy_ticket(&buyer2);
+     |                              ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1117:16
+     |
+1117 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `Claimed` found for enum `instance::RaffleStatus` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1129:50
+     |
+1129 |     assert!(raffle_after.status == RaffleStatus::Claimed);
+     |                                                  ^^^^^^^ variant or associated item not found in `instance::RaffleStatus`
+     |
+    ::: contracts/raffle/src/instance/mod.rs:38:1
+     |
+  38 | pub enum RaffleStatus {
+     | --------------------- variant or associated item `Claimed` not found for this enum
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1144:16
+     |
+1144 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1162:12
+     |
+1162 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1197:12
+     |
+1197 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1223:12
+     |
+1223 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1246:12
+     |
+1246 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1266:12
+     |
+1266 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1274:16
+     |
+1274 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+    --> contracts/raffle/src/instance/test.rs:1317:18
+     |
+1317 |     let config = RaffleConfig {
+     |                  ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1341:16
+     |
+1341 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `Claimed` found for enum `instance::RaffleStatus` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1369:50
+     |
+1369 |     assert!(raffle_final.status == RaffleStatus::Claimed);
+     |                                                  ^^^^^^^ variant or associated item not found in `instance::RaffleStatus`
+     |
+    ::: contracts/raffle/src/instance/mod.rs:38:1
+     |
+  38 | pub enum RaffleStatus {
+     | --------------------- variant or associated item `Claimed` not found for this enum
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1403:16
+     |
+1403 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+    --> contracts/raffle/src/instance/test.rs:1451:18
+     |
+1451 |     let config = RaffleConfig {
+     |                  ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1473:12
+     |
+1473 |     client.buy_ticket(&creator);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1504:16
+     |
+1504 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1532:12
+     |
+1532 |     client.buy_ticket(&b);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1557:16
+     |
+1557 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1586:16
+     |
+1586 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1618:16
+     |
+1618 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1665:16
+     |
+1665 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1703:16
+     |
+1703 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1746:16
+     |
+1746 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1793:16
+     |
+1793 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1861:16
+     |
+1861 |         client.buy_ticket(&b);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1941:12
+     |
+1941 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1963:12
+     |
+1963 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:1980:12
+     |
+1980 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2012:12
+     |
+2012 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2037:12
+     |
+2037 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+    --> contracts/raffle/src/instance/test.rs:2086:18
+     |
+2086 |     let config = RaffleConfig {
+     |                  ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2115:21
+     |
+2115 |     instance_client.buy_ticket(&buyer);
+     |                     ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+    --> contracts/raffle/src/instance/test.rs:2212:20
+     |
+2212 |     let config_a = RaffleConfig {
+     |                    ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2237:14
+     |
+2237 |     client_a.buy_ticket(&buyer_a);
+     |              ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+    --> contracts/raffle/src/instance/test.rs:2246:20
+     |
+2246 |     let config_b = RaffleConfig {
+     |                    ^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2493:16
+     |
+2493 |         client.buy_ticket(&buyer);
+     |                ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2571:12
+     |
+2571 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2691:12
+     |
+2691 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `buy_ticket` found for struct `instance::ContractClient<'a>` in the current scope
+    --> contracts/raffle/src/instance/test.rs:2756:12
+     |
+2756 |     client.buy_ticket(&buyer);
+     |            ^^^^^^^^^^
+     |
+    ::: contracts/raffle/src/instance/mod.rs:33:1
+     |
+  33 | #[contract]
+     | ----------- method `buy_ticket` not found for this struct
+     |
+help: there is a method `buy_tickets` with a similar name, but with different arguments
+    --> contracts/raffle/src/instance/mod.rs:395:1
+     |
+ 395 | #[contractimpl]
+     | ^^^^^^^^^^^^^^^
+     = note: this error originates in the attribute macro `soroban_sdk::contractclient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+   --> contracts/raffle/src/lib.rs:833:22
+    |
+833 |         let config = instance::RaffleConfig {
+    |                      ^^^^^^^^^^^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0507]: cannot move out of `self.raffle_id` which is behind a shared reference
+  --> contracts/raffle/src/instance/randomness.rs:35:21
+   |
+35 |         for byte in self.raffle_id.to_xdr(env).iter() {
+   |                     ^^^^^^^^^^^^^^ ----------- `self.raffle_id` moved due to this method call
+   |                     |
+   |                     move occurs because `self.raffle_id` has type `soroban_sdk::Address`, which does not implement the `Copy` trait
+   |
+note: `soroban_sdk::xdr::ToXdr::to_xdr` takes ownership of the receiver `self`, which moves `self.raffle_id`
+  --> /home/oseh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-23.5.3/src/xdr.rs:36:15
+   |
+36 |     fn to_xdr(self, env: &Env) -> Bytes;
+   |               ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+   |
+35 |         for byte in <soroban_sdk::Address as Clone>::clone(&self.raffle_id).to_xdr(env).iter() {
+   |                     ++++++++++++++++++++++++++++++++++++++++              +
+help: consider cloning the value if the performance cost is acceptable
+   |
+35 |         for byte in self.raffle_id.clone().to_xdr(env).iter() {
+   |                                   ++++++++
+
+warning: unused variable: `old_status`
+   --> contracts/raffle/src/instance/mod.rs:585:17
+    |
+585 |             let old_status = raffle.status.clone();
+    |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_old_status`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `seed` is never read
+    --> contracts/raffle/src/instance/mod.rs:1341:29
+     |
+1341 |         let mut seed: u64 = 0;
+     |                             ^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `all_claimed` is assigned to, but never used
+    --> contracts/raffle/src/instance/mod.rs:1505:13
+     |
+1505 |         let mut all_claimed = true;
+     |             ^^^^^^^^^^^^^^^
+     |
+     = note: consider using `_all_claimed` instead
+
+warning: value assigned to `all_claimed` is never read
+    --> contracts/raffle/src/instance/mod.rs:1508:17
+     |
+1508 |                 all_claimed = false;
+     |                 ^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `admin_client`
+   --> contracts/raffle/src/instance/test.rs:768:24
+    |
+768 |     let (client, _, _, admin_client, _, _) =
+    |                        ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin_client`
+
+Some errors have detailed explanations: E0063, E0425, E0507, E0599.
+For more information about an error, try `rustc --explain E0063`.
+warning: `hello-world` (lib test) generated 10 warnings
+error: could not compile `hello-world` (lib test) due to 82 previous errors; 10 warnings emitted
