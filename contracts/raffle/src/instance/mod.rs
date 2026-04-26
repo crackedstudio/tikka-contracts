@@ -7,7 +7,7 @@ use crate::types::{effective_limit, PageResult_Tickets, PaginationParams};
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, RaffleCancelled, RaffleCreated, RaffleFinalized,
-    RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased,
+    RandomnessReceived, RandomnessRequested, StatusChanged, TicketPurchased, TicketRefunded,
 };
 
 // --- External Contract Traits ---
@@ -362,6 +362,7 @@ impl Contract {
                 prizes: config.prizes,
                 description: config.description,
                 randomness_source: config.randomness_source,
+                timestamp: env.ledger().timestamp(),
             },
         );
 
@@ -494,6 +495,7 @@ impl Contract {
                 buyer,
                 ticket_ids,
                 quantity: 1u32,
+                ticket_price: raffle.ticket_price,
                 total_paid: raffle.ticket_price,
                 timestamp,
             },
@@ -785,6 +787,7 @@ impl Contract {
                         "buyback_and_burn_executed",
                         crate::events::BuybackAndBurnExecuted {
                             router: router.clone(),
+                            payment_token: raffle.payment_token.clone(),
                             tikka_token: tikka.clone(),
                             amount_in: platform_fee,
                             amount_out,
@@ -800,6 +803,7 @@ impl Contract {
                         "buyback_and_burn_executed",
                         crate::events::BuybackAndBurnExecuted {
                             router: contract_address.clone(),
+                            payment_token: raffle.payment_token.clone(),
                             tikka_token: tikka.clone(),
                             amount_in: platform_fee,
                             amount_out: platform_fee,
@@ -828,6 +832,7 @@ impl Contract {
             PrizeClaimed {
                 winner: winner.clone(),
                 tier_index,
+                payment_token: raffle.payment_token.clone(),
                 gross_amount: tier_prize_amount,
                 net_amount,
                 platform_fee,
@@ -912,6 +917,7 @@ impl Contract {
                 creator: raffle.creator.clone(),
                 reason,
                 tickets_sold: raffle.tickets_sold,
+                prize_refunded: should_refund_prize,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -979,9 +985,9 @@ impl Contract {
         publish_event(
             &env,
             "ticket_refunded",
-            crate::events::TicketRefunded {
+            TicketRefunded {
                 buyer: ticket.owner.clone(),
-                ticket_id,
+                ticket_number: ticket_id,
                 amount: raffle.ticket_price,
                 timestamp: env.ledger().timestamp(),
             },

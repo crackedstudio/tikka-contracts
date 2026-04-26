@@ -6,7 +6,7 @@ use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
 // LIFECYCLE EVENTS
 // ============================================================================
 
-/// Emitted when a new raffle is initialized
+/// Emitted when a new raffle instance is initialized
 #[derive(Clone)]
 #[contracttype]
 pub struct RaffleCreated {
@@ -19,6 +19,7 @@ pub struct RaffleCreated {
     pub prizes: Vec<u32>,
     pub description: String,
     pub randomness_source: RandomnessSource,
+    pub timestamp: u64,
 }
 
 /// Emitted when the creator deposits the prize pool
@@ -31,13 +32,14 @@ pub struct PrizeDeposited {
     pub timestamp: u64,
 }
 
-/// Emitted when a user purchases one or more tickets
+/// Emitted when a user purchases a ticket
 #[derive(Clone)]
 #[contracttype]
 pub struct TicketPurchased {
     pub buyer: Address,
     pub ticket_ids: Vec<u32>,
     pub quantity: u32,
+    pub ticket_price: i128,
     pub total_paid: i128,
     pub timestamp: u64,
 }
@@ -79,13 +81,14 @@ pub struct RaffleFinalized {
     pub finalized_at: u64,
 }
 
-/// Emitted when a raffle is cancelled by the creator
+/// Emitted when a raffle is cancelled
 #[derive(Clone)]
 #[contracttype]
 pub struct RaffleCancelled {
     pub creator: Address,
     pub reason: CancelReason,
     pub tickets_sold: u32,
+    pub prize_refunded: bool,
     pub timestamp: u64,
 }
 
@@ -94,7 +97,7 @@ pub struct RaffleCancelled {
 #[contracttype]
 pub struct TicketRefunded {
     pub buyer: Address,
-    pub ticket_id: u32,
+    pub ticket_number: u32,
     pub amount: i128,
     pub timestamp: u64,
 }
@@ -105,6 +108,7 @@ pub struct TicketRefunded {
 pub struct PrizeClaimed {
     pub winner: Address,
     pub tier_index: u32,
+    pub payment_token: Address,
     pub gross_amount: i128,
     pub net_amount: i128,
     pub platform_fee: i128,
@@ -116,6 +120,7 @@ pub struct PrizeClaimed {
 #[contracttype]
 pub struct BuybackAndBurnExecuted {
     pub router: Address,
+    pub payment_token: Address,
     pub tikka_token: Address,
     pub amount_in: i128,
     pub amount_out: i128,
@@ -156,7 +161,7 @@ pub struct TreasuryUpdated {
     pub timestamp: u64,
 }
 
-/// Emitted when accumulated fees are withdrawn
+/// Emitted when accumulated fees are withdrawn to the treasury
 #[derive(Clone)]
 #[contracttype]
 pub struct FeesWithdrawn {
@@ -201,10 +206,43 @@ pub struct AdminTransferAccepted {
 }
 
 // ============================================================================
+// FACTORY EVENTS
+// ============================================================================
+
+/// Emitted when the factory is initialized
+#[derive(Clone)]
+#[contracttype]
+pub struct FactoryInitialized {
+    pub admin: Address,
+    pub protocol_fee_bp: u32,
+    pub treasury: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when a new raffle instance is deployed by the factory
+#[derive(Clone)]
+#[contracttype]
+pub struct RaffleDeployed {
+    pub raffle_address: Address,
+    pub creator: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when the factory protocol fee or treasury is updated via set_config
+#[derive(Clone)]
+#[contracttype]
+pub struct FactoryConfigUpdated {
+    pub protocol_fee_bp: u32,
+    pub treasury: Address,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
+
+// ============================================================================
 // INTERNAL STATE CHANGE EVENT
 // ============================================================================
 
-/// Emitted when raffle status changes
+/// Emitted on every raffle status transition
 #[derive(Clone)]
 #[contracttype]
 pub struct StatusChanged {

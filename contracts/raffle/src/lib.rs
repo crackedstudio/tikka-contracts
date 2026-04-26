@@ -99,6 +99,18 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+
+        publish_factory_event(
+            &env,
+            "factory_initialized",
+            events::FactoryInitialized {
+                admin,
+                protocol_fee_bp,
+                treasury,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         Ok(())
     }
 
@@ -107,13 +119,25 @@ impl RaffleFactory {
         protocol_fee_bp: u32,
         treasury: Address,
     ) -> Result<(), ContractError> {
-        require_factory_admin(&env)?;
+        let admin = require_factory_admin(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+
+        publish_factory_event(
+            &env,
+            "factory_config_updated",
+            events::FactoryConfigUpdated {
+                protocol_fee_bp,
+                treasury,
+                updated_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         Ok(())
     }
 
@@ -167,6 +191,16 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::RaffleInstances, &instances);
+
+        publish_factory_event(
+            &env,
+            "raffle_deployed",
+            events::RaffleDeployed {
+                raffle_address: raffle_address.clone(),
+                creator,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(raffle_address)
     }
