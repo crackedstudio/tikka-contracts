@@ -122,18 +122,17 @@ where
 #[contracttype]
 pub enum DataKey {
     Raffle,
-    Tickets,
-    TicketCount(Address),
-    Ticket(u32),
-    NextTicketId,
+    TicketCount(Address),  // per-buyer ticket count
+    Ticket(u32),           // ticket_number -> Ticket (1-indexed mapping)
+    TotalTickets,          // total tickets issued (used for range-based drawing)
     Factory,
-    RefundStatus(u32), // ticket_id -> bool
+    RefundStatus(u32),     // ticket_id -> bool
     ReentrancyGuard,
-    Approved(u32), // ticket_id -> Address
+    Approved(u32),         // ticket_id -> Address
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
     Paused,
     Admin,
-    AccumulatedFees, // total protocol fees held in contract
+    AccumulatedFees,       // total protocol fees held in contract
 }
 
 // --- Error Types ---
@@ -192,21 +191,10 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
 }
 
 fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if Contract::is_paused(env.clone()) {
+    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
         return Err(Error::ContractPaused);
     }
     Ok(())
-}
-
-fn read_tickets(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Tickets)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-fn write_tickets(env: &Env, tickets: &Vec<Ticket>) {
-    env.storage().instance().set(&DataKey::Tickets, tickets);
 }
 
 fn read_ticket_count(env: &Env, buyer: &Address) -> u32 {
@@ -222,28 +210,30 @@ fn write_ticket_count(env: &Env, buyer: &Address, count: u32) {
         .set(&DataKey::TicketCount(buyer.clone()), &count);
 }
 
-fn next_ticket_id(env: &Env) -> u32 {
-    let current = env
+/// Increment total ticket counter and return the new ticket number (1-indexed).
+fn next_ticket_number(env: &Env) -> u32 {
+    let current: u32 = env
         .storage()
         .instance()
-        .get(&DataKey::NextTicketId)
+        .get(&DataKey::TotalTickets)
         .unwrap_or(0u32);
     let next = current + 1;
-    env.storage().instance().set(&DataKey::NextTicketId, &next);
+    env.storage().instance().set(&DataKey::TotalTickets, &next);
     next
 }
 
-fn write_ticket(env: &Env, ticket: &Ticket) {
+/// Read a ticket by its 1-indexed ticket_number from the mapping.
+fn read_ticket_by_number(env: &Env, ticket_number: u32) -> Option<Ticket> {
     env.storage()
         .persistent()
-        .set(&DataKey::Ticket(ticket.id), ticket);
+        .get(&DataKey::Ticket(ticket_number))
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
+fn write_ticket(env: &Env, ticket: &Ticket) {
+    // Keyed by ticket_number (1-indexed) for O(1) range-based lookup during draws
+    env.storage()
+        .persistent()
+        .set(&DataKey::Ticket(ticket.ticket_number), ticket);
 }
 
 fn acquire_guard(env: &Env) -> Result<(), Error> {
@@ -260,14 +250,8 @@ fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
 }
 
-fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-        return Err(Error::ContractPaused);
-    }
-    Ok(())
-}
-
 fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+    // token_id is the ticket_number (1-indexed) — direct mapping lookup, no Vec needed
     let mut ticket = env
         .storage()
         .persistent()
@@ -290,13 +274,6 @@ fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(
 
     ticket.owner = to.clone();
     write_ticket(env, &ticket);
-
-    let mut all_tickets = read_tickets(env);
-    let index = ticket.ticket_number.saturating_sub(1) as u32;
-    let mut old_ticket = all_tickets.get(index).unwrap();
-    old_ticket.owner = to.clone();
-    all_tickets.set(index, old_ticket);
-    write_tickets(env, &all_tickets);
 
     env.storage().persistent().remove(&DataKey::Approved(token_id));
 
@@ -458,20 +435,16 @@ impl Contract {
         }
 
         // Effects: update ALL state BEFORE external call (CEI pattern)
-        let ticket_id = next_ticket_id(&env);
+        let ticket_number = next_ticket_number(&env);
         let timestamp = env.ledger().timestamp();
 
         let ticket = Ticket {
-            id: ticket_id,
+            id: ticket_number,
             owner: buyer.clone(),
             purchase_time: timestamp,
-            ticket_number: raffle.tickets_sold + 1,
+            ticket_number,
         };
         write_ticket(&env, &ticket);
-
-        let mut tickets = read_tickets(&env);
-        tickets.push_back(ticket);
-        write_tickets(&env, &tickets);
 
         raffle.tickets_sold += 1;
 
@@ -512,7 +485,7 @@ impl Contract {
         }
 
         let mut ticket_ids = Vec::new(&env);
-        ticket_ids.push_back(ticket_id);
+        ticket_ids.push_back(ticket_number);
 
         publish_event(
             &env,
@@ -585,17 +558,17 @@ impl Contract {
             return Ok(());
         }
 
-        let tickets = read_tickets(&env);
         let mut winners = Vec::new(&env);
         let mut winning_ticket_ids = Vec::new(&env);
         let mut current_seed = env.ledger().timestamp() + env.ledger().sequence() as u64;
 
         for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner = tickets.get(winner_index).expect("Ticket out of bounds");
-            winners.push_back(winner);
-            winning_ticket_ids.push_back(winner_index);
-            // Change seed for the next winner
+            // Pick a random ticket_number in range [1, tickets_sold] — O(1) mapping lookup
+            let winner_ticket_number = (current_seed % raffle.tickets_sold as u64) as u32 + 1;
+            let winner_ticket = read_ticket_by_number(&env, winner_ticket_number)
+                .expect("Ticket mapping inconsistency");
+            winners.push_back(winner_ticket.owner);
+            winning_ticket_ids.push_back(winner_ticket_number);
             current_seed = current_seed.wrapping_add(1);
         }
 
@@ -648,8 +621,8 @@ impl Contract {
             return Err(Error::InvalidStateTransition);
         }
 
-        let tickets = read_tickets(&env);
-        if tickets.len() == 0 {
+        let tickets_sold = raffle.tickets_sold;
+        if tickets_sold == 0 {
             return Err(Error::NoTicketsSold);
         }
 
@@ -658,13 +631,12 @@ impl Contract {
         let mut current_seed = random_seed;
 
         for _ in 0..raffle.prizes.len() {
-            let winner_index = (current_seed % tickets.len() as u64) as u32;
-            let winner = tickets
-                .get(winner_index)
-                .expect("Ticket out of bounds callback");
-            winners.push_back(winner);
-            winning_ticket_ids.push_back(winner_index);
-            // Change seed for the next winner
+            // Pick a random ticket_number in range [1, tickets_sold] — O(1) mapping lookup
+            let winner_ticket_number = (current_seed % tickets_sold as u64) as u32 + 1;
+            let winner_ticket = read_ticket_by_number(&env, winner_ticket_number)
+                .expect("Ticket mapping inconsistency");
+            winners.push_back(winner_ticket.owner);
+            winning_ticket_ids.push_back(winner_ticket_number);
             current_seed = current_seed.wrapping_add(1);
         }
 
@@ -1096,29 +1068,36 @@ impl Contract {
         read_raffle(&env)
     }
 
-    /// Get all tickets or a paginated subset
-    /// Returns tickets from start index for count number of tickets
+    /// Get tickets from the mapping by range (start is 1-indexed ticket_number)
     pub fn get_tickets(env: Env, start: u32, count: u32) -> Vec<Ticket> {
-        let all_tickets = read_tickets(&env);
-        let total = all_tickets.len();
-        
-        if start >= total {
+        let total: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalTickets)
+            .unwrap_or(0);
+
+        if start == 0 || start > total {
             return Vec::new(&env);
         }
-        
-        let end = if start + count > total { total } else { start + count };
+
+        let end = (start + count - 1).min(total);
         let mut result = Vec::new(&env);
-        
-        for i in start..end {
-            result.push_back(all_tickets.get(i).unwrap());
+
+        for ticket_number in start..=end {
+            if let Some(ticket) = read_ticket_by_number(&env, ticket_number) {
+                result.push_back(ticket);
+            }
         }
-        
+
         result
     }
 
     /// Get total ticket count
     pub fn get_ticket_count(env: Env) -> u32 {
-        read_tickets(&env).len()
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalTickets)
+            .unwrap_or(0)
     }
 
     pub fn pause(env: Env) -> Result<(), Error> {

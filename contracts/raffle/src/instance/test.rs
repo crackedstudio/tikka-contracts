@@ -439,7 +439,7 @@ fn test_raffle_cancelled_event() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     // Check that raffle_cancelled event was emitted
     assert!(env.events().all().len() > 0);
@@ -471,7 +471,7 @@ fn test_raffle_cancellation() {
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     assert_eq!(token_client.balance(&creator), 1000i128);
 
@@ -493,7 +493,7 @@ fn test_refund_ticket() {
     // Check ticket balances before refund
     assert_eq!(token_client.balance(&buyer), 990i128); // 1000 - 10 ticket_price
 
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     // Initial refund
     let refunded = client.refund_ticket(&1u32);
@@ -514,7 +514,7 @@ fn test_double_refund_rejected() {
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     client.refund_ticket(&1u32);
     client.refund_ticket(&1u32); // Panic!
@@ -558,7 +558,7 @@ fn test_refund_guard_released_after_success() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
     client.refund_ticket(&1u32);
 
     // Guard must be released after successful refund
@@ -586,7 +586,7 @@ fn test_sequential_refunds_succeed_guard_properly_released() {
     admin_client.mint(&buyer2, &10i128);
     client.buy_ticket(&buyer2);
 
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     // Sequential refunds must both succeed (guard released between calls)
     let refund1 = client.refund_ticket(&1u32);
@@ -637,7 +637,7 @@ fn test_refund_blocked_by_active_reentrancy_guard() {
 
     client.deposit_prize();
     client.buy_ticket(&buyer);
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     // Simulate reentrancy: set guard before refund call
     env.as_contract(&client.address, || {
@@ -847,7 +847,7 @@ fn test_cancel_raffle_cei_state_cancelled_before_refund() {
     client.deposit_prize();
     client.buy_ticket(&buyer);
 
-    client.cancel_raffle(&CancelReason::CreatorCancelled);
+    client.cancel_raffle(&CancelReason::AdminCancelled);
 
     // CEI: status is Cancelled and prize refunded to creator
     let raffle = client.get_raffle();
