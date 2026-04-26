@@ -32,7 +32,7 @@ impl PrngWinnerSelection {
             .wrapping_add((self.sequence as u64) << 32)
             .wrapping_add(self.tickets_sold as u64);
 
-        for byte in self.raffle_id.to_xdr(env).iter() {
+        for byte in self.raffle_id.clone().to_xdr(env).iter() {
             fingerprint = fingerprint.wrapping_mul(16777619).wrapping_add(byte as u64);
         }
 
