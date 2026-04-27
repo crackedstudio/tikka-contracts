@@ -2111,7 +2111,7 @@ impl Contract {
         for ticket in tickets_list.iter() {
             env.storage()
                 .persistent()
-                .remove(&DataKey::TicketCount(ticket.owner));
+                .remove(&DataKey::TicketCount(ticket.owner.clone()));
         }
         // Remove FinishTime
         env.storage().persistent().remove(&DataKey::FinishTime);
