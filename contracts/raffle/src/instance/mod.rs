@@ -1536,6 +1536,7 @@ impl Contract {
                         "buyback_and_burn_executed",
                         crate::events::BuybackAndBurnExecuted {
                             router: contract_address.clone(),
+                            payment_token: raffle.payment_token.clone(),
                             tikka_token: tikka.clone(),
                             amount_in: platform_fee,
                             amount_out: platform_fee,
@@ -1560,6 +1561,7 @@ impl Contract {
             PrizeClaimed {
                 winner: winner.clone(),
                 tier_index,
+                payment_token: raffle.payment_token.clone(),
                 gross_amount: tier_prize_amount,
                 net_amount,
                 platform_fee,
@@ -1672,9 +1674,9 @@ impl Contract {
         publish_event(
             &env,
             "ticket_refunded",
-            crate::events::TicketRefunded {
+            TicketRefunded {
                 buyer: ticket.owner.clone(),
-                ticket_id,
+                ticket_number: ticket_id,
                 amount: raffle.ticket_price,
                 timestamp: env.ledger().timestamp(),
             },
