@@ -2,7 +2,7 @@ name: Deploy to Testnet
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   workflow_dispatch:
 
 env:

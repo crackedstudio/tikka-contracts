@@ -31,19 +31,17 @@ pub struct PaginationParams {
     pub offset: u32,
 }
 
-#[allow(non_camel_case_types)]
 #[derive(Clone)]
 #[contracttype]
-pub struct PageResult_Raffles {
+pub struct PageResultRaffles {
     pub items: Vec<Address>,
     pub total: u32,
     pub has_more: bool,
 }
 
-#[allow(non_camel_case_types)]
 #[derive(Clone)]
 #[contracttype]
-pub struct PageResult_Tickets {
+pub struct PageResultTickets {
     pub items: Vec<Ticket>,
     pub total: u32,
     pub has_more: bool,
