@@ -169,7 +169,7 @@ pub enum DataKey {
     Ticket(u32),
     NextTicketId,
     Factory,
-    RefundStatus(u32), // ticket_id -> bool
+    RefundStatus(u32),     // ticket_id -> bool
     ReentrancyGuard,
     Approved(u32),                    // ticket_id -> Address
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
@@ -430,21 +430,23 @@ fn write_ticket_count(env: &Env, buyer: &Address, count: u32) {
         .set(&DataKey::TicketCount(buyer.clone()), &count);
 }
 
-fn next_ticket_id(env: &Env) -> u32 {
-    let current = env
+/// Increment total ticket counter and return the new ticket number (1-indexed).
+fn next_ticket_number(env: &Env) -> u32 {
+    let current: u32 = env
         .storage()
         .instance()
-        .get(&DataKey::NextTicketId)
+        .get(&DataKey::TotalTickets)
         .unwrap_or(0u32);
     let next = current + 1;
-    env.storage().instance().set(&DataKey::NextTicketId, &next);
+    env.storage().instance().set(&DataKey::TotalTickets, &next);
     next
 }
 
-fn write_ticket(env: &Env, ticket: &Ticket) {
+/// Read a ticket by its 1-indexed ticket_number from the mapping.
+fn read_ticket_by_number(env: &Env, ticket_number: u32) -> Option<Ticket> {
     env.storage()
         .persistent()
-        .set(&DataKey::Ticket(ticket.id), ticket);
+        .get(&DataKey::Ticket(ticket_number))
 }
 
 fn acquire_guard(env: &Env) -> Result<(), Error> {
@@ -478,6 +480,7 @@ fn require_creator(env: &Env) -> Result<Address, Error> {
 }
 
 fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) -> Result<(), Error> {
+    // token_id is the ticket_number (1-indexed) — direct mapping lookup, no Vec needed
     let mut ticket = env
         .storage()
         .persistent()
