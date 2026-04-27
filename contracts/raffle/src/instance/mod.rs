@@ -790,6 +790,8 @@ impl Contract {
             return Err(Error::NoTicketsSold);
         }
 
+        // If a minimum ticket threshold was set and not met, mark as Failed
+        // so the creator can reclaim the prize via refund_prize.
         if raffle.min_tickets > 0 && raffle.tickets_sold < raffle.min_tickets {
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
