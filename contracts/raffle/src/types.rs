@@ -5,7 +5,7 @@ use crate::instance::{Ticket, RandomnessSource};
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
 pub const MAX_PAGE_LIMIT: u32 = 200;
 
-/// Fairness data returned by get_fairness_proof
+/// Fairness data returned by get_fairness_data
 /// Contains all data used to select the winner for transparency
 #[derive(Clone)]
 #[contracttype]

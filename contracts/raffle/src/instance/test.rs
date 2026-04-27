@@ -99,9 +99,10 @@ fn raffle_finalized_event(env: &Env, contract_address: &Address) -> RaffleFinali
             continue;
         }
 
-        let event_name = Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap();
-        if event_name == Symbol::new(env, "raffle_finalized") {
-            return RaffleFinalized::try_from_val(env, &data).unwrap();
+        if let Ok(event_name) = Symbol::try_from_val(env, &topics.get(1).unwrap()) {
+            if event_name == Symbol::new(env, "raffle_finalized") {
+                return RaffleFinalized::try_from_val(env, &data).unwrap();
+            }
         }
     }
 
@@ -703,7 +704,7 @@ fn test_creator_can_deposit_prize() {
 
     // Should succeed — creator auth is mocked
     client.deposit_prize();
-    assert_eq!(client.get_raffle().status, RaffleStatus::Open);
+    assert_eq!(client.get_raffle().status, RaffleStatus::Active);
 }
 
 /// require_creator: creator can finalize raffle
@@ -1092,7 +1093,7 @@ fn test_deposit_prize_cei_state_active_after_call() {
     client.deposit_prize();
 
     let raffle = client.get_raffle();
-    assert!(raffle.status == RaffleStatus::Open);
+    assert!(raffle.status == RaffleStatus::Active);
     assert!(raffle.prize_deposited);
 }
 
@@ -1368,20 +1369,23 @@ fn test_tiered_prizes() {
 
     let token_client = token::Client::new(&env, &token_id);
 
-    // Winner 1 (50%)
+    // Winner 1 (50% = 500 tokens)
     let winner1 = raffle.winners.get(0).unwrap();
+    let before1 = token_client.balance(&winner1);
     client.claim_prize(&winner1, &0);
-    assert_eq!(token_client.balance(&winner1), 500i128);
+    assert_eq!(token_client.balance(&winner1), before1 + 500i128);
 
-    // Winner 2 (30%)
+    // Winner 2 (30% = 300 tokens)
     let winner2 = raffle.winners.get(1).unwrap();
+    let before2 = token_client.balance(&winner2);
     client.claim_prize(&winner2, &1);
-    assert_eq!(token_client.balance(&winner2), 300i128);
+    assert_eq!(token_client.balance(&winner2), before2 + 300i128);
 
-    // Winner 3 (20%)
+    // Winner 3 (20% = 200 tokens)
     let winner3 = raffle.winners.get(2).unwrap();
+    let before3 = token_client.balance(&winner3);
     client.claim_prize(&winner3, &2);
-    assert_eq!(token_client.balance(&winner3), 200i128);
+    assert_eq!(token_client.balance(&winner3), before3 + 200i128);
 
     let raffle_final = client.get_raffle();
     assert!(raffle_final.status == RaffleStatus::Finalized);
@@ -1872,12 +1876,21 @@ fn test_fallback_fails_without_pending_request() {
     );
 
     client.deposit_prize();
-    for _ in 0..5 {
+    for _ in 0..1 {
         let b = Address::generate(&env);
         admin_client.mint(&b, &10i128);
         client.buy_tickets(&b, &1);
     }
-    // Raffle is Drawing (all tickets sold) but request_winner_selection was NOT called
+    // Force Drawing status without triggering a request (which buy_tickets would do if sold out)
+    env.as_contract(&client.address, || {
+        let mut raffle = env
+            .storage()
+            .instance()
+            .get::<_, crate::instance::Raffle>(&crate::instance::DataKey::Raffle)
+            .unwrap();
+        raffle.status = crate::instance::RaffleStatus::Drawing;
+        env.storage().instance().set(&crate::instance::DataKey::Raffle, &raffle);
+    });
     env.ledger().with_mut(|l| l.sequence_number += 200);
 
     let result = client.try_trigger_randomness_fallback(&creator);
