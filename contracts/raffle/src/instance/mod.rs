@@ -1584,6 +1584,24 @@ impl Contract {
                     .ok_or(Error::NotAuthorized)?;
                 factory.require_auth();
             }
+            CancelReason::AdminCancelled => {
+                // Factory/admin can cancel at any time
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotAuthorized)?;
+                admin.require_auth();
+            }
+            CancelReason::OracleTimeout | CancelReason::MinTicketsNotMet => {
+                // Factory can trigger these system cancellations
+                let factory: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Factory)
+                    .ok_or(Error::NotAuthorized)?;
+                factory.require_auth();
+            }
         }
 
         if raffle.status == RaffleStatus::Finalized
@@ -1601,19 +1619,23 @@ impl Contract {
 
         let raffle = read_raffle(&env)?;
 
-        if raffle.status != RaffleStatus::Cancelled {
+        // Allow refunds for Cancelled raffles, or Active/Drawing raffles that have expired
+        // without being finalized (failed raffle scenario)
+        let is_cancelled = raffle.status == RaffleStatus::Cancelled;
+        let is_expired_and_failed = (raffle.status == RaffleStatus::Active
+            || raffle.status == RaffleStatus::Drawing)
+            && raffle.end_time != 0
+            && env.ledger().timestamp() > raffle.end_time;
+
+        if !is_cancelled && !is_expired_and_failed {
             return Err(Error::InvalidStateTransition);
         }
 
-        let ticket_opt = env
+        let ticket = env
             .storage()
             .persistent()
-            .get::<_, Ticket>(&DataKey::Ticket(ticket_id));
-        if ticket_opt.is_none() {
-            // Re-using InvalidParameters for missing ticket to avoid adding new error enum right now
-            return Err(Error::InvalidParameters);
-        }
-        let ticket = ticket_opt.unwrap();
+            .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
+            .ok_or(Error::TicketNotFound)?;
 
         ticket.owner.require_auth();
 
@@ -1622,9 +1644,8 @@ impl Contract {
             .persistent()
             .get(&DataKey::RefundStatus(ticket_id))
             .unwrap_or(false);
-        // Enforce idempotency
         if is_refunded {
-            return Err(Error::InvalidStateTransition);
+            return Err(Error::TicketAlreadyRefunded);
         }
 
         // Reentrancy guard
