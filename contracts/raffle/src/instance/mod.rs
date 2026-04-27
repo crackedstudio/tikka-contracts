@@ -36,13 +36,11 @@ pub struct Contract;
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum RaffleStatus {
-    Open = 0,
-    Active = 1,
-    Drawing = 2,
-    Finalized = 3,
-    Claimed = 4,
-    Cancelled = 5,
-    Failed = 6, // min_tickets threshold not met at draw time
+    Active = 0,
+    Drawing = 1,
+    Finalized = 2,
+    Cancelled = 3,
+    Failed = 4, // min_tickets threshold not met at draw time
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -473,7 +471,7 @@ impl Contract {
             prize_amount: config.prize_amount,
             prizes: config.prizes.clone(),
             tickets_sold: 0,
-            status: RaffleStatus::Open,
+            status: RaffleStatus::Active,
             prize_deposited: false,
             winners: Vec::new(&env),
             claimed_winners: Vec::new(&env),
@@ -510,6 +508,12 @@ impl Contract {
     }
 
 
+        if raffle.status != RaffleStatus::Active {
+            return Err(Error::InvalidStateTransition);
+        }
+        if raffle.prize_deposited {
+            return Err(Error::PrizeAlreadyDeposited);
+        }
 
         // Effects: update state BEFORE external call (CEI pattern)
         raffle.prize_deposited = true;
@@ -549,8 +553,11 @@ impl Contract {
 
 
         // --- 1. CHECKS ---
-        if raffle.status != RaffleStatus::Open {
+        if raffle.status != RaffleStatus::Active {
             return Err(Error::RaffleInactive);
+        }
+        if !raffle.prize_deposited {
+            return Err(Error::InvalidStateTransition);
         }
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
             return Err(Error::RaffleExpired);
@@ -596,7 +603,7 @@ impl Contract {
                 &env,
                 "status_changed",
                 RaffleStatusChanged {
-                    old_status,
+                    old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp,
                 },
@@ -650,6 +657,47 @@ impl Contract {
         );
 
 
+        if raffle.status == RaffleStatus::Active {
+            if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
+                || raffle.tickets_sold >= raffle.max_tickets
+            {
+                raffle.status = RaffleStatus::Drawing;
+                publish_event(
+                    &env,
+                    "status_changed",
+                    RaffleStatusChanged {
+                        old_status: RaffleStatus::Active,
+                        new_status: RaffleStatus::Drawing,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+            }
+        }
+
+        if raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        if raffle.tickets_sold == 0 {
+            return Err(Error::NoTicketsSold);
+        }
+
+        // If a minimum ticket threshold was set and not met, mark as Failed
+        // so the creator can reclaim the prize via refund_prize.
+        if raffle.min_tickets > 0 && raffle.tickets_sold < raffle.min_tickets {
+            raffle.status = RaffleStatus::Failed;
+            write_raffle(&env, &raffle);
+            publish_event(
+                &env,
+                "status_changed",
+                RaffleStatusChanged {
+                    old_status: RaffleStatus::Drawing,
+                    new_status: RaffleStatus::Failed,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+            return Ok(());
+        }
 
         publish_event(
             &env,
@@ -815,7 +863,7 @@ impl Contract {
                 &env,
                 "status_changed",
                 RaffleStatusChanged {
-                    old_status,
+                    old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp: now,
                 },
