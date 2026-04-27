@@ -615,10 +615,6 @@ impl Contract {
         Ok(())
     }
 
-    pub fn deposit_prize(env: Env) -> Result<(), Error> {
-        require_not_paused(&env)?;
-        require_creator(&env)?;
-        let mut raffle = read_raffle(&env)?;
 
         if raffle.status != RaffleStatus::Active {
             return Err(Error::InvalidStateTransition);
@@ -655,18 +651,14 @@ impl Contract {
             },
         );
 
-        Ok(())
-    }
+        env.events().publish(
+            (Symbol::new(&env, "status_changed"), raffle.creator.clone()),
+            RaffleStatusChanged {
+                old_status,
+                new_status: RaffleStatus::Active,
+                timestamp: env.ledger().timestamp(),
+            },
 
-    pub fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32, Error> {
-        require_not_paused(&env)?;
-        buyer.require_auth();
-
-        if quantity == 0 {
-            return Err(Error::InvalidParameters);
-        }
-
-        let mut raffle = read_raffle(&env)?;
 
         // --- 1. CHECKS ---
         if raffle.status != RaffleStatus::Active {
@@ -772,12 +764,6 @@ impl Contract {
             },
         );
 
-        Ok(raffle.tickets_sold)
-    }
-
-    pub fn finalize_raffle(env: Env) -> Result<(), Error> {
-        require_creator(&env)?;
-        let mut raffle = read_raffle(&env)?;
 
         if raffle.status == RaffleStatus::Active {
             if (raffle.end_time != 0 && env.ledger().timestamp() >= raffle.end_time)
@@ -892,6 +878,7 @@ impl Contract {
             if !time_ended && !tickets_full {
                 return Err(Error::InvalidStateTransition);
             }
+            let old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Drawing;
             publish_event(
                 &env,
@@ -1579,9 +1566,7 @@ impl Contract {
     }
 
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
-        let mut raffle = read_raffle(&env)?;
 
-        // Admin or Creator can cancel
         match reason {
             CancelReason::CreatorCancelled => {
                 require_creator(&env)?;
@@ -1609,100 +1594,9 @@ impl Contract {
         let old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
 
-        // Effects: persist state BEFORE external call (CEI pattern)
-        let should_refund_prize = raffle.prize_deposited;
-        if should_refund_prize {
-            raffle.prize_deposited = false;
-        }
-        write_raffle(&env, &raffle);
 
-        // Interaction: external token transfer — use try_transfer so a
-        // malicious or broken token cannot permanently block cancellation.
-        if !env.storage().persistent().has(&DataKey::FinishTime) {
-            env.storage()
-                .persistent()
-                .set(&DataKey::FinishTime, &env.ledger().timestamp());
-        }
 
-        // Interaction: external token transfer
-        if should_refund_prize {
-            let token_client = token::Client::new(&env, &raffle.payment_token);
-            let contract_address = env.current_contract_address();
-            token_client
-                .try_transfer(&contract_address, &raffle.creator, &raffle.prize_amount)
-                .map_err(|_| Error::TokenTransferFailed)?;
-        }
 
-        publish_event(
-            &env,
-            "raffle_cancelled",
-            RaffleCancelled {
-                creator: raffle.creator.clone(),
-                reason,
-                tickets_sold: raffle.tickets_sold,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        publish_event(
-            &env,
-            "status_changed",
-            RaffleStatusChanged {
-                old_status,
-                new_status: RaffleStatus::Cancelled,
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Refund the escrowed prize back to the creator.
-    /// Only callable by the creator when the raffle is Cancelled or Failed.
-    /// Safe to call multiple times — idempotent once prize_deposited is false.
-    pub fn refund_prize(env: Env) -> Result<(), Error> {
-        let mut raffle = read_raffle(&env)?;
-        raffle.creator.require_auth();
-
-        if raffle.status != RaffleStatus::Cancelled && raffle.status != RaffleStatus::Failed {
-            return Err(Error::InvalidStateTransition);
-        }
-
-        if !raffle.prize_deposited {
-            return Err(Error::PrizeNotDeposited);
-        }
-
-        // Effects first (CEI)
-        raffle.prize_deposited = false;
-        write_raffle(&env, &raffle);
-
-        let token_client = token::Client::new(&env, &raffle.payment_token);
-        let contract_address = env.current_contract_address();
-        token_client
-            .try_transfer(&contract_address, &raffle.creator, &raffle.prize_amount)
-            .map_err(|_| {
-                // Roll back so creator can retry after token is fixed
-                let mut r = raffle.clone();
-                r.prize_deposited = true;
-                write_raffle(&env, &r);
-                Error::TokenTransferFailed
-            })?;
-
-        publish_event(
-            &env,
-            "prize_refunded",
-            PrizeRefunded {
-                creator: raffle.creator.clone(),
-                amount: raffle.prize_amount,
-                token: raffle.payment_token.clone(),
-                timestamp: env.ledger().timestamp(),
-            },
-        );
-
-        Ok(())
-    }
-
-    pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
         let raffle = read_raffle(&env)?;
 
         if raffle.status != RaffleStatus::Cancelled {
