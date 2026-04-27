@@ -1903,6 +1903,61 @@ impl Contract {
             .unwrap_or(false)
     }
 
+    pub fn withdraw_fees(env: Env) -> Result<i128, Error> {
+        require_not_paused(&env)?;
+
+        // Only admin can withdraw fees
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        let treasury = raffle.treasury_address.ok_or(Error::InvalidParameters)?;
+
+        let accumulated: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AccumulatedFees)
+            .unwrap_or(0i128);
+
+        if accumulated <= 0 {
+            return Ok(0);
+        }
+
+        // Effects: zero out fees BEFORE external call (CEI pattern)
+        env.storage()
+            .instance()
+            .set(&DataKey::AccumulatedFees, &0i128);
+
+        // Interaction: transfer to treasury
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &treasury, &accumulated);
+
+        publish_event(
+            &env,
+            "fees_withdrawn",
+            crate::events::FeesWithdrawn {
+                recipient: treasury,
+                amount: accumulated,
+                token: raffle.payment_token,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(accumulated)
+    }
+
+    pub fn get_accumulated_fees(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::AccumulatedFees)
+            .unwrap_or(0i128)
+    }
+
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let factory: Address = env
             .storage()
