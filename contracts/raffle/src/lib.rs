@@ -724,12 +724,12 @@ impl RaffleFactory {
 
     /// Get fairness proof data for a finalized raffle
     /// Returns all data used to select the winner for transparency
-    pub fn get_fairness_proof(
+    pub fn get_fairness_data(
         env: Env,
-        instance_address: Address,
+        raffle_id: Address,
     ) -> Result<FairnessData, ContractError> {
-        let instance_client = instance::ContractClient::new(&env, &instance_address);
-        Ok(instance_client.get_fairness_proof())
+        let instance_client = instance::ContractClient::new(&env, &raffle_id);
+        Ok(instance_client.get_fairness_data())
     }
 
     // rate
