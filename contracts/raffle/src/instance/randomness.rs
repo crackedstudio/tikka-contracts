@@ -96,8 +96,7 @@ impl PrngWinnerSelection {
         let arr = seed_bytes.to_array();
         // Take the first 8 bytes as big-endian u64.
         u64::from_be_bytes([
-            arr[0], arr[1], arr[2], arr[3],
-            arr[4], arr[5], arr[6], arr[7],
+            arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], arr[6], arr[7],
         ])
     }
 
@@ -191,7 +190,10 @@ mod tests {
             )
         });
 
-        assert_ne!(seed_a, seed_b, "different raffle IDs must produce different seeds");
+        assert_ne!(
+            seed_a, seed_b,
+            "different raffle IDs must produce different seeds"
+        );
     }
 
     /// build_internal_seed is deterministic: same inputs → same output.
@@ -265,7 +267,10 @@ mod tests {
                 .select_winner_indices(&env, 17, 8)
         });
 
-        assert_eq!(first, second, "identical inputs must yield identical winners");
+        assert_eq!(
+            first, second,
+            "identical inputs must yield identical winners"
+        );
     }
 
     /// Seed fingerprint changes when raffle_id changes.
@@ -284,6 +289,9 @@ mod tests {
             (s_a.seed_fingerprint(&env), s_b.seed_fingerprint(&env))
         });
 
-        assert_ne!(fp_a, fp_b, "fingerprints must differ for different raffle IDs");
+        assert_ne!(
+            fp_a, fp_b,
+            "fingerprints must differ for different raffle IDs"
+        );
     }
 }

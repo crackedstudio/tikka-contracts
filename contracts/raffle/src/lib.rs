@@ -386,7 +386,11 @@ impl RaffleFactory {
             .get(&DataKey::InstanceWasmHash)
             .unwrap();
 
-        let protocol_fee_bp: u32 = env.storage().persistent().get(&DataKey::ProtocolFeeBP).unwrap_or(0);
+        let protocol_fee_bp: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolFeeBP)
+            .unwrap_or(0);
         let treasury: Address = env.storage().persistent().get(&DataKey::Treasury).unwrap();
 
         let mut instances: Vec<Address> = env
@@ -724,10 +728,7 @@ impl RaffleFactory {
 
     /// Get fairness proof data for a finalized raffle
     /// Returns all data used to select the winner for transparency
-    pub fn get_fairness_data(
-        env: Env,
-        raffle_id: Address,
-    ) -> Result<FairnessData, ContractError> {
+    pub fn get_fairness_data(env: Env, raffle_id: Address) -> Result<FairnessData, ContractError> {
         let instance_client = instance::ContractClient::new(&env, &raffle_id);
         Ok(instance_client.get_fairness_data())
     }
@@ -830,6 +831,7 @@ mod tests {
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(env, &contract_id);
         client.init_factory(&admin, &wasm_hash, &0u32, &treasury);
+        client.set_creation_delay(&0u64);
 
         (client, admin, treasury)
     }
@@ -850,9 +852,9 @@ mod tests {
             max_tickets: 10u32,
             min_tickets: 0u32,
             allow_multiple: false,
-            ticket_price: 10i128,
+            ticket_price: 10_000i128,
             payment_token,
-            prize_amount: 100i128,
+            prize_amount: 100_000i128,
             prizes,
             randomness_source: instance::RandomnessSource::Internal,
             oracle_address: None,
@@ -993,7 +995,9 @@ mod tests {
 
         let (creator, config) = make_raffle_args(&env);
         let result = client.try_create_raffle(&creator, &config);
-
+        if result.is_err() {
+            panic!("create_raffle failed with: {:?}", result);
+        }
         assert!(result.is_ok());
     }
 
@@ -1097,9 +1101,9 @@ mod tests {
             max_tickets: 10u32,
             min_tickets: 0u32,
             allow_multiple: false,
-            ticket_price: 10i128,
+            ticket_price: 10_000i128,
             payment_token,
-            prize_amount: 100i128,
+            prize_amount: 100_000i128,
             prizes,
             randomness_source: instance::RandomnessSource::Internal,
             oracle_address: None,
@@ -1494,8 +1498,7 @@ mod tests {
                 return false;
             }
             // Decode the event payload as CheckpointCreated
-            let event_data: events::CheckpointCreated =
-                soroban_sdk::FromVal::from_val(&env, &data);
+            let event_data: events::CheckpointCreated = soroban_sdk::FromVal::from_val(&env, &data);
             event_data.index == cp.index
                 && event_data.raffle_count == cp.raffle_count
                 && event_data.ledger_timestamp == cp.ledger_timestamp

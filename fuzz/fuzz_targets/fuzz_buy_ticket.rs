@@ -38,9 +38,9 @@ struct BuyTicketInput {
 
 #[derive(Debug, PartialEq, Eq)]
 enum BuyError {
-    RaffleInactive,       // status != Active  (not tested here; pre-condition)
-    RaffleEnded,          // past end_time
-    TicketsSoldOut,       // tickets_sold >= max_tickets
+    RaffleInactive, // status != Active  (not tested here; pre-condition)
+    RaffleEnded,    // past end_time
+    TicketsSoldOut, // tickets_sold >= max_tickets
     MultipleTicketsNotAllowed,
 }
 
@@ -94,7 +94,11 @@ fuzz_target!(|input: BuyTicketInput| {
             assert!(multi_ok, "succeeded despite multiple-ticket violation");
 
             // INVARIANT 2: tickets_sold increments by exactly 1
-            assert_eq!(*new_sold as u32, sold + 1, "tickets_sold did not increment by 1");
+            assert_eq!(
+                *new_sold as u32,
+                sold + 1,
+                "tickets_sold did not increment by 1"
+            );
         }
         Err(BuyError::RaffleEnded) => {
             // Must only fire when past deadline
@@ -105,10 +109,7 @@ fuzz_target!(|input: BuyTicketInput| {
         }
         Err(BuyError::TicketsSoldOut) => {
             // Must only fire when cap reached
-            assert!(
-                sold >= max,
-                "TicketsSoldOut fired but capacity not reached"
-            );
+            assert!(sold >= max, "TicketsSoldOut fired but capacity not reached");
         }
         Err(BuyError::MultipleTicketsNotAllowed) => {
             // Must only fire when policy violated
