@@ -2181,7 +2181,7 @@ impl Contract {
 
         Ok(())
     }
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
             .instance()
@@ -2216,7 +2216,7 @@ impl Contract {
     }
 
     pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), Error> {
-        Self::transfer_admin(env, new_owner)
+        Self::propose_admin(env, new_owner)
     }
 
     pub fn accept_admin(env: Env) -> Result<(), Error> {

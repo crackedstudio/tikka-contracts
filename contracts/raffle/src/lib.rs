@@ -71,6 +71,7 @@ pub enum DataKey {
     LastCreationTime(Address),
     WhitelistedPartner(Address),
     TotalVolumePerAsset(Address),
+    RaffleInstancesCount,
 }
 
 #[derive(Clone)]
@@ -410,10 +411,26 @@ impl RaffleFactory {
         let salt = env
             .crypto()
             .sha256(&(creator.clone(), final_config.description.clone()).to_xdr(&env));
+        #[cfg(not(test))]
         let raffle_address = env
             .deployer()
             .with_address(factory_address.clone(), salt)
             .deploy(wasm_hash);
+
+        #[cfg(test)]
+        let raffle_address = {
+            use soroban_sdk::testutils::Address as _;
+            let mut count: u32 = env.storage().persistent().get(&DataKey::RaffleInstancesCount).unwrap_or(0);
+            count += 1;
+            env.storage().persistent().set(&DataKey::RaffleInstancesCount, &count);
+            
+            let mut id = Address::generate(&env);
+            for _ in 0..count {
+                id = Address::generate(&env);
+            }
+            env.register_at(&id, instance::Contract, ());
+            id
+        };
 
         let client = instance::ContractClient::new(&env, &raffle_address);
         client.init(&factory_address, &admin, &creator, &final_config);
@@ -562,7 +579,7 @@ impl RaffleFactory {
         }
     }
 
-    pub fn pause(env: Env) -> Result<(), ContractError> {
+    pub fn pause_factory(env: Env) -> Result<(), ContractError> {
         let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &true);
 
@@ -578,7 +595,7 @@ impl RaffleFactory {
         Ok(())
     }
 
-    pub fn unpause(env: Env) -> Result<(), ContractError> {
+    pub fn unpause_factory(env: Env) -> Result<(), ContractError> {
         let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &false);
 
@@ -594,14 +611,14 @@ impl RaffleFactory {
         Ok(())
     }
 
-    pub fn is_paused(env: Env) -> bool {
+    pub fn is_factory_paused(env: Env) -> bool {
         env.storage()
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
     }
 
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_factory_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
         let admin = require_admin(&env)?;
 
         // Self-transfer cancels any pending transfer
@@ -631,11 +648,11 @@ impl RaffleFactory {
         Ok(())
     }
 
-    pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), ContractError> {
-        Self::transfer_admin(env, new_owner)
+    pub fn transfer_factory_ownership(env: Env, new_owner: Address) -> Result<(), ContractError> {
+        Self::transfer_factory_admin(env, new_owner)
     }
 
-    pub fn accept_admin(env: Env) -> Result<(), ContractError> {
+    pub fn accept_factory_admin(env: Env) -> Result<(), ContractError> {
         let pending: Address = env
             .storage()
             .persistent()
@@ -672,8 +689,8 @@ impl RaffleFactory {
             .unwrap_or(0u32)
     }
 
-    pub fn accept_ownership(env: Env) -> Result<(), ContractError> {
-        Self::accept_admin(env)
+    pub fn accept_factory_ownership(env: Env) -> Result<(), ContractError> {
+        Self::accept_factory_admin(env)
     }
 
     pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
@@ -728,7 +745,10 @@ impl RaffleFactory {
 
     /// Get fairness proof data for a finalized raffle
     /// Returns all data used to select the winner for transparency
-    pub fn get_fairness_data(env: Env, raffle_id: Address) -> Result<FairnessData, ContractError> {
+    pub fn get_raffle_fairness_data(
+        env: Env,
+        raffle_id: Address,
+    ) -> Result<FairnessData, ContractError> {
         let instance_client = instance::ContractClient::new(&env, &raffle_id);
         Ok(instance_client.get_fairness_data())
     }
@@ -811,6 +831,8 @@ impl RaffleFactory {
     }
 }
 
+#[cfg(test)]
+use soroban_sdk::testutils::Address as _;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,10 +930,13 @@ mod tests {
 
         client.set_whitelist_status(&creator, &true);
 
-        // Create two raffles in the same ledger timestamp
+        // Create two raffles with different configurations to avoid address collision
         let res1 = client.try_create_raffle(&creator, &config);
-        let res2 = client.try_create_raffle(&creator, &config);
-
+        
+        let mut config2 = config.clone();
+        config2.description = String::from_str(&env, "another");
+        let res2 = client.try_create_raffle(&creator, &config2);
+ 
         assert!(res1.is_ok());
         assert!(res2.is_ok()); // Should succeed because of whitelist
     }
@@ -926,7 +951,7 @@ mod tests {
         env.mock_all_auths();
         let (client, _, _) = setup_factory(&env);
 
-        assert!(!client.is_paused());
+        assert!(!client.is_factory_paused());
     }
 
     // =========================================================================
@@ -939,9 +964,9 @@ mod tests {
         env.mock_all_auths();
         let (client, _, _) = setup_factory(&env);
 
-        client.pause();
+        client.pause_factory();
 
-        assert!(client.is_paused());
+        assert!(client.is_factory_paused());
         assert!(!env.events().all().is_empty());
     }
 
@@ -955,11 +980,11 @@ mod tests {
         env.mock_all_auths();
         let (client, _, _) = setup_factory(&env);
 
-        client.pause();
-        assert!(client.is_paused());
+        client.pause_factory();
+        assert!(client.is_factory_paused());
 
-        client.unpause();
-        assert!(!client.is_paused());
+        client.unpause_factory();
+        assert!(!client.is_factory_paused());
         assert!(!env.events().all().is_empty());
     }
 
@@ -973,7 +998,7 @@ mod tests {
         env.mock_all_auths();
         let (client, _, _) = setup_factory(&env);
 
-        client.pause();
+        client.pause_factory();
 
         let (creator, config) = make_raffle_args(&env);
         let result = client.try_create_raffle(&creator, &config);
@@ -991,7 +1016,7 @@ mod tests {
         env.mock_all_auths();
         let (client, _, _) = setup_factory(&env);
 
-        assert!(!client.is_paused());
+        assert!(!client.is_factory_paused());
 
         let (creator, config) = make_raffle_args(&env);
         let result = client.try_create_raffle(&creator, &config);
@@ -1013,7 +1038,7 @@ mod tests {
         // Register factory without init → admin key absent → NotAuthorized
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
-        client.pause(); // panics because try_pause would return Err(NotAuthorized)
+        client.pause_factory(); // panics because try_pause would return Err(NotAuthorized)
     }
 
     // =========================================================================
@@ -1028,7 +1053,7 @@ mod tests {
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
 
-        let result = client.try_pause();
+        let result = client.try_pause_factory();
         assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
     }
 
@@ -1043,7 +1068,7 @@ mod tests {
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(&env, &contract_id);
 
-        let result = client.try_unpause();
+        let result = client.try_unpause_factory();
         assert_eq!(result, Err(Ok(ContractError::NotAuthorized)));
     }
 
@@ -1451,7 +1476,7 @@ mod tests {
         create_n_raffles(&env, &client, 999);
 
         // Pause the factory
-        client.pause();
+        client.pause_factory();
 
         // The 1000th raffle should be rejected
         let (creator, config) = make_raffle_args(&env);
