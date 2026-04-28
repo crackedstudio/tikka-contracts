@@ -138,12 +138,6 @@ pub struct FairnessMetadata {
     pub draw_sequence: u32,
 }
 
-// Helper function to publish events with standardized topics
-fn publish_event<T: IntoVal<Env, soroban_sdk::Val>>(env: &Env, name: &str, data: T) {
-    // panic!("Publishing event: {}", name);
-    env.events()
-        .publish((Symbol::new(env, "tikka"), Symbol::new(env, name)), data);
-}
 
 /// Detects if an address is the native XLM contract by checking its name and symbol.
 /// In Soroban, the native asset contract ID has these specific values.
@@ -301,19 +295,12 @@ fn do_finalize_with_seed(
         let winner = get_ticket_owner(env, ticket_id).ok_or(Error::TicketNotFound)?;
         winners.push_back(winner.clone());
 
-        env.events().publish(
-            (
-                Symbol::new(env, "WinnerDrawn"),
-                winner.clone(),
-                winner_index,
-            ),
-            WinnerDrawn {
+        WinnerDrawn {
                 winner: winner.clone(),
                 ticket_id: winner_index,
                 tier_index: i,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
     }
 
     let mut claimed_winners = Vec::new(env);
@@ -344,28 +331,20 @@ fn do_finalize_with_seed(
             .set(&DataKey::FinishTime, &env.ledger().timestamp());
     }
 
-    publish_event(
-        env,
-        "raffle_finalized",
-        RaffleFinalized {
+    RaffleFinalized {
             winners,
             winning_ticket_ids,
             total_tickets_sold: raffle.tickets_sold,
             randomness_source: raffle.randomness_source.clone(),
             randomness_type,
             finalized_at: env.ledger().timestamp(),
-        },
-    );
+        }.publish(&env);
 
-    publish_event(
-        env,
-        "status_changed",
-        RaffleStatusChanged {
+    RaffleStatusChanged {
             old_status: RaffleStatus::Drawing,
             new_status: RaffleStatus::Finalized,
             timestamp: env.ledger().timestamp(),
-        },
-    );
+        }.publish(&env);
 
     Ok(())
 }
@@ -633,9 +612,7 @@ impl Contract {
         env.storage().instance().set(&DataKey::Factory, &factory);
         env.storage().instance().set(&DataKey::Admin, &admin);
 
-        env.events().publish(
-            (Symbol::new(&env, "RaffleCreated"), creator.clone()),
-            RaffleCreated {
+        RaffleCreated {
                 creator,
                 end_time: config.end_time,
                 max_tickets: config.max_tickets,
@@ -646,8 +623,7 @@ impl Contract {
                 description: config.description,
                 randomness_source: config.randomness_source,
                 metadata_hash: config.metadata_hash,
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -681,24 +657,18 @@ impl Contract {
             .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
 
-        env.events().publish(
-            (Symbol::new(&env, "PrizeDeposited"), raffle.creator.clone()),
-            PrizeDeposited {
+        PrizeDeposited {
                 creator: raffle.creator.clone(),
                 amount: raffle.prize_amount,
                 token: raffle.payment_token.clone(),
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        env.events().publish(
-            (Symbol::new(&env, "status_changed"), raffle.creator.clone()),
-            RaffleStatusChanged {
+        RaffleStatusChanged {
                 old_status,
                 new_status: RaffleStatus::Active,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -756,15 +726,11 @@ impl Contract {
         if raffle.tickets_sold >= raffle.max_tickets {
             let old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Drawing;
-            publish_event(
-                &env,
-                "status_changed",
-                RaffleStatusChanged {
+            RaffleStatusChanged {
                     old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp,
-                },
-            );
+                }.publish(&env);
         }
 
         write_ticket_count(&env, &buyer, current_count + quantity);
@@ -802,17 +768,14 @@ impl Contract {
             .map_err(|_| Error::TokenTransferFailed)?;
 
         // Single event containing the range of IDs
-        env.events().publish(
-            (Symbol::new(&env, "TicketPurchased"), buyer.clone()),
-            TicketPurchased {
+        TicketPurchased {
                 buyer: buyer.clone(),
                 ticket_ids,
                 quantity,
                 ticket_price: raffle.ticket_price,
                 total_paid: total_price,
                 timestamp,
-            },
-        );
+            }.publish(&env);
 
         Ok(raffle.tickets_sold)
     }
@@ -839,15 +802,11 @@ impl Contract {
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
-            publish_event(
-                &env,
-                "status_changed",
-                RaffleStatusChanged {
+            RaffleStatusChanged {
                     old_status,
                     new_status: RaffleStatus::Failed,
                     timestamp: now,
-                },
-            );
+                }.publish(&env);
             return Ok(());
         }
 
@@ -871,14 +830,10 @@ impl Contract {
                 .oracle_address
                 .clone()
                 .unwrap_or_else(|| env.current_contract_address());
-            publish_event(
-                &env,
-                "RandomnessRequested",
-                crate::events::RandomnessRequested {
+            crate::events::RandomnessRequested {
                     oracle,
                     timestamp: now,
-                },
-            );
+                }.publish(&env);
             return Ok(());
         }
 
@@ -911,15 +866,12 @@ impl Contract {
             .try_transfer(&contract_address, &raffle.creator, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
 
-        env.events().publish(
-            (Symbol::new(&env, "PrizeRefunded"), raffle.creator.clone()),
-            PrizeRefunded {
+        PrizeRefunded {
                 creator: raffle.creator.clone(),
                 amount: raffle.prize_amount,
                 token: raffle.payment_token.clone(),
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -954,15 +906,11 @@ impl Contract {
             }
             let old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Drawing;
-            publish_event(
-                &env,
-                "status_changed",
-                RaffleStatusChanged {
+            RaffleStatusChanged {
                     old_status: RaffleStatus::Active,
                     new_status: RaffleStatus::Drawing,
                     timestamp: now,
-                },
-            );
+                }.publish(&env);
         } else if raffle.status != RaffleStatus::Drawing {
             return Err(Error::InvalidStateTransition);
         }
@@ -996,24 +944,16 @@ impl Contract {
             .instance()
             .set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
 
-        publish_event(
-            &env,
-            "draw_triggered",
-            DrawTriggered {
+        DrawTriggered {
                 triggered_by: raffle.creator.clone(),
                 total_tickets_sold: raffle.tickets_sold,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        publish_event(
-            &env,
-            "randomness_requested",
-            RandomnessRequested {
+        RandomnessRequested {
                 oracle,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -1160,15 +1100,12 @@ impl Contract {
             let winner = get_ticket_owner(&env, ticket_id).ok_or(Error::TicketNotFound)?;
             winners.push_back(winner.clone());
 
-            env.events().publish(
-                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), ticket_id),
-                WinnerDrawn {
+            WinnerDrawn {
                     winner: winner.clone(),
                     ticket_id,
                     tier_index: i,
                     timestamp: env.ledger().timestamp(),
-                },
-            );
+                }.publish(&env);
         }
 
         let mut claimed_winners = Vec::new(&env);
@@ -1203,40 +1140,28 @@ impl Contract {
                 .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
-        publish_event(
-            &env,
-            "randomness_fallback_triggered",
-            RandomnessFallbackTriggered {
+        RandomnessFallbackTriggered {
                 triggered_by: caller,
                 seed_used: selector.seed_fingerprint(&env),
                 request_ledger,
                 fallback_ledger: current_ledger,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        publish_event(
-            &env,
-            "raffle_finalized",
-            RaffleFinalized {
+        RaffleFinalized {
                 winners: winners.clone(),
                 winning_ticket_ids,
                 total_tickets_sold: raffle.tickets_sold,
                 randomness_source: RandomnessSource::Internal,
                 randomness_type: RandomnessType::Fallback,
                 finalized_at: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        publish_event(
-            &env,
-            "status_changed",
-            RaffleStatusChanged {
+        RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
                 new_status: RaffleStatus::Finalized,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -1272,15 +1197,11 @@ impl Contract {
             .instance()
             .set(&DataKey::CommitCount, &(count + 1));
 
-        publish_event(
-            &env,
-            "seed_committed",
-            SeedCommitted {
+        SeedCommitted {
                 participant,
                 hash,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -1337,14 +1258,10 @@ impl Contract {
             .get(&DataKey::CommitCount)
             .unwrap_or(0);
 
-        publish_event(
-            &env,
-            "seed_revealed",
-            SeedRevealed {
+        SeedRevealed {
                 participant,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         // If all commits have been revealed, derive the seed and finalize
         if commit_count > 0 && new_reveal_count >= commit_count {
@@ -1423,15 +1340,12 @@ impl Contract {
             let winner = get_ticket_owner(env, ticket_id).ok_or(Error::TicketNotFound)?;
             winners.push_back(winner.clone());
 
-            env.events().publish(
-                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), ticket_id),
-                WinnerDrawn {
+            WinnerDrawn {
                     winner: winner.clone(),
                     ticket_id,
                     tier_index: i,
                     timestamp: env.ledger().timestamp(),
-                },
-            );
+                }.publish(&env);
         }
 
         let mut claimed_winners = Vec::new(env);
@@ -1465,28 +1379,20 @@ impl Contract {
                 .set(&DataKey::FinishTime, &env.ledger().timestamp());
         }
 
-        publish_event(
-            env,
-            "raffle_finalized",
-            RaffleFinalized {
+        RaffleFinalized {
                 winners,
                 winning_ticket_ids,
                 total_tickets_sold: raffle.tickets_sold,
                 randomness_source: RandomnessSource::CommitReveal,
                 randomness_type: RandomnessType::Vrf,
                 finalized_at: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        publish_event(
-            env,
-            "status_changed",
-            RaffleStatusChanged {
+        RaffleStatusChanged {
                 old_status: RaffleStatus::Drawing,
                 new_status: RaffleStatus::Finalized,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -1506,7 +1412,7 @@ impl Contract {
 
         let actual_winner = raffle.winners.get(tier_index).unwrap();
         if actual_winner != winner {
-            // env.events().publish((Symbol::new(&env, "DEBUG"), Symbol::new(&env, "NotWinner")), (actual_winner, winner.clone()));
+            // (actual_winner, winner.clone()).publish(&env);
             return Err(Error::NotWinner);
         }
 
@@ -1609,18 +1515,14 @@ impl Contract {
                         // Non-critical: burn failure keeps fees in contract.
                         let _ = tikka_client.try_burn(&contract_address, &amount_out);
 
-                        publish_event(
-                            &env,
-                            "buyback_and_burn_executed",
-                            crate::events::BuybackAndBurnExecuted {
+                        crate::events::BuybackAndBurnExecuted {
                                 router: router.clone(),
                                 payment_token: raffle.payment_token.clone(),
                                 tikka_token: tikka.clone(),
                                 amount_in: platform_fee,
                                 amount_out,
                                 timestamp: env.ledger().timestamp(),
-                            },
-                        );
+                            }.publish(&env);
                     }
                     // If swap failed, fees remain in the contract for manual
                     // recovery — the winner's claim is already settled above.
@@ -1629,18 +1531,14 @@ impl Contract {
                     // Non-critical: burn failure keeps fees in contract.
                     let _ = tikka_client.try_burn(&contract_address, &platform_fee);
 
-                    publish_event(
-                        &env,
-                        "buyback_and_burn_executed",
-                        crate::events::BuybackAndBurnExecuted {
+                    crate::events::BuybackAndBurnExecuted {
                             router: contract_address.clone(),
                             payment_token: raffle.payment_token.clone(),
                             tikka_token: tikka.clone(),
                             amount_in: platform_fee,
                             amount_out: platform_fee,
                             timestamp: env.ledger().timestamp(),
-                        },
-                    );
+                        }.publish(&env);
                 }
             } else if raffle.treasury_address.is_some() {
                 // Non-critical: treasury transfer failure keeps fees in contract.
@@ -1654,9 +1552,7 @@ impl Contract {
 
         release_guard(&env);
 
-        env.events().publish(
-            (Symbol::new(&env, "PrizeClaimed"), winner.clone()),
-            PrizeClaimed {
+        PrizeClaimed {
                 winner: winner.clone(),
                 tier_index,
                 payment_token: raffle.payment_token.clone(),
@@ -1664,8 +1560,7 @@ impl Contract {
                 net_amount,
                 platform_fee,
                 claimed_at,
-            },
-        );
+            }.publish(&env);
 
         Ok(net_amount)
     }
@@ -1740,27 +1635,19 @@ impl Contract {
             token_client.transfer(&contract_address, &raffle.creator, &prize_to_refund);
         }
 
-        publish_event(
-            &env,
-            "status_changed",
-            RaffleStatusChanged {
+        RaffleStatusChanged {
                 old_status,
                 new_status: RaffleStatus::Cancelled,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
-        publish_event(
-            &env,
-            "raffle_cancelled",
-            RaffleCancelled {
+        RaffleCancelled {
                 creator: raffle.creator,
                 reason,
                 tickets_sold: raffle.tickets_sold,
                 prize_refunded: raffle.prize_deposited,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -1814,16 +1701,12 @@ impl Contract {
 
         release_guard(&env);
 
-        publish_event(
-            &env,
-            "ticket_refunded",
-            TicketRefunded {
+        TicketRefunded {
                 buyer: ticket.owner.clone(),
                 ticket_number: ticket_id,
                 amount: raffle.ticket_price,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(raffle.ticket_price)
     }
@@ -2032,14 +1915,10 @@ impl Contract {
         factory.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
 
-        publish_event(
-            &env,
-            "contract_paused",
-            crate::events::ContractPaused {
+        crate::events::ContractPaused {
                 paused_by: factory,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -2053,14 +1932,10 @@ impl Contract {
         factory.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
 
-        publish_event(
-            &env,
-            "contract_unpaused",
-            crate::events::ContractUnpaused {
+        crate::events::ContractUnpaused {
                 unpaused_by: factory,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -2106,16 +1981,12 @@ impl Contract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&contract_address, &treasury, &accumulated);
 
-        publish_event(
-            &env,
-            "fees_withdrawn",
-            crate::events::FeesWithdrawn {
+        crate::events::FeesWithdrawn {
                 recipient: treasury,
                 amount: accumulated,
                 token: raffle.payment_token,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(accumulated)
     }
@@ -2202,15 +2073,11 @@ impl Contract {
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
 
-        publish_event(
-            &env,
-            "admin_transfer_proposed",
-            crate::events::AdminTransferProposed {
+        crate::events::AdminTransferProposed {
                 current_admin: admin,
                 proposed_admin: new_admin,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -2236,15 +2103,11 @@ impl Contract {
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
 
-        publish_event(
-            &env,
-            "admin_transfer_accepted",
-            crate::events::AdminTransferAccepted {
+        crate::events::AdminTransferAccepted {
                 old_admin,
                 new_admin: pending,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }

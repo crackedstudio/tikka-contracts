@@ -105,15 +105,7 @@ pub enum ContractError {
     RaffleNotEligible = 17,
 }
 
-fn publish_factory_event<T>(env: &Env, event_name: &str, event: T)
-where
-    T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
-{
-    env.events().publish(
-        (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
-        event,
-    );
-}
+
 
 fn require_admin(env: &Env) -> Result<Address, ContractError> {
     let admin: Address = env
@@ -172,16 +164,12 @@ fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
         .persistent()
         .set(&DataKey::LatestCheckpointIndex, &index);
 
-    publish_factory_event(
-        env,
-        "checkpoint_created",
-        events::CheckpointCreated {
+    events::CheckpointCreated {
             index,
             raffle_count,
             ledger_timestamp,
             aggregate_hash: aggregate_hash.into(),
-        },
-    );
+        }.publish(&env);
 }
 
 #[contractimpl]
@@ -210,16 +198,12 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::Treasury, &treasury);
 
-        publish_factory_event(
-            &env,
-            "factory_initialized",
-            events::FactoryInitialized {
+        events::FactoryInitialized {
                 admin,
                 protocol_fee_bp,
                 treasury,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -250,16 +234,12 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::PendingOp(op_id), &pending);
 
-        publish_factory_event(
-            &env,
-            "admin_op_proposed",
-            events::AdminOpProposed {
+        events::AdminOpProposed {
                 op_id,
                 op,
                 effective_timestamp,
                 proposed_by: admin,
-            },
-        );
+            }.publish(&env);
 
         Ok(op_id)
     }
@@ -292,16 +272,12 @@ impl RaffleFactory {
             .persistent()
             .remove(&DataKey::PendingOp(op_id));
 
-        publish_factory_event(
-            &env,
-            "admin_op_executed",
-            events::AdminOpExecuted {
+        events::AdminOpExecuted {
                 op_id,
                 op: pending.op,
                 executed_by: admin,
                 executed_at: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -317,15 +293,11 @@ impl RaffleFactory {
             .persistent()
             .remove(&DataKey::PendingOp(op_id));
 
-        publish_factory_event(
-            &env,
-            "admin_op_cancelled",
-            events::AdminOpCancelled {
+        events::AdminOpCancelled {
                 op_id,
                 cancelled_by: admin,
                 cancelled_at: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -415,7 +387,7 @@ impl RaffleFactory {
         let raffle_address = env
             .deployer()
             .with_address(factory_address.clone(), salt)
-            .deploy(wasm_hash);
+            .deploy_v2(wasm_hash, ());
 
         #[cfg(test)]
         let raffle_address = {
@@ -583,14 +555,10 @@ impl RaffleFactory {
         let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &true);
 
-        publish_factory_event(
-            &env,
-            "contract_paused",
-            events::ContractPaused {
+        events::ContractPaused {
                 paused_by: admin,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -599,14 +567,10 @@ impl RaffleFactory {
         let admin = require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &false);
 
-        publish_factory_event(
-            &env,
-            "contract_unpaused",
-            events::ContractUnpaused {
+        events::ContractUnpaused {
                 unpaused_by: admin,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -635,15 +599,11 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::PendingAdmin, &new_admin);
 
-        publish_factory_event(
-            &env,
-            "admin_transfer_proposed",
-            events::AdminTransferProposed {
+        events::AdminTransferProposed {
                 current_admin: admin,
                 proposed_admin: new_admin,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -665,15 +625,11 @@ impl RaffleFactory {
         env.storage().persistent().set(&DataKey::Admin, &pending);
         env.storage().persistent().remove(&DataKey::PendingAdmin);
 
-        publish_factory_event(
-            &env,
-            "admin_transfer_accepted",
-            events::AdminTransferAccepted {
+        events::AdminTransferAccepted {
                 old_admin,
                 new_admin: pending,
                 timestamp: env.ledger().timestamp(),
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
@@ -816,16 +772,12 @@ impl RaffleFactory {
             .set(&DataKey::RaffleInstances, &instances);
 
         // 6. Audit event
-        publish_factory_event(
-            &env,
-            "raffle_cleaned_up",
-            events::RaffleCleanedUp {
+        events::RaffleCleanedUp {
                 raffle_address,
                 cleaned_by: admin,
                 finish_time,
                 cleaned_at: now,
-            },
-        );
+            }.publish(&env);
 
         Ok(())
     }
