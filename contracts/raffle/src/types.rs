@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Vec};
 
-use crate::instance::{Ticket, RandomnessSource};
+use crate::instance::{RandomnessSource, Ticket};
 
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
 pub const MAX_PAGE_LIMIT: u32 = 200;

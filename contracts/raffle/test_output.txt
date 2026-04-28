@@ -1,0 +1,27 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/victor/Desktop/tikka-contracts/contracts/raffle/Cargo.toml
+workspace: /Users/victor/Desktop/tikka-contracts/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/victor/Desktop/tikka-contracts/fuzz/Cargo.toml
+workspace: /Users/victor/Desktop/tikka-contracts/Cargo.toml
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/Users/victor/Desktop/tikka-contracts/target/debug/deps/hello_world-2c93659254038c7a)
+
+running 1 test
+
+thread 'instance::test::test_claim_with_protocol_fee_guard_released' (5314893) panicked at contracts/raffle/src/instance/test.rs:1056:5:
+assertion `left == right` failed
+  left: 90000
+ right: 100000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Writing test snapshot file for test "instance::test::test_claim_with_protocol_fee_guard_released" to "test_snapshots/instance/test/test_claim_with_protocol_fee_guard_released.1.json".
+test instance::test::test_claim_with_protocol_fee_guard_released ... FAILED
+
+failures:
+
+failures:
+    instance::test::test_claim_with_protocol_fee_guard_released
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 137 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `--lib`

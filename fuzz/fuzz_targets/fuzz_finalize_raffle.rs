@@ -137,7 +137,10 @@ fuzz_target!(|input: FinalizeInput| {
         input.tickets_sold,
     ) {
         None => {
-            assert_eq!(input.tickets_sold, 0, "None for non-zero tickets_sold (internal)");
+            assert_eq!(
+                input.tickets_sold, 0,
+                "None for non-zero tickets_sold (internal)"
+            );
         }
         Some(idx) => {
             // INVARIANT 1: winner index strictly within bounds
@@ -169,7 +172,10 @@ fuzz_target!(|input: FinalizeInput| {
         input.tickets_sold,
     ) {
         None => {
-            assert_eq!(input.tickets_sold, 0, "None for non-zero tickets_sold (external)");
+            assert_eq!(
+                input.tickets_sold, 0,
+                "None for non-zero tickets_sold (external)"
+            );
         }
         Some(idx) => {
             // INVARIANT 3: winner index strictly within bounds
@@ -251,7 +257,9 @@ mod tests {
             (0, 0, u32::MAX),
         ];
         for &(ts, seq, sold) in cases {
-            if sold == 0 { continue; }
+            if sold == 0 {
+                continue;
+            }
             let idx = compute_winner_internal(ts, seq, &[0u8; 32], &[0u8; 32], sold).unwrap();
             assert!(idx < sold, "idx={idx} sold={sold}");
         }

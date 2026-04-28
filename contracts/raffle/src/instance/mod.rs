@@ -4,18 +4,24 @@ use soroban_sdk::{
     Env, IntoVal, String, Symbol, Vec,
 };
 
-use self::randomness::{build_internal_seed, OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy};
+use self::randomness::{
+    build_internal_seed, OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy,
+};
 use crate::types::FairnessData;
 
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
-    RandomnessRequested, SeedCommitted, SeedRevealed, TicketPurchased, WinnerDrawn, RandomnessType,
-    TicketRefunded,
+    RandomnessRequested, RandomnessType, SeedCommitted, SeedRevealed, TicketPurchased,
+    TicketRefunded, WinnerDrawn,
 };
 
 /// Number of ledgers after a randomness request before the fallback can be triggered.
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
+
+pub const MAX_DESCRIPTION_LENGTH: u32 = 1000;
+pub const MAX_TICKETS_LIMIT: u32 = 100_000;
+pub const MIN_TICKET_PRICE: i128 = 10_000;
 mod randomness;
 
 // --- External Contract Traits ---
@@ -133,14 +139,10 @@ pub struct FairnessMetadata {
 }
 
 // Helper function to publish events with standardized topics
-fn publish_event<T>(env: &Env, event_name: &str, event: T)
-where
-    T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
-{
-    env.events().publish(
-        (Symbol::new(env, "tikka"), Symbol::new(env, event_name)),
-        event,
-    );
+fn publish_event<T: IntoVal<Env, soroban_sdk::Val>>(env: &Env, name: &str, data: T) {
+    // panic!("Publishing event: {}", name);
+    env.events()
+        .publish((Symbol::new(env, "tikka"), Symbol::new(env, name)), data);
 }
 
 /// Detects if an address is the native XLM contract by checking its name and symbol.
@@ -148,7 +150,8 @@ where
 fn is_native_xlm(env: &Env, token: &Address) -> bool {
     let client = token::Client::new(env, token);
     // SAC for native asset has name "native" and symbol "XLM"
-    client.name() == String::from_str(env, "native") && client.symbol() == String::from_str(env, "XLM")
+    client.name() == String::from_str(env, "native")
+        && client.symbol() == String::from_str(env, "XLM")
 }
 
 fn verify_randomness_proof_internal(
@@ -170,7 +173,7 @@ pub enum DataKey {
     Ticket(u32),
     NextTicketId,
     Factory,
-    RefundStatus(u32),     // ticket_id -> bool
+    RefundStatus(u32), // ticket_id -> bool
     ReentrancyGuard,
     Approved(u32),                    // ticket_id -> Address
     ApprovedForAll(Address, Address), // (owner, operator) -> bool
@@ -186,6 +189,8 @@ pub enum DataKey {
     CommitCount,             // commit-reveal: number of commits received
     RevealedSecret(Address), // commit-reveal: revealed secret bytes
     RevealCount,             // commit-reveal: number of reveals received
+    TotalTickets,
+    AccumulatedFees,
 }
 
 // --- Error Types ---
@@ -242,16 +247,22 @@ pub enum Error {
     CommitHashMismatch = 63,
     AlreadyRevealed = 64,
     CommitRevealNotReady = 65,
+    TicketAlreadyRefunded = 66,
 }
 
 fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+    if env
+        .storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+    {
         return Err(Error::ContractPaused);
     }
     Ok(())
 }
 
-fn build_internal_seed(env: &Env) -> u64 {
+fn build_internal_seed_u64(env: &Env) -> u64 {
     let xdr = (
         env.ledger().timestamp(),
         env.ledger().sequence(),
@@ -259,7 +270,7 @@ fn build_internal_seed(env: &Env) -> u64 {
     )
         .to_xdr(env);
     let hash: BytesN<32> = env.crypto().sha256(&xdr).into();
-    
+
     // Convert first 8 bytes of hash to u64
     let mut bytes = [0u8; 8];
     for i in 0..8 {
@@ -431,6 +442,24 @@ fn write_ticket_count(env: &Env, buyer: &Address, count: u32) {
         .set(&DataKey::TicketCount(buyer.clone()), &count);
 }
 
+fn write_ticket(env: &Env, ticket: &Ticket) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Ticket(ticket.id), ticket);
+}
+
+/// Increment total ticket counter and return the new ticket number (1-indexed).
+fn next_ticket_id(env: &Env) -> u32 {
+    let current: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::NextTicketId)
+        .unwrap_or(0u32);
+    let next = current + 1;
+    env.storage().instance().set(&DataKey::NextTicketId, &next);
+    next
+}
+
 /// Increment total ticket counter and return the new ticket number (1-indexed).
 fn next_ticket_number(env: &Env) -> u32 {
     let current: u32 = env
@@ -525,11 +554,15 @@ impl Contract {
             return Err(Error::AlreadyInitialized);
         }
 
-        let now = env.ledger().timestamp();
-        if config.end_time < now && config.end_time != 0 {
+        if config.description.len() > MAX_DESCRIPTION_LENGTH {
             return Err(Error::InvalidParameters);
         }
-        if config.max_tickets == 0 {
+
+        let now = env.ledger().timestamp();
+        if config.end_time <= now && config.end_time != 0 {
+            return Err(Error::InvalidParameters);
+        }
+        if config.max_tickets == 0 || config.max_tickets > MAX_TICKETS_LIMIT {
             return Err(Error::InvalidParameters);
         }
 
@@ -537,14 +570,14 @@ impl Contract {
         // (native XLM = 7 decimals/stroops, SAC tokens vary).
         // Amounts must be >= 1 (smallest unit) and prize must cover at least one ticket.
         let token_client = token::Client::new(&env, &config.payment_token);
-        
+
         // Log detection if native XLM is being used
         if is_native_xlm(&env, &config.payment_token) {
             // Native XLM support confirmed
         }
 
         let _decimals = token_client.decimals(); // available for off-chain tooling via get_token_decimals
-        if config.ticket_price < 1 {
+        if config.ticket_price < MIN_TICKET_PRICE {
             return Err(Error::InvalidParameters);
         }
         if config.prize_amount < config.ticket_price {
@@ -619,14 +652,6 @@ impl Contract {
         Ok(())
     }
 
-
-        if raffle.status != RaffleStatus::Active {
-            return Err(Error::InvalidStateTransition);
-        }
-        if raffle.prize_deposited {
-            return Err(Error::PrizeAlreadyDeposited);
-        }
-
     pub fn deposit_prize(env: Env) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
@@ -646,7 +671,7 @@ impl Contract {
         // Use try_transfer so a broken token surfaces as a typed error.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-        
+
         if is_native_xlm(&env, &raffle.payment_token) {
             // Optimization or specific logic for native balance operations could go here.
             // For now, SAC transfer is the standard native balance operation in Soroban.
@@ -684,7 +709,7 @@ impl Contract {
         require_not_paused(&env)?;
 
         // --- 1. CHECKS ---
-        if raffle.status != RaffleStatus::Open && raffle.status != RaffleStatus::Active {
+        if raffle.status != RaffleStatus::Active {
             return Err(Error::RaffleInactive);
         }
         if !raffle.prize_deposited {
@@ -693,7 +718,7 @@ impl Contract {
         if raffle.end_time != 0 && env.ledger().timestamp() > raffle.end_time {
             return Err(Error::RaffleExpired);
         }
-        
+
         // Check total availability for the whole batch
         if raffle.tickets_sold + quantity > raffle.max_tickets {
             return Err(Error::TicketsSoldOut);
@@ -708,7 +733,8 @@ impl Contract {
         // --- 2. EFFECTS ---
         let mut ticket_ids = Vec::new(&env);
         let timestamp = env.ledger().timestamp();
-        let total_price = raffle.ticket_price
+        let total_price = raffle
+            .ticket_price
             .checked_mul(quantity as i128)
             .ok_or(Error::InvalidParameters)?;
 
@@ -763,12 +789,12 @@ impl Contract {
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
 
-        // If it's native XLM, we could potentially use specialized logic, 
+        // If it's native XLM, we could potentially use specialized logic,
         // but token::Client works perfectly and is the standard way.
         // We log detection for auditing as requested in the task.
         if is_native_xlm(&env, &raffle.payment_token) {
-             // In some versions of Soroban, native might require specific authorization,
-             // but here we rely on the standard SAC which works with require_auth.
+            // In some versions of Soroban, native might require specific authorization,
+            // but here we rely on the standard SAC which works with require_auth.
         }
 
         token_client
@@ -782,6 +808,7 @@ impl Contract {
                 buyer: buyer.clone(),
                 ticket_ids,
                 quantity,
+                ticket_price: raffle.ticket_price,
                 total_paid: total_price,
                 timestamp,
             },
@@ -803,8 +830,28 @@ impl Contract {
         let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
         let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
 
+        if raffle.status == RaffleStatus::Active && !time_ended && !tickets_full {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        if raffle.tickets_sold < raffle.min_tickets {
+            let old_status = raffle.status.clone();
+            raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
+            publish_event(
+                &env,
+                "status_changed",
+                RaffleStatusChanged {
+                    old_status,
+                    new_status: RaffleStatus::Failed,
+                    timestamp: now,
+                },
+            );
+            return Ok(());
+        }
+
+        if raffle.randomness_source == RandomnessSource::External {
             let already: bool = env
                 .storage()
                 .instance()
@@ -820,19 +867,22 @@ impl Contract {
                 .instance()
                 .set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
 
+            let oracle = raffle
+                .oracle_address
+                .clone()
+                .unwrap_or_else(|| env.current_contract_address());
             publish_event(
                 &env,
-                "status_changed",
-                RaffleStatusChanged {
-                    old_status,
-                    new_status: RaffleStatus::Failed,
+                "RandomnessRequested",
+                crate::events::RandomnessRequested {
+                    oracle,
                     timestamp: now,
                 },
             );
             return Ok(());
         }
 
-        let seed = build_internal_seed(&env);
+        let seed = build_internal_seed_u64(&env);
         do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng)
     }
 
@@ -936,7 +986,6 @@ impl Contract {
         if already {
             return Err(Error::RandomnessAlreadyRequested);
         }
-
 
         // Persist the Drawing state before marking the request
         write_raffle(&env, &raffle);
@@ -1112,11 +1161,7 @@ impl Contract {
             winners.push_back(winner.clone());
 
             env.events().publish(
-                (
-                    Symbol::new(&env, "WinnerDrawn"),
-                    winner.clone(),
-                    ticket_id,
-                ),
+                (Symbol::new(&env, "WinnerDrawn"), winner.clone(), ticket_id),
                 WinnerDrawn {
                     winner: winner.clone(),
                     ticket_id,
@@ -1352,8 +1397,14 @@ impl Contract {
         let hash = env.crypto().sha256(&seed_bytes);
         let hash_arr = hash.to_array();
         seed = u64::from_be_bytes([
-            hash_arr[0], hash_arr[1], hash_arr[2], hash_arr[3],
-            hash_arr[4], hash_arr[5], hash_arr[6], hash_arr[7],
+            hash_arr[0],
+            hash_arr[1],
+            hash_arr[2],
+            hash_arr[3],
+            hash_arr[4],
+            hash_arr[5],
+            hash_arr[6],
+            hash_arr[7],
         ]);
 
         let total_tickets = get_ticket_count(env);
@@ -1563,6 +1614,7 @@ impl Contract {
                             "buyback_and_burn_executed",
                             crate::events::BuybackAndBurnExecuted {
                                 router: router.clone(),
+                                payment_token: raffle.payment_token.clone(),
                                 tikka_token: tikka.clone(),
                                 amount_in: platform_fee,
                                 amount_out,
@@ -1705,6 +1757,7 @@ impl Contract {
                 creator: raffle.creator,
                 reason,
                 tickets_sold: raffle.tickets_sold,
+                prize_refunded: raffle.prize_deposited,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -2128,7 +2181,7 @@ impl Contract {
 
         Ok(())
     }
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
             .instance()
@@ -2163,7 +2216,7 @@ impl Contract {
     }
 
     pub fn transfer_ownership(env: Env, new_owner: Address) -> Result<(), Error> {
-        Self::transfer_admin(env, new_owner)
+        Self::propose_admin(env, new_owner)
     }
 
     pub fn accept_admin(env: Env) -> Result<(), Error> {
@@ -2174,7 +2227,11 @@ impl Contract {
             .ok_or(Error::NoPendingTransfer)?;
         pending.require_auth();
 
-        let old_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let old_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
 
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);

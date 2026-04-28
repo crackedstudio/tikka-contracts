@@ -275,7 +275,6 @@ pub struct SeedRevealed {
     pub timestamp: u64,
 }
 
-
 /// Emitted when an old raffle's storage is wiped by the factory admin
 #[derive(Clone)]
 #[contracttype]
