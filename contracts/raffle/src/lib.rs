@@ -79,7 +79,7 @@ pub enum ContractError {
     TimelockNotElapsed = 15,
     InvalidRaffleId = 16,
     RaffleNotEligible = 17,
-    ConfigNotSet = 18,
+    TreasuryNotSet = 18,
 }
 
 #[contract]
@@ -333,8 +333,12 @@ impl RaffleFactory {
             .storage()
             .persistent()
             .get(&DataKey::ProtocolFeeBP)
-            .ok_or(ContractError::ConfigNotSet)?;
-        let treasury: Address = env.storage().persistent().get(&DataKey::Treasury).unwrap();
+            .unwrap_or(0);
+        let treasury: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Treasury)
+            .ok_or(ContractError::TreasuryNotSet)?;
 
         let mut instances: Vec<Address> = env
             .storage()

@@ -86,6 +86,7 @@ pub enum DataKey {
     RandomnessSeed,
     RandomnessRequested,
     RandomnessRequestLedger,
+    RandomnessRequestId,
     FinishTime,
 }
 
@@ -456,11 +457,27 @@ impl Contract {
             if already {
                 return Err(Error::RandomnessAlreadyRequested);
             }
+            
+            // Generate unique request ID to prevent replay attacks
+            let request_id_seed = Bytes::from_array(&env, &(
+                env.ledger().timestamp(),
+                env.ledger().sequence(),
+                env.current_contract_address().to_xdr(&env),
+            ).to_xdr(&env));
+            let request_id_hash: BytesN<32> = env.crypto().sha256(&request_id_seed).into();
+            let mut id_bytes = [0u8; 8];
+            for i in 0..8 {
+                id_bytes[i] = request_id_hash.get(i as u32).unwrap();
+            }
+            let request_id = u64::from_be_bytes(id_bytes);
+            
             env.storage().instance().set(&DataKey::RandomnessRequested, &true);
             env.storage().instance().set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+            env.storage().instance().set(&DataKey::RandomnessRequestId, &request_id);
 
             RandomnessRequested {
                 oracle: raffle.oracle_address.clone().unwrap_or(env.current_contract_address()),
+                request_id,
                 timestamp: now,
             }.publish(&env);
             return Ok(());
@@ -475,6 +492,7 @@ impl Contract {
         random_seed: u64,
         public_key: BytesN<32>,
         proof: BytesN<64>,
+        request_id: u64,
     ) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
@@ -495,12 +513,19 @@ impl Contract {
             return Err(Error::NoRandomnessRequest);
         }
 
+        // Verify request ID to prevent replay attacks
+        let stored_request_id: u64 = env.storage().instance().get(&DataKey::RandomnessRequestId).ok_or(Error::NoRandomnessRequest)?;
+        if stored_request_id != request_id {
+            return Err(Error::InvalidParameters);
+        }
+
         let message = Bytes::from_array(&env, &random_seed.to_be_bytes());
         env.crypto().ed25519_verify(&public_key, &message, &proof);
 
         RandomnessReceived {
             oracle,
             seed: random_seed,
+            request_id,
             timestamp: env.ledger().timestamp(),
         }.publish(&env);
 
@@ -846,6 +871,11 @@ fn do_finalize_with_seed(
     raffle.claimed_winners = claimed_winners;
     raffle.finalized_at = Some(env.ledger().timestamp());
     write_raffle(env, &raffle);
+
+    // Clear pending randomness state
+    env.storage().instance().remove(&DataKey::RandomnessRequested);
+    env.storage().instance().remove(&DataKey::RandomnessRequestId);
+    env.storage().instance().remove(&DataKey::RandomnessRequestLedger);
 
     RaffleFinalized {
         winners,
