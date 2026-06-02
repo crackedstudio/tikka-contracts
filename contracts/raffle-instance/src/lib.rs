@@ -546,7 +546,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        if tier_index as usize >= raffle.winners.len() {
+        if tier_index >= raffle.winners.len() {
             return Err(Error::InvalidParameters);
         }
 
@@ -700,7 +700,7 @@ impl Contract {
 
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         let metadata: FairnessMetadata = env.storage().instance().get(&DataKey::RandomnessSeed).ok_or(Error::InvalidStatus)?;
-        let raffle = read_raffle(&env)?;
+        let _raffle = read_raffle(&env)?;
         
         let mut ticket_ids = Vec::new(&env);
         let count = get_ticket_count(&env);
