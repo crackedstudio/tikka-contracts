@@ -301,7 +301,6 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
-        let old_status = raffle.status.clone();
         raffle.prize_deposited = true;
         write_raffle(&env, &raffle);
 
@@ -510,7 +509,7 @@ impl Contract {
         public_key: BytesN<32>,
         proof: BytesN<64>,
     ) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
             Some(addr) => {
@@ -686,7 +685,6 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        let old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
         write_raffle(&env, &raffle);
 
