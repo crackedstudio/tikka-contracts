@@ -368,6 +368,7 @@ impl Contract {
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::TotalTickets, &0u32);
 
         RaffleCreated {
             raffle_id: env.current_contract_address(),
@@ -395,6 +396,8 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
+        raffle.prize_deposited = true;
+        write_raffle(&env, &raffle);
         let old_status = raffle.status.clone();
 
         // Move tokens first. If the transfer fails we want the contract state
@@ -496,6 +499,7 @@ impl Contract {
 
         env.storage().persistent().set(&DataKey::TicketCount(buyer.clone()), &(current_count + quantity));
         write_raffle(&env, &raffle);
+        env.storage().instance().set(&DataKey::TotalTickets, &raffle.tickets_sold);
 
         if let Some(factory_address) = env.storage().instance().get::<_, Address>(&DataKey::Factory) {
             let contract_address = env.current_contract_address();
@@ -623,7 +627,7 @@ impl Contract {
         proof: BytesN<64>,
         request_id: u64,
     ) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
             Some(addr) => {
@@ -721,6 +725,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
+        if tier_index >= raffle.winners.len() {
         // #259: enforce the configurable lockup delay.
         if let Some(finalized_at) = raffle.finalized_at {
             if env.ledger().timestamp() < finalized_at + raffle.claim_lockup_seconds {
@@ -807,7 +812,6 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        let old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
         write_raffle(&env, &raffle);
 
@@ -893,9 +897,13 @@ impl Contract {
         read_raffle(&env)
     }
 
+    pub fn get_tickets_sold(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::TotalTickets).unwrap_or(0u32)
+    }
+
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         let metadata: FairnessMetadata = env.storage().instance().get(&DataKey::RandomnessSeed).ok_or(Error::InvalidStatus)?;
-        let raffle = read_raffle(&env)?;
+        let _raffle = read_raffle(&env)?;
         
         let mut ticket_ids = Vec::new(&env);
         let count = get_ticket_count(&env);
