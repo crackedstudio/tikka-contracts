@@ -9,3 +9,6 @@ crate-type = ["cdylib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 raffle-shared = { path = "../raffle-shared" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

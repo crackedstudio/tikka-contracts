@@ -84,6 +84,8 @@ pub enum DataKey {
     RandomnessRequestLedger,
     FinishTime,
     TotalTickets,
+    CommitSeedHash,
+    CommitRevealed,
 }
 
 #[contracterror]
@@ -700,6 +702,92 @@ impl Contract {
         Ok(raffle.ticket_price)
     }
 
+    pub fn commit_seed(env: Env, creator: Address, seed_hash: BytesN<32>) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        let raffle = read_raffle(&env)?;
+        creator.require_auth();
+
+        if raffle.creator != creator {
+            return Err(Error::NotAuthorized);
+        }
+        if raffle.randomness_source != raffle_shared::RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+        if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStatus);
+        }
+        if env.storage().instance().has(&DataKey::CommitSeedHash) {
+            return Err(Error::RandomnessAlreadyRequested);
+        }
+
+        env.storage().instance().set(&DataKey::CommitSeedHash, &seed_hash);
+        env.storage().instance().set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+        Ok(())
+    }
+
+    pub fn reveal_seed(env: Env, creator: Address, seed: u64) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        let raffle = read_raffle(&env)?;
+        creator.require_auth();
+
+        if raffle.creator != creator {
+            return Err(Error::NotAuthorized);
+        }
+        if raffle.randomness_source != raffle_shared::RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+
+        let commit_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::CommitSeedHash)
+            .ok_or(Error::NoRandomnessRequest)?;
+
+        if env.storage().instance().has(&DataKey::CommitRevealed) {
+            return Err(Error::RandomnessAlreadyRequested);
+        }
+
+        let commit_ledger: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RandomnessRequestLedger)
+            .unwrap_or(0);
+        if env.ledger().sequence() <= commit_ledger {
+            return Err(Error::FallbackTooEarly);
+        }
+
+        // verify hash(seed) == committed hash
+        let seed_bytes = Bytes::from_array(&env, &seed.to_be_bytes());
+        let expected: BytesN<32> = env.crypto().sha256(&seed_bytes).into();
+        if expected != commit_hash {
+            return Err(Error::InvalidParameters);
+        }
+
+        env.storage().instance().set(&DataKey::CommitRevealed, &true);
+        Ok(())
+    }
+
+    pub fn finalize_commit_reveal(env: Env, creator: Address) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        let raffle = read_raffle(&env)?;
+        creator.require_auth();
+
+        if raffle.creator != creator {
+            return Err(Error::NotAuthorized);
+        }
+        if raffle.randomness_source != raffle_shared::RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+        if !env.storage().instance().has(&DataKey::CommitRevealed) {
+            return Err(Error::NoRandomnessRequest);
+        }
+
+        // mix the committed seed with internal entropy so the creator can't
+        // fully predict the winner just by choosing their seed
+        let seed = build_internal_seed_u64(&env);
+        do_finalize_with_seed(&env, raffle, seed, raffle_shared::RandomnessType::Prng)
+    }
+
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
         read_raffle(&env)
     }
@@ -842,4 +930,368 @@ fn do_finalize_with_seed(
     }.publish(&env);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger, LedgerInfo},
+        Env,
+    };
+    use raffle_shared::{RaffleConfig, RandomnessSource};
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    fn default_ledger_info() -> LedgerInfo {
+        LedgerInfo {
+            timestamp: 1_000_000,
+            protocol_version: 22,
+            sequence_number: 100,
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 16,
+            min_persistent_entry_ttl: 4096,
+            max_entry_ttl: 6_312_000,
+        }
+    }
+
+    fn setup(env: &Env) -> (ContractClient, Address, Address, Address) {
+        env.ledger().set(default_ledger_info());
+        env.mock_all_auths();
+
+        let factory = Address::generate(env);
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+
+        // register a mock token so prize deposit doesn't panic on token transfer
+        let token_addr = env.register_stellar_asset_contract_v2(Address::generate(env)).address();
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+
+        let mut prizes = Vec::new(env);
+        prizes.push_back(10000u32);
+
+        let seed_hash_bytes = env.crypto().sha256(
+            &Bytes::from_array(env, &42u64.to_be_bytes())
+        );
+        let metadata_hash: BytesN<32> = BytesN::from_array(env, &[1u8; 32]);
+
+        let config = RaffleConfig {
+            description: soroban_sdk::String::from_str(env, "Test Raffle"),
+            end_time: 2_000_000,
+            max_tickets: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: token_addr.clone(),
+            prize_amount: 10_000,
+            prizes,
+            randomness_source: RandomnessSource::CommitReveal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+
+        (client, creator, admin, token_addr)
+    }
+
+    fn make_seed_hash(env: &Env, seed: u64) -> BytesN<32> {
+        env.crypto()
+            .sha256(&Bytes::from_array(env, &seed.to_be_bytes()))
+            .into()
+    }
+
+    // -------------------------------------------------------------------------
+    // commit_seed tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn commit_seed_happy_path() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+
+        let hash = make_seed_hash(&env, 42);
+        client.commit_seed(&creator, &hash); // must not panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn commit_seed_rejects_duplicate() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+
+        let hash = make_seed_hash(&env, 42);
+        client.commit_seed(&creator, &hash);
+        client.commit_seed(&creator, &hash); // second call must fail
+    }
+
+    #[test]
+    #[should_panic]
+    fn commit_seed_rejects_non_creator() {
+        let env = Env::default();
+        let (client, _, _, _) = setup(&env);
+
+        let stranger = Address::generate(&env);
+        let hash = make_seed_hash(&env, 42);
+        client.commit_seed(&stranger, &hash);
+    }
+
+    // -------------------------------------------------------------------------
+    // reveal_seed tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn reveal_seed_happy_path() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+
+        let seed: u64 = 99;
+        let hash = make_seed_hash(&env, seed);
+        client.commit_seed(&creator, &hash);
+
+        // advance one ledger so sequence > commit ledger
+        env.ledger().set(LedgerInfo {
+            sequence_number: 101,
+            ..default_ledger_info()
+        });
+
+        client.reveal_seed(&creator, &seed); // must not panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn reveal_seed_rejects_early_reveal_same_ledger() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+
+        let seed: u64 = 99;
+        let hash = make_seed_hash(&env, seed);
+        client.commit_seed(&creator, &hash);
+        // do NOT advance ledger — same sequence as commit
+        client.reveal_seed(&creator, &seed);
+    }
+
+    #[test]
+    #[should_panic]
+    fn reveal_seed_rejects_wrong_seed() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+
+        let hash = make_seed_hash(&env, 42);
+        client.commit_seed(&creator, &hash);
+
+        env.ledger().set(LedgerInfo {
+            sequence_number: 101,
+            ..default_ledger_info()
+        });
+
+        client.reveal_seed(&creator, &999u64); // wrong seed, hash won't match
+    }
+
+    #[test]
+    #[should_panic]
+    fn reveal_seed_without_prior_commit() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+        client.reveal_seed(&creator, &42u64);
+    }
+
+    // -------------------------------------------------------------------------
+    // finalize_commit_reveal tests
+    // -------------------------------------------------------------------------
+
+    fn do_commit_reveal(env: &Env, client: &ContractClient, creator: &Address, seed: u64) {
+        let hash = make_seed_hash(env, seed);
+        client.commit_seed(creator, &hash);
+        env.ledger().set(LedgerInfo {
+            sequence_number: 101,
+            ..default_ledger_info()
+        });
+        client.reveal_seed(creator, &seed);
+    }
+
+    #[test]
+    #[should_panic]
+    fn finalize_commit_reveal_without_reveal() {
+        let env = Env::default();
+        let (client, creator, _, _) = setup(&env);
+        client.finalize_commit_reveal(&creator);
+    }
+
+    #[test]
+    #[should_panic]
+    fn finalize_commit_reveal_wrong_source_panics() {
+        // raffle with Internal source — finalize_commit_reveal must reject it
+        let env = Env::default();
+        env.ledger().set(default_ledger_info());
+        env.mock_all_auths();
+
+        let factory = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let token_addr = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let mut prizes = Vec::new(&env);
+        prizes.push_back(10000u32);
+
+        let config = RaffleConfig {
+            description: soroban_sdk::String::from_str(&env, "Internal Raffle"),
+            end_time: 2_000_000,
+            max_tickets: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: token_addr,
+            prize_amount: 10_000,
+            prizes,
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.finalize_commit_reveal(&creator);
+    }
+
+    #[test]
+    fn full_commit_reveal_flow_single_participant() {
+        let env = Env::default();
+        env.ledger().set(default_ledger_info());
+        env.mock_all_auths();
+
+        let factory = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let buyer = Address::generate(&env);
+
+        let issuer = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(issuer.clone());
+        let token_addr = token.address();
+        let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+
+        // mint enough for prize + ticket
+        token_client.mint(&creator, &100_000);
+        token_client.mint(&buyer, &100_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let mut prizes = Vec::new(&env);
+        prizes.push_back(10000u32);
+
+        let config = RaffleConfig {
+            description: soroban_sdk::String::from_str(&env, "CR Raffle"),
+            end_time: 2_000_000,
+            max_tickets: 5,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: token_addr.clone(),
+            prize_amount: 10_000,
+            prizes,
+            randomness_source: RandomnessSource::CommitReveal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&buyer, &1u32);
+
+        do_commit_reveal(&env, &client, &creator, 77);
+        client.finalize_commit_reveal(&creator);
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Finalized);
+        assert_eq!(raffle.winners.len(), 1);
+        assert_eq!(raffle.winners.get(0).unwrap(), buyer);
+    }
+
+    #[test]
+    fn full_commit_reveal_flow_multiple_participants() {
+        let env = Env::default();
+        env.ledger().set(default_ledger_info());
+        env.mock_all_auths();
+
+        let factory = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        let issuer = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(issuer.clone());
+        let token_addr = token.address();
+        let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+
+        token_client.mint(&creator, &100_000);
+        let buyers: Vec<Address> = {
+            let mut v = soroban_sdk::Vec::new(&env);
+            for _ in 0..3 {
+                let b = Address::generate(&env);
+                token_client.mint(&b, &100_000);
+                v.push_back(b);
+            }
+            v
+        };
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        // two prize tiers: 70% + 30%
+        let mut prizes = soroban_sdk::Vec::new(&env);
+        prizes.push_back(7000u32);
+        prizes.push_back(3000u32);
+
+        let config = RaffleConfig {
+            description: soroban_sdk::String::from_str(&env, "Multi CR"),
+            end_time: 2_000_000,
+            max_tickets: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: token_addr.clone(),
+            prize_amount: 20_000,
+            prizes,
+            randomness_source: RandomnessSource::CommitReveal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[2u8; 32]),
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+
+        for b in buyers.iter() {
+            client.buy_tickets(&b, &2u32);
+        }
+
+        do_commit_reveal(&env, &client, &creator, 12345);
+        client.finalize_commit_reveal(&creator);
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Finalized);
+        assert_eq!(raffle.winners.len(), 2);
+    }
 }
