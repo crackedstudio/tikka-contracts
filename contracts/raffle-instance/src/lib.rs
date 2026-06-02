@@ -425,7 +425,7 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
         if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
@@ -433,20 +433,23 @@ impl Contract {
         }
 
         let now = env.ledger().timestamp();
-        let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
-        let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
 
-        if raffle.status == RaffleStatus::Active && !time_ended && !tickets_full {
-            return Err(Error::InvalidStateTransition);
+        // For Active raffle, must have reason to finalize (time ended or capacity reached)
+        if raffle.status == RaffleStatus::Active {
+            let time_ended = raffle.end_time != 0 && now >= raffle.end_time;
+            let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
+            if !time_ended && !tickets_full {
+                return Err(Error::InvalidStateTransition);
+            }
         }
 
         if raffle.tickets_sold < raffle.min_tickets {
-            let old_status = raffle.status.clone();
-            raffle.status = RaffleStatus::Failed;
-            write_raffle(&env, &raffle);
+            let mut raffle_mut = raffle;
+            raffle_mut.status = RaffleStatus::Failed;
+            write_raffle(&env, &raffle_mut);
 
             RaffleStatusChanged {
-                old_status,
+                old_status: RaffleStatus::Active,
                 new_status: RaffleStatus::Failed,
                 timestamp: now,
             }.publish(&env);
@@ -454,15 +457,14 @@ impl Contract {
         }
 
         if raffle.randomness_source == RandomnessSource::External {
-            let already: bool = env.storage().instance().get(&DataKey::RandomnessRequested).unwrap_or(false);
-            if already {
+            if env.storage().instance().get::<_, bool>(&DataKey::RandomnessRequested).unwrap_or(false) {
                 return Err(Error::RandomnessAlreadyRequested);
             }
             env.storage().instance().set(&DataKey::RandomnessRequested, &true);
             env.storage().instance().set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
 
             RandomnessRequested {
-                oracle: raffle.oracle_address.clone().unwrap_or(env.current_contract_address()),
+                oracle: raffle.oracle_address.as_ref().cloned().unwrap_or_else(|| env.current_contract_address()),
                 timestamp: now,
             }.publish(&env);
             return Ok(());
