@@ -32,6 +32,7 @@ pub const MIN_TICKET_PRICE: i128 = 10_000;
 #[contract]
 pub struct Contract;
 
+#[soroban_sdk::contracttype]
 #[derive(Clone)]
 pub struct Raffle {
     pub creator: Address,
@@ -59,6 +60,7 @@ pub struct Raffle {
     pub winner_ticket_id: Option<u32>,
 }
 
+#[soroban_sdk::contracttype]
 #[derive(Clone)]
 pub struct FairnessMetadata {
     pub seed: u64,
@@ -276,6 +278,7 @@ impl Contract {
         write_raffle(&env, &raffle);
         env.storage().instance().set(&DataKey::Factory, &factory);
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::TotalTickets, &0u32);
 
         RaffleCreated {
             creator,
@@ -301,7 +304,6 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
-        let old_status = raffle.status.clone();
         raffle.prize_deposited = true;
         write_raffle(&env, &raffle);
 
@@ -379,6 +381,7 @@ impl Contract {
 
         env.storage().persistent().set(&DataKey::TicketCount(buyer.clone()), &(current_count + quantity));
         write_raffle(&env, &raffle);
+        env.storage().instance().set(&DataKey::TotalTickets, &raffle.tickets_sold);
 
         if let Some(factory_address) = env.storage().instance().get::<_, Address>(&DataKey::Factory) {
             env.invoke_contract::<()>(
@@ -465,7 +468,7 @@ impl Contract {
         public_key: BytesN<32>,
         proof: BytesN<64>,
     ) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
             Some(addr) => {
@@ -612,7 +615,6 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        let old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
         write_raffle(&env, &raffle);
 
@@ -690,6 +692,10 @@ impl Contract {
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
         read_raffle(&env)
+    }
+
+    pub fn get_tickets_sold(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::TotalTickets).unwrap_or(0u32)
     }
 
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
