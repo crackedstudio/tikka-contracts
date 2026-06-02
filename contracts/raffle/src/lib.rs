@@ -1,14 +1,14 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env, IntoVal,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
+    IntoVal, Symbol, Vec,
 };
 
 mod events;
 
 use raffle_shared::{
-    effective_limit, AdminOp, PageResultRaffles, PaginationParams, RaffleConfig, FairnessData,
+    effective_limit, AdminOp, FairnessData, PageResultRaffles, PaginationParams, RaffleConfig,
 };
 
 pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
@@ -141,7 +141,8 @@ fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
         raffle_count,
         ledger_timestamp,
         aggregate_hash: aggregate_hash.into(),
-    }.publish(&env);
+    }
+    .publish(&env);
 }
 
 #[contractimpl]
@@ -175,7 +176,8 @@ impl RaffleFactory {
             protocol_fee_bp,
             treasury,
             timestamp: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -211,7 +213,8 @@ impl RaffleFactory {
             op,
             effective_timestamp,
             proposed_by: admin,
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(op_id)
     }
@@ -249,7 +252,8 @@ impl RaffleFactory {
             op: pending.op,
             executed_by: admin,
             executed_at: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -269,7 +273,8 @@ impl RaffleFactory {
             op_id,
             cancelled_by: admin,
             cancelled_at: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -351,7 +356,7 @@ impl RaffleFactory {
         let salt = env
             .crypto()
             .sha256(&(creator.clone(), final_config.description.clone()).to_xdr(&env));
-        
+
         #[cfg(not(test))]
         let raffle_address = env
             .deployer()
@@ -360,10 +365,16 @@ impl RaffleFactory {
 
         #[cfg(test)]
         let raffle_address = {
-            let mut count: u32 = env.storage().persistent().get(&DataKey::RaffleInstancesCount).unwrap_or(0);
+            let mut count: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::RaffleInstancesCount)
+                .unwrap_or(0);
             count += 1;
-            env.storage().persistent().set(&DataKey::RaffleInstancesCount, &count);
-            
+            env.storage()
+                .persistent()
+                .set(&DataKey::RaffleInstancesCount, &count);
+
             let mut id = Address::generate(&env);
             for _ in 0..count {
                 id = Address::generate(&env);
@@ -495,7 +506,8 @@ impl RaffleFactory {
         events::ContractPaused {
             paused_by: admin,
             timestamp: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -507,7 +519,8 @@ impl RaffleFactory {
         events::ContractUnpaused {
             unpaused_by: admin,
             timestamp: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -539,7 +552,8 @@ impl RaffleFactory {
             current_admin: admin,
             proposed_admin: new_admin,
             timestamp: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -561,7 +575,8 @@ impl RaffleFactory {
             old_admin,
             new_admin: pending,
             timestamp: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -672,13 +687,13 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::RaffleInstances)
             .unwrap_or_else(|| Vec::new(&env));
-        
+
         if raffle_id >= instances.len() {
             return Err(ContractError::InvalidRaffleId);
         }
 
         let raffle_address = instances.get(raffle_id).unwrap();
-        
+
         env.invoke_contract::<()>(
             &raffle_address,
             &Symbol::new(&env, "wipe_storage"),
@@ -698,9 +713,10 @@ impl RaffleFactory {
         events::RaffleCleanedUp {
             raffle_address,
             cleaned_by: admin,
-            finish_time: 0, 
+            finish_time: 0,
             cleaned_at: env.ledger().timestamp(),
-        }.publish(&env);
+        }
+        .publish(&env);
 
         Ok(())
     }
