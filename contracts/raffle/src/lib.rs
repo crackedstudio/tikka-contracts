@@ -389,6 +389,7 @@ impl RaffleFactory {
 
         #[cfg(test)]
         let raffle_address = {
+            use soroban_sdk::testutils::Address as _;
             let mut count: u32 = env.storage().persistent().get(&DataKey::RaffleInstancesCount).unwrap_or(0);
             count += 1;
             env.storage().persistent().set(&DataKey::RaffleInstancesCount, &count);
@@ -755,6 +756,7 @@ mod tests {
         let contract_id = env.register(RaffleFactory, ());
         let client = RaffleFactoryClient::new(env, &contract_id);
         client.init_factory(&admin, &wasm_hash, &0u32, &treasury);
+        env.mock_all_auths();
         client.set_creation_delay(&0u64);
 
         (client, admin, treasury)
