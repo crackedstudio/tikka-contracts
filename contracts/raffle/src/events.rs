@@ -83,3 +83,11 @@ pub struct RaffleCleanedUp {
     pub finish_time: u64,
     pub cleaned_at: u64,
 }
+
+#[derive(Clone)]
+#[contractevent]
+pub struct CreationRateLimited {
+    pub creator: Address,
+    pub unlock_timestamp: u64,
+    pub timestamp: u64,
+}

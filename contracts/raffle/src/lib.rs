@@ -333,6 +333,12 @@ impl RaffleFactory {
                 .unwrap_or(0);
 
             if now < last_creation + min_delay {
+                let unlock_timestamp = last_creation + min_delay;
+                events::CreationRateLimited {
+                    creator: creator.clone(),
+                    unlock_timestamp,
+                    timestamp: now,
+                }.publish(&env);
                 return Err(ContractError::RateLimitExceeded);
             }
 

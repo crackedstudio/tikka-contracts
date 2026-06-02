@@ -1,0 +1,74 @@
+#![cfg(test)]
+
+use super::*;
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, BytesN};
+
+#[test]
+fn test_oracle_fallback_with_ledger_delays() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // 1. Setup factory, admin, creator
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, Contract);
+    let client = ContractClient::new(&env, &contract_id);
+
+    // 2. Initialize Raffle with External Randomness
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Test Raffle"),
+        end_time: 0,
+        max_tickets: 10,
+        min_tickets: 1,
+        allow_multiple: true,
+        ticket_price: 10_000,
+        payment_token: payment_token.clone(),
+        prize_amount: 10_000,
+        prizes: soroban_sdk::vec![&env, 10000],
+        randomness_source: RandomnessSource::External,
+        oracle_address: Some(oracle.clone()),
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[1; 32]),
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+
+    // 3. Deposit prize and buy ticket
+    client.deposit_prize();
+    client.buy_tickets(&creator, &1);
+
+    // 4. Finalize raffle (requests randomness)
+    client.finalize_raffle();
+
+    // 5. Ensure it's in Drawing state and requested randomness
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Drawing);
+
+    // 6. Attempt fallback too early
+    let result = client.try_trigger_randomness_fallback(&creator);
+    assert_eq!(result.err(), Some(Ok(Error::FallbackTooEarly)));
+
+    // 7. Simulate ledger delays
+    env.ledger().with_mut(|l| {
+        l.sequence += ORACLE_TIMEOUT_LEDGERS + 1;
+        l.timestamp += 86400; // 1 day
+    });
+
+    // 8. Trigger fallback successfully
+    client.trigger_randomness_fallback(&creator);
+
+    // 9. Verify finalized state
+    let raffle_after = client.get_raffle();
+    assert_eq!(raffle_after.status, RaffleStatus::Finalized);
+    
+    // We can also verify the fairness data
+    let fairness = client.get_fairness_data();
+    assert_eq!(fairness.randomness_source, RandomnessSource::External);
+}
