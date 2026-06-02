@@ -20,7 +20,7 @@ use self::randomness::{
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessReceived,
-    RandomnessRequested, TicketPurchased,
+    RandomnessRequested, TicketPurchased, TicketRefunded,
     WinnerDrawn, RandomnessFallbackTriggered,
     ContractPaused, ContractUnpaused,
 };
@@ -689,7 +689,7 @@ impl Contract {
         let token_client = token::Client::new(&env, &raffle.payment_token);
         token_client.transfer(&env.current_contract_address(), &ticket.owner, &raffle.ticket_price);
 
-        crate::events::TicketRefunded {
+        TicketRefunded {
             buyer: ticket.owner,
             ticket_number: ticket.ticket_number,
             amount: raffle.ticket_price,
