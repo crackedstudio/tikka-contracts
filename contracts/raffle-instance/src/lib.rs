@@ -93,6 +93,7 @@ pub enum DataKey {
     RandomnessRequestId,
     FinishTime,
     TotalTickets,
+    AccumulatedFees,
 }
 
 #[contracterror]
@@ -129,7 +130,8 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
-    MorePrizesThanTickets = 46,
+    DeadlinePassed = 46,
+    SlippageExceeded = 47,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -145,7 +147,7 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
 
 fn get_ticket_count(env: &Env) -> u32 {
     env.storage()
-        .instance()
+        .persistent()
         .get(&DataKey::NextTicketId)
         .unwrap_or(0u32)
 }
@@ -160,11 +162,11 @@ fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
 fn next_ticket_id(env: &Env) -> u32 {
     let current: u32 = env
         .storage()
-        .instance()
+        .persistent()
         .get(&DataKey::NextTicketId)
         .unwrap_or(0u32);
     let next = current + 1;
-    env.storage().instance().set(&DataKey::NextTicketId, &next);
+    env.storage().persistent().set(&DataKey::NextTicketId, &next);
     next
 }
 
@@ -178,8 +180,38 @@ fn acquire_guard(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
+// Helper to enforce slippage and deadline guards for token swaps
+fn enforce_swap_guard(env: &Env, amount_out: i128, min_amount_out: i128, deadline: u64) -> Result<(), Error> {
+    // Check deadline
+    if env.ledger().timestamp() > deadline {
+        return Err(Error::DeadlinePassed);
+    }
+    // Check slippage (amount_out must be >= min_amount_out)
+    if amount_out < min_amount_out {
+        return Err(Error::SlippageExceeded);
+    }
+    Ok(())
+}
+
 fn release_guard(env: &Env) {
     env.storage().instance().remove(&DataKey::ReentrancyGuard);
+}
+
+struct Guard<'a> {
+    env: &'a Env,
+}
+
+impl<'a> Guard<'a> {
+    fn new(env: &'a Env) -> Result<Self, Error> {
+        acquire_guard(env)?;
+        Ok(Guard { env })
+    }
+}
+
+impl<'a> Drop for Guard<'a> {
+    fn drop(&mut self) {
+        release_guard(self.env);
+    }
 }
 
 fn require_not_paused(env: &Env) -> Result<(), Error> {
@@ -319,7 +351,7 @@ impl Contract {
             prize_amount: config.prize_amount,
             prizes: config.prizes.clone(),
             tickets_sold: 0,
-            status: RaffleStatus::Active,
+            status: RaffleStatus::PendingPrize,
             prize_deposited: false,
             winners: Vec::new(&env),
             claimed_winners: Vec::new(&env),
@@ -339,6 +371,7 @@ impl Contract {
         env.storage().instance().set(&DataKey::TotalTickets, &0u32);
 
         RaffleCreated {
+            raffle_id: env.current_contract_address(),
             creator,
             end_time: config.end_time,
             max_tickets: config.max_tickets,
@@ -365,19 +398,39 @@ impl Contract {
 
         raffle.prize_deposited = true;
         write_raffle(&env, &raffle);
+        let old_status = raffle.status.clone();
 
+        // Move tokens first. If the transfer fails we want the contract state
+        // (prize_deposited flag, raffle.status) to remain untouched.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-
         token_client
             .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
+
+        // Transfer succeeded — flip the prize_deposited flag and transition the
+        // raffle into Active so ticket sales can begin. This is the explicit
+        // status transition #225 asks for: previously the raffle was created
+        // directly in Active and `deposit_prize` only flipped a boolean, which
+        // left off-chain indexers without a clear signal that the raffle had
+        // become buyable.
+        raffle.prize_deposited = true;
+        raffle.status = RaffleStatus::Active;
+        write_raffle(&env, &raffle);
+
+        let timestamp = env.ledger().timestamp();
 
         PrizeDeposited {
             creator: raffle.creator.clone(),
             amount: raffle.prize_amount,
             token: raffle.payment_token.clone(),
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+        }.publish(&env);
+
+        RaffleStatusChanged {
+            old_status,
+            new_status: RaffleStatus::Active,
+            timestamp,
         }.publish(&env);
 
         Ok(())
@@ -486,6 +539,8 @@ impl Contract {
             if let Some(treasury) = &raffle.treasury_address {
                 token_client.transfer(&env.current_contract_address(), treasury, &protocol_fee);
             }
+            let prev_fees: i128 = env.storage().instance().get(&DataKey::AccumulatedFees).unwrap_or(0);
+            env.storage().instance().set(&DataKey::AccumulatedFees, &(prev_fees + protocol_fee));
         }
 
         TicketPurchased {
@@ -663,7 +718,7 @@ impl Contract {
 
     pub fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<i128, Error> {
         winner.require_auth();
-        acquire_guard(&env)?;
+        let _guard = Guard::new(&env)?;
         let mut raffle = read_raffle(&env)?;
 
         if raffle.status != RaffleStatus::Finalized {
@@ -682,11 +737,11 @@ impl Contract {
             return Err(Error::InvalidParameters);
         }
 
-        if raffle.winners.get(tier_index).unwrap() != winner {
+        if raffle.winners.get(tier_index).ok_or(Error::InvalidIndex)? != winner {
             return Err(Error::NotWinner);
         }
 
-        if raffle.claimed_winners.get(tier_index).unwrap() {
+        if raffle.claimed_winners.get(tier_index).ok_or(Error::InvalidIndex)? {
             return Err(Error::PrizeAlreadyClaimed);
         }
 
@@ -706,16 +761,27 @@ impl Contract {
         }
         if all_claimed {
             raffle.status = RaffleStatus::Claimed;
+            RaffleStatusChanged {
+                old_status: RaffleStatus::Finalized,
+                new_status: RaffleStatus::Claimed,
+                timestamp: env.ledger().timestamp(),
+            }.publish(&env);
         }
         write_raffle(&env, &raffle);
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
-        token_client.transfer(&env.current_contract_address(), &winner, &net_amount);
+        token_client
+            .try_transfer(&env.current_contract_address(), &winner, &net_amount)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         if fee > 0 {
             if let Some(treasury) = &raffle.treasury_address {
-                token_client.transfer(&env.current_contract_address(), treasury, &fee);
+                token_client
+                    .try_transfer(&env.current_contract_address(), treasury, &fee)
+                    .map_err(|_| Error::TokenTransferFailed)?;
             }
+            let prev_fees: i128 = env.storage().instance().get(&DataKey::AccumulatedFees).unwrap_or(0);
+            env.storage().instance().set(&DataKey::AccumulatedFees, &(prev_fees + fee));
         }
 
         PrizeClaimed {
@@ -728,18 +794,18 @@ impl Contract {
             claimed_at: env.ledger().timestamp(),
         }.publish(&env);
 
-        release_guard(&env);
         Ok(net_amount)
     }
 
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
-        
-        if reason == CancelReason::AdminCancelled {
-            let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
-            admin.require_auth();
-        } else {
-            raffle.creator.require_auth();
+
+        match reason {
+            CancelReason::AdminCancelled => {
+                let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
+                admin.require_auth();
+            }
+            _ => raffle.creator.require_auth(),
         }
 
         if raffle.status == RaffleStatus::Finalized || raffle.status == RaffleStatus::Cancelled || raffle.status == RaffleStatus::Claimed {
@@ -776,7 +842,9 @@ impl Contract {
         write_raffle(&env, &raffle);
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
-        token_client.transfer(&env.current_contract_address(), &raffle.creator, &raffle.prize_amount);
+        token_client
+            .try_transfer(&env.current_contract_address(), &raffle.creator, &raffle.prize_amount)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         PrizeRefunded {
             creator: raffle.creator.clone(),
@@ -798,6 +866,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
+        let _guard = Guard::new(&env)?;
         let ticket: Ticket = env.storage().persistent().get(&DataKey::Ticket(ticket_id)).ok_or(Error::TicketNotFound)?;
         ticket.owner.require_auth();
 
@@ -810,7 +879,9 @@ impl Contract {
         env.storage().persistent().set(&refund_key, &true);
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
-        token_client.transfer(&env.current_contract_address(), &ticket.owner, &raffle.ticket_price);
+        token_client
+            .try_transfer(&env.current_contract_address(), &ticket.owner, &raffle.ticket_price)
+            .map_err(|_| Error::TokenTransferFailed)?;
 
         TicketRefunded {
             buyer: ticket.owner,
@@ -819,7 +890,6 @@ impl Contract {
             timestamp: env.ledger().timestamp(),
         }.publish(&env);
 
-        release_guard(&env);
         Ok(raffle.ticket_price)
     }
 
@@ -935,7 +1005,7 @@ fn do_finalize_with_seed(
     let mut winners = Vec::new(env);
 
     for i in 0..winning_ticket_ids.len() {
-        let winner_index = winning_ticket_ids.get(i).unwrap();
+        let winner_index = winning_ticket_ids.get(i).ok_or(Error::InvalidIndex)?;
         let ticket_id = winner_index + 1;
         let winner = get_ticket_owner(env, ticket_id).ok_or(Error::TicketNotFound)?;
         winners.push_back(winner.clone());
@@ -986,3 +1056,6 @@ fn do_finalize_with_seed(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test;

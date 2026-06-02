@@ -4,6 +4,7 @@ use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
 #[derive(Clone)]
 #[contractevent]
 pub struct RaffleCreated {
+    pub raffle_id: Address,
     pub creator: Address,
     pub end_time: u64,
     pub max_tickets: u32,
