@@ -57,6 +57,9 @@ pub struct RaffleConfig {
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
     pub metadata_hash: BytesN<32>,
+    /// Seconds after finalization before winners may claim.
+    /// Must be in [0, 604800] (0 to 7 days). Defaults to 3600 if zero.
+    pub claim_lockup_seconds: u64,
 }
 
 #[derive(Clone)]

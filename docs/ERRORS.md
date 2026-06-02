@@ -77,6 +77,7 @@ The factory contract (`RaffleFactory`) manages raffle creation. All error codes 
 | 3    | `ContractPaused`     | Factory is paused              | "Factory is temporarily paused" |
 | 4    | `InvalidParameters`  | Invalid parameters provided    | "Invalid parameters provided"   |
 | 5    | `RaffleNotFound`     | Raffle instance not found      | "Raffle not found"              |
+| 18   | `TreasuryNotSet`     | Treasury address is not configured | "Treasury address is not set" |
 
 ### Admin Errors (11-20)
 

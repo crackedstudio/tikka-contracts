@@ -16,6 +16,7 @@ Welcome to the `tikka-contracts` development guide! This document covers setting
 
 ## 🏗 Build & Test
 
+
 ### Build the Contract
 To compile the Soroban contract into WebAssembly (`.wasm`):
 ```bash

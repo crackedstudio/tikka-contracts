@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, Address, BytesN, u128};
+use soroban_sdk::{contractevent, Address, BytesN};
 use raffle_shared::AdminOp;
 
 #[derive(Clone)]
