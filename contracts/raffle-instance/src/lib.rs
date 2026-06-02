@@ -118,6 +118,7 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    PrizeConfigurationLocked = 46,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -778,7 +779,58 @@ impl Contract {
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Ok(())
     }
+
+    // Allow admin to update the payment token before prize is deposited
+    pub fn update_payment_token(env: Env, new_token: Address) -> Result<(), Error> {
+        // Only admin can perform this action
+        let _admin = require_admin(&env)?;
+        let mut raffle = read_raffle(&env)?;
+        if raffle.prize_deposited {
+            return Err(Error::PrizeConfigurationLocked);
+        }
+        raffle.payment_token = new_token.clone();
+        write_raffle(&env, &raffle);
+        // Emit an event (optional, not defined in existing events)
+        Ok(())
+    }
+    // Allow admin to update the tikka token before prize is deposited
+    pub fn update_tikka_token(env: Env, new_token: Address) -> Result<(), Error> {
+        let _admin = require_admin(&env)?;
+        let mut raffle = read_raffle(&env)?;
+        if raffle.prize_deposited {
+            return Err(Error::PrizeConfigurationLocked);
+        }
+        raffle.tikka_token = Some(new_token.clone());
+        write_raffle(&env, &raffle);
+        Ok(())
+    }
+
+    // Allow admin to update the swap router before prize is deposited
+    pub fn update_swap_router(env: Env, new_router: Address) -> Result<(), Error> {
+        let _admin = require_admin(&env)?;
+        let mut raffle = read_raffle(&env)?;
+        if raffle.prize_deposited {
+            return Err(Error::PrizeConfigurationLocked);
+        }
+        raffle.swap_router = Some(new_router.clone());
+        write_raffle(&env, &raffle);
+        Ok(())
+    }
+
+    // Allow admin to update the treasury address before prize is deposited
+    pub fn update_treasury_address(env: Env, new_treasury: Address) -> Result<(), Error> {
+        let _admin = require_admin(&env)?;
+        let mut raffle = read_raffle(&env)?;
+        if raffle.prize_deposited {
+            return Err(Error::PrizeConfigurationLocked);
+        }
+        raffle.treasury_address = Some(new_treasury.clone());
+        write_raffle(&env, &raffle);
+        Ok(())
+    }
+
 }
+
 
 fn do_finalize_with_seed(
     env: &Env,
@@ -842,4 +894,90 @@ fn do_finalize_with_seed(
     }.publish(&env);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
+    use raffle_shared::{RaffleConfig, RandomnessSource};
+
+    fn setup_raffle(env: &Env) -> (Address, Address, Address) {
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+        let factory = Address::generate(env);
+        
+        let config = RaffleConfig {
+            description: soroban_sdk::String::from_str(env, "test"),
+            end_time: 0,
+            max_tickets: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: Address::generate(env),
+            prize_amount: 100_000,
+            prizes: soroban_sdk::vec![env, 10_000],
+            randomness_source: RandomnessSource::Prng,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: Some(Address::generate(env)),
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(env, &[0u8; 32]),
+        };
+        
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+        
+        client.init(&factory, &admin, &creator, &config);
+        
+        (contract_id, admin, creator)
+    }
+
+    #[test]
+    fn test_update_token_before_deposit() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (contract_id, admin, _) = setup_raffle(&env);
+        let client = ContractClient::new(&env, &contract_id);
+        
+        let new_token = Address::generate(&env);
+        
+        // Update payment token before deposit
+        client.update_payment_token(&new_token);
+        
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.payment_token, new_token);
+    }
+
+    #[test]
+    fn test_update_all_tokens_after_deposit_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin, _creator) = setup_raffle(&env);
+        let client = ContractClient::new(&env, &contract_id);
+
+        // Simulate a prize deposit by setting the flag directly in storage
+        let mut raffle = client.get_raffle();
+        raffle.prize_deposited = true;
+        env.as_contract(&contract_id, || {
+            write_raffle(&env, &raffle);
+        });
+
+        // Each admin setter should now return the lock error
+        let new_token = Address::generate(&env);
+        assert_eq!(client.update_payment_token(&new_token).unwrap_err(), Error::PrizeConfigurationLocked);
+
+        let new_tikka = Address::generate(&env);
+        assert_eq!(client.update_tikka_token(&new_tikka).unwrap_err(), Error::PrizeConfigurationLocked);
+
+        let new_router = Address::generate(&env);
+        assert_eq!(client.update_swap_router(&new_router).unwrap_err(), Error::PrizeConfigurationLocked);
+
+        let new_treasury = Address::generate(&env);
+        assert_eq!(client.update_treasury_address(&new_treasury).unwrap_err(), Error::PrizeConfigurationLocked);
+    }
+
+    }
 }
