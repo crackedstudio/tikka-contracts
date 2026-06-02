@@ -79,6 +79,7 @@ pub enum ContractError {
     TimelockNotElapsed = 15,
     InvalidRaffleId = 16,
     RaffleNotEligible = 17,
+    InvalidTreasury = 18,
 }
 
 #[contract]
@@ -102,6 +103,19 @@ fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
         .unwrap_or(false)
     {
         return Err(ContractError::ContractPaused);
+    }
+    Ok(())
+}
+
+fn require_valid_treasury(env: &Env, treasury: &Address) -> Result<(), ContractError> {
+    let xdr = treasury.clone().to_xdr(env);
+    // ScAddress XDR discriminant: 0 = Account (safe), 1 = Contract (may not receive tokens)
+    let is_account = xdr.get(0) == Some(0)
+        && xdr.get(1) == Some(0)
+        && xdr.get(2) == Some(0)
+        && xdr.get(3) == Some(0);
+    if !is_account {
+        return Err(ContractError::InvalidTreasury);
     }
     Ok(())
 }
@@ -156,6 +170,7 @@ impl RaffleFactory {
         if env.storage().persistent().has(&DataKey::Admin) {
             return Err(ContractError::AlreadyInitialized);
         }
+        require_valid_treasury(&env, &treasury)?;
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
             .persistent()
@@ -186,6 +201,7 @@ impl RaffleFactory {
         treasury: Address,
     ) -> Result<u32, ContractError> {
         let admin = require_admin(&env)?;
+        require_valid_treasury(&env, &treasury)?;
         let op_id = env
             .storage()
             .persistent()
