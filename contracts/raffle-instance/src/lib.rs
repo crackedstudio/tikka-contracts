@@ -870,7 +870,9 @@ impl Contract {
         let amount = calculate_tier_prize(&raffle, tier_index)?;
 
         let fee = amount * (raffle.protocol_fee_bp as i128) / 10000;
-        let net_amount = amount - fee;
+        let net_amount = amount
+            .checked_sub(fee)
+            .ok_or(Error::ArithmeticOverflow)?;
         require!(net_amount > 0, Error::ZeroPrize);
 
         raffle.claimed_winners.set(tier_index, true);
@@ -1365,5 +1367,59 @@ mod test {
         // Attacker authenticates fine (mock_all_auths) but is not the winner.
         let result = client.try_claim_prize(&attacker, &0u32);
         assert_eq!(result, Err(Ok(Error::NotWinner)));
+    }
+
+    #[test]
+    fn claim_prize_errors_when_fee_exceeds_tier_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &1_000_000);
+        token_mint.mint(&buyer, &1_000_000);
+
+        let raffle = Raffle {
+            creator: creator.clone(),
+            description: String::from_str(&env, "test"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 1,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE,
+            prizes: vec![&env, 10000u32],
+            tickets_sold: 1,
+            status: RaffleStatus::Finalized,
+            prize_deposited: true,
+            winners: vec![&env, buyer.clone()],
+            claimed_winners: vec![&env, false],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 20_000,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            finalized_at: Some(1_000),
+            claim_lockup_seconds: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            write_raffle(&env, &raffle);
+        });
+
+        env.ledger().set_timestamp(1_000 + DEFAULT_CLAIM_LOCKUP_SECONDS + 1);
+        let client = ContractClient::new(&env, &contract_id);
+        let result = client.try_claim_prize(&buyer, &0u32);
+        assert_eq!(result, Err(Ok(Error::ArithmeticOverflow)));
     }
 }
