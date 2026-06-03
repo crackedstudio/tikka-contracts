@@ -96,7 +96,7 @@ flowchart TD
     Creator -->|"deposit_prize()"| Token
     Token -->|"transfer(prize)"| Raffle
 
-    Buyer -->|"buy_ticket()"| Token
+    Buyer -->|"buy_tickets()"| Token
     Token -->|"transfer(ticket_price)"| Raffle
 
     Raffle -->|"finalize_raffle()"| Raffle
@@ -114,38 +114,58 @@ flowchart TD
 -   **Soroban (Rust)**: Smart contract implementation
 -   **Stellar**: Network and asset contracts
 
-### **Core Contract**
+### **Core Contracts**
 
-#### **`contracts/hello-world/src/lib.rs`**
+#### **`contracts/raffle/src/lib.rs`**
 
 ```rust
-pub fn create_raffle(... ) -> u64;
-pub fn deposit_prize(... );
-pub fn buy_ticket(... ) -> u32;
-pub fn finalize_raffle(... ) -> Address;
-pub fn claim_prize(... );
-pub fn get_raffle(... ) -> Raffle;
-pub fn get_tickets(... ) -> Vec<Address>;
+pub fn init_factory(... ) -> Result<(), ContractError>;
+pub fn create_raffle(... ) -> Result<Address, ContractError>;
+pub fn get_raffles(... ) -> PageResultRaffles;
+```
+
+#### **`contracts/raffle-instance/src/lib.rs`**
+
+```rust
+pub fn init(... ) -> Result<(), Error>;
+pub fn deposit_prize(... ) -> Result<(), Error>;
+pub fn buy_tickets(... ) -> Result<u32, Error>;
+pub fn finalize_raffle(... ) -> Result<(), Error>;
+pub fn provide_randomness(... ) -> Result<(), Error>;
+pub fn claim_prize(... ) -> Result<i128, Error>;
+pub fn cancel_raffle(... ) -> Result<(), Error>;
+pub fn refund_ticket(... ) -> Result<i128, Error>;
+pub fn get_raffle(... ) -> Result<Raffle, Error>;
 ```
 
 ### **Data Structures**
 
 ```rust
 pub struct Raffle {
-    pub id: u64,
     pub creator: Address,
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
     pub payment_token: Address,
     pub prize_amount: i128,
+    pub prizes: Vec<u32>,
     pub tickets_sold: u32,
-    pub is_active: bool,
+    pub status: RaffleStatus,
     pub prize_deposited: bool,
-    pub prize_claimed: bool,
-    pub winner: Option<Address>,
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>,
+    pub randomness_source: RandomnessSource,
+    pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub finalized_at: Option<u64>,
+    pub winner_ticket_id: Option<u32>,
+    pub claim_lockup_seconds: u64,
 }
 ```
 
@@ -238,13 +258,16 @@ stellar contract invoke ... -- \
 ### **Run Tests**
 
 ```bash
-cargo test -p hello-world
+cargo test -p raffle-factory
+cargo test -p raffle-instance
 ```
 
 ### **Build the Contract**
 
 ```bash
-cargo build -p hello-world
+cargo build -p raffle-instance
+cargo build -p raffle-factory
+cargo build -p raffle-instance
 ```
 
 ## 🛠️ Development
@@ -269,6 +292,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 -   **Documentation**: Check our guides
 -   **Issues**: Report bugs and feature requests
 -   **Community**: Join our Discord for discussions
+
+
+// protocol_fee_bp: Basis points (1 bp = 0.01%). 
+// Must be <= 10_000 (100%). 
+// Example: 250 = 2.5%
 
 ---
 

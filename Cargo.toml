@@ -4,6 +4,7 @@ members = [
   "contracts/*",
   "fuzz",
 ]
+default-members = ["contracts/*"]
 
 [workspace.dependencies]
 soroban-sdk = "23"
