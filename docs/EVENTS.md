@@ -69,7 +69,7 @@ Emitted when the draw process is initiated.
 **Topic:** `("tikka", "draw_triggered")`
 
 **Fields:**
-- `triggered_by: Address` - Address that triggered the draw
+- `caller: Address` - Address that initiated the draw
 - `total_tickets_sold: u32` - Total number of tickets sold at draw time
 - `timestamp: u64` - Unix timestamp when draw was triggered
 
@@ -307,3 +307,35 @@ Emitted whenever the raffle status transitions.
 - Each state-changing function emits exactly one primary event
 - Status changes emit both the primary event and `status_changed`
 - No events are emitted for read-only operations
+
+---
+
+## New Security Events
+
+### admin_changed
+
+Emitted when the instance admin is changed via `set_admin` on a raffle instance.
+
+**Topic:** `("tikka", "admin_changed")`
+
+**Fields:**
+- `old_admin: Address` - Previous admin address
+- `new_admin: Address` - New admin address
+- `changed_by: Address` - Admin address that authorized the change (indexed topic)
+- `timestamp: u64` - Unix timestamp of change
+
+---
+
+### treasury_changed
+
+Emitted when the factory-level treasury address is changed by an executed admin operation (`SetConfig`).
+
+**Topic:** `("tikka", "treasury_changed")`
+
+**Fields:**
+- `old_treasury: Address` - Previous treasury address
+- `new_treasury: Address` - New treasury address
+- `changed_by: Address` - Admin address that executed the change (indexed topic)
+- `timestamp: u64` - Unix timestamp when change executed
+
+---
