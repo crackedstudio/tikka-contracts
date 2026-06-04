@@ -29,3 +29,6 @@ test_snapshots/
 requirements.md
 .github/skills/rust-blockchain/
 .github/skills/senior-fullstack
+skills-lock.json
+
+issue.md

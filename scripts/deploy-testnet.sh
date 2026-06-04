@@ -9,7 +9,7 @@ fi
 echo "Building WASM..."
 stellar contract build
 
-WASM_FILE="target/wasm32v1-none/release/hello_world.wasm"
+WASM_FILE="target/wasm32v1-none/release/raffle-instance.wasm"
 
 if [ ! -f "$WASM_FILE" ]; then
     echo "Error: WASM file not found at $WASM_FILE"
