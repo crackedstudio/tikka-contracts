@@ -134,6 +134,11 @@ pub struct TicketPurchased {
     pub purchaser: Address,
     pub ticket_id: u32,
     pub amount: i128,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
 pub struct CreationRateLimited {
     pub creator: Address,
     pub unlock_timestamp: u64,

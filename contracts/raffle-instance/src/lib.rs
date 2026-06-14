@@ -1531,6 +1531,18 @@ impl Contract {
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let old_admin: Address = env.storage().persistent().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
         old_admin.require_auth();
+
+        // Prevent self-assignment (no-op that wastes gas and may indicate a mistake)
+        if new_admin == old_admin {
+            return Err(Error::InvalidParameters);
+        }
+
+        // Prevent zero/burnt address lockout — contract address used as sentinel
+        // since Soroban has no literal zero address constant
+        if new_admin == env.current_contract_address() {
+            return Err(Error::InvalidParameters);
+        }
+
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
 
         crate::events::AdminChanged {
