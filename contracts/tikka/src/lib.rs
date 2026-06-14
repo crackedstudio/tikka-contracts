@@ -10,10 +10,8 @@ pub fn set_config(env: Env, new_config: Config) {
 
     // Optional: Warn on high fees (e.g., > 20%)
     if new_config.protocol_fee_bp > 2_000 {
-        env.events().publish(
-            (symbol_short!("high_fee"),),
-            new_config.protocol_fee_bp,
-        );
+        env.events()
+            .publish((symbol_short!("high_fee"),), new_config.protocol_fee_bp);
     }
 
     storage::set_config(&env, &new_config);
@@ -31,3 +29,4 @@ pub enum ContractError {
     InvalidProtocolFee = 120,
     // ...
 }
+
