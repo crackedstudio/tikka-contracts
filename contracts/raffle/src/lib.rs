@@ -42,6 +42,7 @@ pub struct StateCheckpoint {
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
+    Initialized,
     Admin,
     RaffleInstances,
     InstanceWasmHash,
@@ -183,7 +184,7 @@ impl RaffleFactory {
         protocol_fee_bp: u32,
         treasury: Address,
     ) -> Result<(), ContractError> {
-        if env.storage().persistent().has(&DataKey::Admin) {
+        if env.storage().persistent().has(&DataKey::Initialized) {
             return Err(ContractError::AlreadyInitialized);
         }
         if protocol_fee_bp > MAX_PROTOCOL_FEE_BP {
@@ -202,6 +203,9 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::Treasury, &treasury);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Initialized, &true);
 
         events::FactoryInitialized {
             admin,
@@ -872,6 +876,23 @@ mod tests {
         assert_eq!(
             client.try_set_config(&excessive_fee, &treasury),
             Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_init_factory_rejects_second_call() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        client.init_factory(&admin, &wasm_hash, &0u32, &treasury);
+        assert_eq!(
+            client.try_init_factory(&admin, &wasm_hash, &0u32, &treasury),
+            Err(Ok(ContractError::AlreadyInitialized))
         );
     }
 

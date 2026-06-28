@@ -11,7 +11,7 @@ mod events;
 mod randomness;
 
 use raffle_shared::{
-    CancelReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
+    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
     Ticket,
 };
 
@@ -20,7 +20,7 @@ use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 use crate::events::{
     ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
     OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleStatusChanged,
+    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
     RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
     TicketRefunded, TokensRescued, WinnerDrawn,
 };
@@ -50,6 +50,7 @@ pub struct Raffle {
     pub end_time: u64,
     pub no_deadline: bool,
     pub max_tickets: u32,
+    pub max_tickets_per_tx: u32,
     pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
@@ -101,6 +102,24 @@ pub enum DataKey {
     RandomnessRequestId,
     FinishTime,
     AccumulatedFees,
+    /// Stores the commit entry for a ticket in the commit-reveal scheme.
+    /// Keyed by ticket ID (not owner address) so the entry survives ticket
+    /// transfers: a ticket holder who committed and then transferred the
+    /// ticket still has their entropy contribution recorded here.
+    CommitEntry(u32),
+}
+
+/// A single participant commit recorded during the commit phase of a
+/// commit-reveal draw.  Keyed by ticket ID so the record is not lost when
+/// the ticket changes hands after the commit was submitted.
+#[contracttype]
+#[derive(Clone)]
+pub struct CommitRevealEntry {
+    /// The address that submitted the commit (the ticket owner *at commit
+    /// time*).  Preserved for audit/fairness purposes.
+    pub committer: Address,
+    /// The hash the participant committed to (SHA-256 of their secret).
+    pub hash: BytesN<32>,
 }
 
 #[contracterror]
@@ -148,7 +167,7 @@ pub enum Error {
     InvalidTicketRange = 55,
     InsufficientAccumulatedFees = 56,
     PrizeConfigurationLocked = 57,
-    InvalidEndTime = 58,
+    ExceedsMaxTicketsPerTx = 58,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -334,6 +353,9 @@ impl Contract {
         if config.max_tickets < config.min_tickets {
             return Err(Error::InvalidTicketRange);
         }
+        if config.max_tickets_per_tx == 0 || config.max_tickets_per_tx > config.max_tickets {
+            return Err(Error::InvalidParameters);
+        }
 
         if config.ticket_price < MIN_TICKET_PRICE {
             return Err(Error::InvalidParameters);
@@ -412,6 +434,7 @@ impl Contract {
             end_time: config.end_time,
             no_deadline: config.no_deadline,
             max_tickets: config.max_tickets,
+            max_tickets_per_tx: config.max_tickets_per_tx,
             min_tickets: config.min_tickets,
             allow_multiple: config.allow_multiple,
             ticket_price: config.ticket_price,
@@ -509,6 +532,9 @@ impl Contract {
             return Err(Error::InvalidQuantity);
         }
         let mut raffle = read_raffle(&env)?;
+        if quantity > raffle.max_tickets_per_tx {
+            return Err(Error::ExceedsMaxTicketsPerTx);
+        }
         buyer.require_auth();
         require_not_paused(&env)?;
 
@@ -645,6 +671,48 @@ impl Contract {
         Ok(raffle.tickets_sold)
     }
 
+    /// Submit a commit during the commit phase of a commit-reveal draw.
+    ///
+    /// The entry is stored under `CommitEntry(ticket_id)` — keyed by the
+    /// ticket ID rather than the caller's address — so the entropy
+    /// contribution is preserved even if the ticket is subsequently
+    /// transferred to a different address before finalization.  This fixes
+    /// the silent entropy-drop identified in issue #311.
+    pub fn submit_commit(env: Env, ticket_id: u32, hash: BytesN<32>) -> Result<(), Error> {
+        let raffle = read_raffle(&env)?;
+
+        if raffle.randomness_source != RandomnessSource::CommitReveal {
+            return Err(Error::InvalidParameters);
+        }
+
+        // Commits may only be submitted while the raffle is still active.
+        if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
+            return Err(Error::InvalidStatus);
+        }
+
+        // The ticket must exist.
+        let ticket: Ticket = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Ticket(ticket_id))
+            .ok_or(Error::TicketNotFound)?;
+
+        // Only the current ticket owner may submit (or update) a commit.
+        ticket.owner.require_auth();
+
+        // Store keyed by ticket ID so a later transfer does not orphan the
+        // entropy contribution.
+        let entry = CommitRevealEntry {
+            committer: ticket.owner,
+            hash,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::CommitEntry(ticket_id), &entry);
+
+        Ok(())
+    }
+
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
@@ -668,9 +736,16 @@ impl Contract {
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
-            RaffleStatusChanged {
-                old_status,
-                new_status: RaffleStatus::Failed,
+            let failure_reason = if raffle.tickets_sold == 0 {
+                FailureReason::ZeroTicketsSold
+            } else {
+                FailureReason::MinTicketsNotMet
+            };
+
+            RaffleFailed {
+                creator: raffle.creator.clone(),
+                reason: failure_reason,
+                tickets_sold: raffle.tickets_sold,
                 timestamp: now,
             }
             .publish(&env);
@@ -737,6 +812,40 @@ impl Contract {
             timestamp: now,
         }
         .publish(&env);
+
+        if raffle.randomness_source == RandomnessSource::CommitReveal {
+            // Collect entropy from all commit entries stored by ticket ID.
+            //
+            // We iterate over ticket IDs 1..=tickets_sold and read the
+            // CommitEntry for each one.  Keying by ticket ID (rather than by
+            // current owner address) is what makes the fix for #311: a
+            // participant who committed and then transferred their ticket
+            // still has their CommitEntry present under the original ticket
+            // ID, so their entropy is never silently discarded.
+            let mut combined = Bytes::new(&env);
+            let mut commits_found: u32 = 0;
+            for ticket_id in 1..=raffle.tickets_sold {
+                if let Some(entry) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, CommitRevealEntry>(&DataKey::CommitEntry(ticket_id))
+                {
+                    combined.extend_from_array(&entry.hash.to_array());
+                    commits_found += 1;
+                }
+            }
+
+            // If no commits were submitted at all fall through to the
+            // internal PRNG so the raffle can still be finalised.
+            if commits_found > 0 {
+                let hash: BytesN<32> = env.crypto().sha256(&combined).into();
+                let arr = hash.to_array();
+                let mut seed_bytes = [0u8; 8];
+                seed_bytes.copy_from_slice(&arr[..8]);
+                let seed = u64::from_be_bytes(seed_bytes);
+                return self::do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng);
+            }
+        }
 
         let seed = build_internal_seed_u64(&env);
         self::do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng)
@@ -1199,7 +1308,7 @@ impl Contract {
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         let metadata: FairnessMetadata = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::RandomnessSeed)
             .ok_or(Error::InvalidStatus)?;
         let raffle = read_raffle(&env)?;
@@ -1477,7 +1586,7 @@ fn do_finalize_with_seed(
         draw_sequence: env.ledger().sequence(),
     };
     env.storage()
-        .instance()
+        .persistent()
         .set(&DataKey::RandomnessSeed, &fairness_metadata);
 
     raffle.status = RaffleStatus::Finalized;
@@ -1561,6 +1670,7 @@ mod test {
             end_time: 0,
             no_deadline: true,
             max_tickets: 1,
+            max_tickets_per_tx: 1,
             min_tickets: 1,
             allow_multiple: true,
             ticket_price: MIN_TICKET_PRICE,
@@ -1594,5 +1704,56 @@ mod test {
         // Attacker authenticates fine (mock_all_auths) but is not the winner.
         let result = client.try_claim_prize(&attacker, &0u32);
         assert_eq!(result, Err(Ok(Error::NotWinner)));
+    }
+
+    #[test]
+    fn buy_tickets_rejects_quantity_above_per_tx_cap() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let buyer = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &1_000_000);
+        token_mint.mint(&buyer, &1_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(&env, "Per-tx cap"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 100,
+            max_tickets_per_tx: 5,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr.clone(),
+            prize_amount: MIN_TICKET_PRICE * 100,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[5u8; 32]),
+            claim_lockup_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+
+        assert_eq!(
+            client.try_buy_tickets(&buyer, &6),
+            Err(Ok(Error::ExceedsMaxTicketsPerTx))
+        );
+        assert_eq!(client.buy_tickets(&buyer, &5), 5);
     }
 }

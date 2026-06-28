@@ -1,4 +1,4 @@
-use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
+use raffle_shared::{CancelReason, FailureReason, RandomnessSource, RandomnessType};
 use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 
 #[derive(Clone)]
@@ -111,6 +111,15 @@ pub struct RaffleCancelled {
     pub reason: CancelReason,
     pub tickets_sold: u32,
     pub prize_refunded: bool,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct RaffleFailed {
+    pub creator: Address,
+    pub reason: FailureReason,
+    pub tickets_sold: u32,
     pub timestamp: u64,
 }
 
