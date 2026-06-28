@@ -271,7 +271,7 @@ fn request_randomness(env: &Env) -> Result<u64, Error> {
         env.ledger().sequence(),
         env.current_contract_address().to_xdr(env),
     )
-    .to_xdr(env);
+        .to_xdr(env);
     let request_id_hash: BytesN<32> = env.crypto().sha256(&request_id_xdr).into();
     let arr = request_id_hash.to_array();
     let mut id_bytes = [0u8; 8];
@@ -291,11 +291,27 @@ fn request_randomness(env: &Env) -> Result<u64, Error> {
     Ok(request_id)
 }
 
-/// Atomically transitions the raffle to Drawing status and sets DrawingLock
+/// State machine for drawing entry:
+/// - PendingPrize -> Active is the initial funded state.
+/// - Active -> Drawing is the only valid transition that begins winner selection.
+/// - Active -> Drawing is also used when buy_tickets fills the last ticket and the raffle
+///   should enter the draw window.
+/// - Drawing -> Finalized is the normal completion path after the oracle or fallback seed
+///   produces winners.
+/// - Drawing -> Cancelled/Failed is the error or refund path when the drawing flow is aborted.
 ///
-/// # SECURITY: This function is the single source of truth for entering Drawing status!
+/// Soroban contract calls are atomic per call frame, but the same ledger can still observe
+/// overlapping state transitions via re-entrant or concurrent calls into the contract. The
+/// DrawingLock is therefore the exclusive guard that makes the transition single-owner even
+/// when two entry points race in the same ledger or during re-entry.
+///
+/// This helper is the single source of truth for entering Drawing and for setting the
+/// DrawingLock. The lock prevents any second caller from entering Drawing while the first
+/// draw flow is in progress, and it is cleared only after the callback or rollback path
+/// finishes so the contract never stays permanently pinned in a half-drawn state.
 fn transition_to_drawing(env: &Env, raffle: &mut Raffle, timestamp: u64) -> Result<(), Error> {
-    // SECURITY: Fast path guard: check DrawingLock first!
+    // SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
+    // already in progress; reject without reading further state
     let drawing_lock: bool = env
         .storage()
         .instance()
@@ -304,27 +320,26 @@ fn transition_to_drawing(env: &Env, raffle: &mut Raffle, timestamp: u64) -> Resu
     if drawing_lock {
         return Err(Error::DrawingAlreadyInProgress);
     }
-    // Check current status before allowing transition
-    if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
+
+    if raffle.status != RaffleStatus::Active {
+        if raffle.status == RaffleStatus::Drawing {
+            return Err(Error::DrawingAlreadyInProgress);
+        }
         return Err(Error::InvalidStatusForDrawingTransition);
     }
 
-    if raffle.status == RaffleStatus::Active {
-        let old_status = raffle.status.clone();
-        raffle.status = RaffleStatus::Drawing;
-        write_raffle(env, raffle);
-        RaffleStatusChanged {
-            old_status,
-            new_status: RaffleStatus::Drawing,
-            timestamp,
-        }
-        .publish(env);
+    let old_status = raffle.status.clone();
+    raffle.status = RaffleStatus::Drawing;
+    write_raffle(env, raffle);
+    RaffleStatusChanged {
+        old_status,
+        new_status: RaffleStatus::Drawing,
+        timestamp,
     }
+    .publish(env);
 
-    // Atomically set the DrawingLock
-    env.storage()
-        .instance()
-        .set(&DataKey::DrawingLock, &true);
+    // SECURITY: set the DrawingLock in the same contract call as the status transition
+    env.storage().instance().set(&DataKey::DrawingLock, &true);
     Ok(())
 }
 
@@ -832,7 +847,8 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
-        // SECURITY: Fast path guard for DrawingLock!
+        // SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
+        // already in progress; reject without reading further state
         let drawing_lock: bool = env
             .storage()
             .instance()
@@ -880,28 +896,41 @@ impl Contract {
         }
 
         let caller = raffle.creator.clone();
+        let pre_drawing_status = raffle.status.clone();
 
         transition_to_drawing(&env, &mut raffle, now)?;
 
         if raffle.randomness_source == RandomnessSource::External {
-            let request_id = request_randomness(&env)?;
-            DrawTriggered {
-                caller: caller.clone(),
-                total_tickets_sold: raffle.tickets_sold,
-                timestamp: now,
-            }
-            .publish(&env);
+            match request_randomness(&env) {
+                Ok(request_id) => {
+                    DrawTriggered {
+                        caller: caller.clone(),
+                        total_tickets_sold: raffle.tickets_sold,
+                        timestamp: now,
+                    }
+                    .publish(&env);
 
-            RandomnessRequested {
-                oracle: raffle
-                    .oracle_address
-                    .clone()
-                    .unwrap_or(env.current_contract_address()),
-                request_id,
-                timestamp: now,
+                    RandomnessRequested {
+                        oracle: raffle
+                            .oracle_address
+                            .clone()
+                            .unwrap_or(env.current_contract_address()),
+                        request_id,
+                        timestamp: now,
+                    }
+                    .publish(&env);
+                    return Ok(());
+                }
+                Err(err) => {
+                    // SECURITY: lock rollback — oracle dispatch failed after status transition;
+                    // clear DrawingLock and revert status so the contract is not permanently
+                    // locked
+                    raffle.status = pre_drawing_status;
+                    write_raffle(&env, &raffle);
+                    env.storage().instance().set(&DataKey::DrawingLock, &false);
+                    return Err(err);
+                }
             }
-            .publish(&env);
-            return Ok(());
         }
 
         DrawTriggered {
@@ -1080,9 +1109,7 @@ impl Contract {
             env.storage()
                 .instance()
                 .remove(&DataKey::RandomnessRequestLedger);
-            env.storage()
-                .instance()
-                .remove(&DataKey::DrawingLock);
+            env.storage().instance().set(&DataKey::DrawingLock, &false);
 
             RaffleCancelled {
                 creator: raffle.creator.clone(),
@@ -1741,9 +1768,7 @@ fn do_finalize_with_seed(
         .instance()
         .remove(&DataKey::RandomnessRequestLedger);
     // # SECURITY: Clear DrawingLock LAST, after all winner state is committed
-    env.storage()
-        .instance()
-        .remove(&DataKey::DrawingLock);
+    env.storage().instance().set(&DataKey::DrawingLock, &false);
 
     RaffleFinalized {
         raffle_id: env.current_contract_address(),
