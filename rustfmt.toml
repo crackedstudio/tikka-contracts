@@ -1,0 +1,10 @@
+edition = '2021'
+max_width = 100
+tab_spaces = 4
+newline_style = 'Unix'
+use_small_heuristics = 'Default'
+imports_granularity = 'Module'
+group_imports = 'StdExternalCrate'
+wrap_comments = true
+format_code_in_doc_comments = true
+normalize_comments = true

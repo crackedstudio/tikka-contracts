@@ -127,6 +127,7 @@ pub struct CommitRevealEntry {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
+    // === Basic raffle state errors (1-15) ===
     RaffleNotFound = 1,
     RaffleInactive = 2,
     TicketsSoldOut = 3,
@@ -136,31 +137,45 @@ pub enum Error {
     RandomnessAlreadyRequested = 7,
     NoRandomnessRequest = 8,
     FallbackTooEarly = 9,
+    // Reserved: 10 (for future use)
     PrizeNotDeposited = 11,
     PrizeAlreadyClaimed = 12,
     PrizeAlreadyDeposited = 13,
     NotWinner = 14,
     ClaimTooEarly = 15,
+
+    // === Parameter validation errors (21-26) ===
+    // Reserved: 16-20 (for future use)
     InvalidParameters = 21,
     InvalidQuantity = 22,
     InvalidStatus = 23,
     ContractPaused = 24,
     InvalidStateTransition = 25,
     RaffleExpired = 26,
+
+    // === Ticket-related errors (31-35) ===
+    // Reserved: 27-30 (for future use)
     InsufficientTickets = 31,
     MultipleTicketsNotAllowed = 32,
     NoTicketsSold = 33,
-    NoActiveTickets = 46,
     TicketNotFound = 34,
     RaffleEnded = 35,
+
+    // === System/contract errors (41-46) ===
+    // Reserved: 36-40 (for future use)
     ArithmeticOverflow = 41,
     AlreadyInitialized = 42,
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    NoActiveTickets = 46,
+
+    // === Swap/deadline errors (47-49) ===
     DeadlinePassed = 47,
     SlippageExceeded = 48,
     InvalidIndex = 49,
+
+    // === Prize configuration errors (50-58) ===
     MorePrizesThanTickets = 50,
     ZeroPrize = 51,
     InvalidTokenAddress = 52,
@@ -170,6 +185,8 @@ pub enum Error {
     InsufficientAccumulatedFees = 56,
     PrizeConfigurationLocked = 57,
     ExceedsMaxTicketsPerTx = 58,
+
+    // === Drawing state errors (59-63) ===
     DrawingAlreadyInProgress = 59,
     InvalidStatusForDrawingTransition = 60,
     DrawingAlreadyComplete = 61,
@@ -502,25 +519,16 @@ impl Contract {
         // Validate that the payment_token is a valid token contract
         validate_token_address(&env, &config.payment_token)?;
 
+        // Resolve default values for fields that use 0 as "use default"
+        let config = config.resolve_defaults();
+
         // #259: claim_lockup_seconds must be within [0, MAX_CLAIM_LOCKUP_SECONDS].
-        // Zero is interpreted as "use the default".
-        let claim_lockup_seconds = if config.claim_lockup_seconds == 0 {
-            DEFAULT_CLAIM_LOCKUP_SECONDS
-        } else {
-            config.claim_lockup_seconds
-        };
-        if claim_lockup_seconds > MAX_CLAIM_LOCKUP_SECONDS {
+        if config.claim_lockup_seconds > MAX_CLAIM_LOCKUP_SECONDS {
             return Err(Error::InvalidParameters);
         }
 
         // Swap deadline must be within [0, MAX_SWAP_DEADLINE_SECONDS].
-        // Zero is interpreted as "use the default".
-        let swap_deadline_seconds = if config.swap_deadline_seconds == 0 {
-            DEFAULT_SWAP_DEADLINE_SECONDS
-        } else {
-            config.swap_deadline_seconds
-        };
-        if swap_deadline_seconds > MAX_SWAP_DEADLINE_SECONDS {
+        if config.swap_deadline_seconds > MAX_SWAP_DEADLINE_SECONDS {
             return Err(Error::InvalidParameters);
         }
 
@@ -549,8 +557,8 @@ impl Contract {
             swap_router: config.swap_router,
             tikka_token: config.tikka_token,
             finalized_at: None,
-            claim_lockup_seconds,
-            swap_deadline_seconds,
+            claim_lockup_seconds: config.claim_lockup_seconds,
+            swap_deadline_seconds: config.swap_deadline_seconds,
             ticket_sales_paused: false,
         };
         write_raffle(&env, &raffle);

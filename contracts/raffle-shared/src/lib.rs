@@ -81,6 +81,18 @@ pub struct RaffleConfig {
     pub swap_deadline_seconds: u64,
 }
 
+impl RaffleConfig {
+    pub fn resolve_defaults(mut self) -> Self {
+        if self.claim_lockup_seconds == 0 {
+            self.claim_lockup_seconds = DEFAULT_CLAIM_LOCKUP_SECONDS;
+        }
+        if self.swap_deadline_seconds == 0 {
+            self.swap_deadline_seconds = DEFAULT_SWAP_DEADLINE_SECONDS;
+        }
+        self
+    }
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct Ticket {
@@ -133,6 +145,8 @@ pub enum AdminOp {
 
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
 pub const MAX_PAGE_LIMIT: u32 = 200;
+pub const DEFAULT_CLAIM_LOCKUP_SECONDS: u64 = 3_600;
+pub const DEFAULT_SWAP_DEADLINE_SECONDS: u64 = 300;
 
 pub fn effective_limit(requested: u32) -> u32 {
     if requested == 0 {
