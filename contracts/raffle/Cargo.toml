@@ -3,6 +3,12 @@ name = "raffle-factory"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT"
+description = "Tikka raffle factory smart contract for Stellar/Soroban"
+repository = "https://github.com/crackedstudio/tikka-contracts"
+authors = ["Tikka Team"]
+keywords = ["soroban", "stellar", "raffle", "defi", "blockchain"]
+categories = ["cryptography::cryptocurrencies", "no-std"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

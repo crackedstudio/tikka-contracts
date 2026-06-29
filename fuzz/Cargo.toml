@@ -3,6 +3,12 @@ name    = "raffle-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
+license = "MIT"
+description = "Fuzzing tests for Tikka raffle smart contracts"
+repository = "https://github.com/crackedstudio/tikka-contracts"
+authors = ["Tikka Team"]
+keywords = ["soroban", "stellar", "raffle", "defi", "blockchain"]
+categories = ["development-tools::testing"]
 
 # ── cargo-fuzz targets ──────────────────────────────────────────────────────
 [[bin]]

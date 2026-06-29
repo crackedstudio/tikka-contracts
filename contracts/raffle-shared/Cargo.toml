@@ -2,6 +2,12 @@
 name = "raffle-shared"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Shared types and utilities for Tikka raffle smart contracts"
+repository = "https://github.com/crackedstudio/tikka-contracts"
+authors = ["Tikka Team"]
+keywords = ["soroban", "stellar", "raffle", "defi", "blockchain"]
+categories = ["cryptography::cryptocurrencies", "no-std"]
 
 [lib]
 crate-type = ["lib"]
