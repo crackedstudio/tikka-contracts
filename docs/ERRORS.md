@@ -2,6 +2,12 @@
 
 This document describes all error codes used in the Tikka Raffle contracts. Frontend applications can use these codes to display user-friendly error messages.
 
+> **Note:** To keep this documentation in sync with the Rust Error enum, run the generation script:
+> ```bash
+> python scripts/generate_error_docs.py
+> ```
+> This script parses `contracts/raffle-instance/src/lib.rs` and outputs the current error codes and their mappings.
+
 ## Table of Contents
 
 - [Instance Contract Errors](#instance-contract-errors)
@@ -12,17 +18,21 @@ This document describes all error codes used in the Tikka Raffle contracts. Fron
 
 ## Instance Contract Errors
 
-The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle/src/instance/mod.rs`](contracts/raffle/src/instance/mod.rs).
+The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle-instance/src/lib.rs`](contracts/raffle-instance/src/lib.rs).
 
 ### General Errors (1-10)
 
-| Code | Error               | Description                                   | Frontend Message                                |
-| ---- | ------------------- | --------------------------------------------- | ----------------------------------------------- |
-| 1    | `RaffleNotFound`    | The raffle data was not found in storage      | "Raffle not found"                              |
-| 2    | `RaffleInactive`    | The raffle is not in an active state          | "This raffle is not currently active"           |
-| 3    | `TicketsSoldOut`    | All tickets have been sold                    | "Sorry, all tickets have been sold!"            |
-| 4    | `InsufficientFunds` | User does not have enough balance             | "Insufficient funds to complete this action"    |
-| 5    | `NotAuthorized`     | User is not authorized to perform this action | "You are not authorized to perform this action" |
+| Code | Error                        | Description                                   | Frontend Message                                |
+| ---- | ---------------------------- | --------------------------------------------- | ----------------------------------------------- |
+| 1    | `RaffleNotFound`             | The raffle data was not found in storage      | "Raffle not found"                              |
+| 2    | `RaffleInactive`             | The raffle is not in an active state          | "This raffle is not currently active"           |
+| 3    | `TicketsSoldOut`             | All tickets have been sold                    | "Sorry, all tickets have been sold!"            |
+| 4    | `InsufficientFunds`          | User does not have enough balance             | "Insufficient funds to complete this action"    |
+| 5    | `NotAuthorized`              | User is not authorized to perform this action | "You are not authorized to perform this action" |
+| 6    | `OracleNotSet`               | Oracle address is not configured              | "Oracle address is not set"                     |
+| 7    | `RandomnessAlreadyRequested` | Randomness has already been requested          | "Randomness request already in progress"        |
+| 8    | `NoRandomnessRequest`        | No randomness request found                   | "No randomness request found"                  |
+| 9    | `FallbackTooEarly`           | Fallback randomness triggered too early       | "Fallback randomness not available yet"         |
 
 ### Prize/Claim Errors (11-20)
 
@@ -39,10 +49,11 @@ The instance contract (`Raffle`) handles individual raffle operations. All error
 | Code | Error                    | Description                                            | Frontend Message                                         |
 | ---- | ------------------------ | ------------------------------------------------------ | -------------------------------------------------------- |
 | 21   | `InvalidParameters`      | Invalid input parameters provided                      | "Invalid parameters provided"                            |
-| 22   | `InvalidStatus`          | The current raffle status doesn't allow this operation | "This action is not allowed in the current raffle state" |
-| 23   | `ContractPaused`         | The contract is paused                                 | "Contract is temporarily paused"                         |
-| 24   | `InvalidStateTransition` | Cannot transition to the requested state               | "Cannot change raffle to the requested state"            |
-| 25   | `RaffleExpired`          | The raffle end time has passed                         | "This raffle has ended"                                  |
+| 22   | `InvalidQuantity`        | Invalid ticket quantity requested                      | "Invalid ticket quantity"                                |
+| 23   | `InvalidStatus`          | The current raffle status doesn't allow this operation | "This action is not allowed in the current raffle state" |
+| 24   | `ContractPaused`         | The contract is paused                                 | "Contract is temporarily paused"                         |
+| 25   | `InvalidStateTransition` | Cannot transition to the requested state               | "Cannot change raffle to the requested state"            |
+| 26   | `RaffleExpired`          | The raffle end time has passed                         | "This raffle has ended"                                  |
 
 ### Ticket Errors (31-40)
 
@@ -52,15 +63,35 @@ The instance contract (`Raffle`) handles individual raffle operations. All error
 | 32   | `MultipleTicketsNotAllowed` | User already has a ticket           | "Multiple tickets not allowed for this raffle" |
 | 33   | `NoTicketsSold`             | No tickets have been purchased      | "No tickets have been sold yet"                |
 | 34   | `TicketNotFound`            | The requested ticket was not found  | "Ticket not found"                             |
+| 35   | `RaffleEnded`               | The raffle has already ended         | "This raffle has already ended"                |
 
 ### System Errors (41-50)
 
-| Code | Error                | Description                       | Frontend Message               |
-| ---- | -------------------- | --------------------------------- | ------------------------------ |
-| 41   | `ArithmeticOverflow` | Arithmetic operation overflow     | "Calculation error occurred"   |
-| 42   | `AlreadyInitialized` | Contract is already initialized   | "Contract already initialized" |
-| 43   | `NotInitialized`     | Contract has not been initialized | "Contract not initialized"     |
-| 44   | `Reentrancy`         | Reentrant call detected           | "Please try again later"       |
+| Code | Error                    | Description                       | Frontend Message               |
+| ---- | ------------------------ | --------------------------------- | ------------------------------ |
+| 41   | `ArithmeticOverflow`     | Arithmetic operation overflow     | "Calculation error occurred"   |
+| 42   | `AlreadyInitialized`     | Contract is already initialized   | "Contract already initialized" |
+| 43   | `NotInitialized`         | Contract has not been initialized | "Contract not initialized"     |
+| 44   | `Reentrancy`             | Reentrant call detected           | "Please try again later"       |
+| 45   | `TokenTransferFailed`    | Token transfer failed             | "Token transfer failed"        |
+| 46   | `NoActiveTickets`        | No active tickets available       | "No active tickets available"  |
+| 47   | `DeadlinePassed`         | Swap deadline has passed          | "Swap deadline has passed"     |
+| 48   | `SlippageExceeded`       | Slippage tolerance exceeded       | "Slippage tolerance exceeded"  |
+| 49   | `InvalidIndex`           | Invalid index provided            | "Invalid index provided"       |
+| 50   | `MorePrizesThanTickets`  | More prizes than tickets          | "More prizes than tickets"     |
+
+### Additional Errors (51-58)
+
+| Code | Error                        | Description                              | Frontend Message                      |
+| ---- | ---------------------------- | ---------------------------------------- | ------------------------------------- |
+| 51   | `ZeroPrize`                  | Prize amount is zero                     | "Prize amount cannot be zero"         |
+| 52   | `InvalidTokenAddress`         | Invalid token address provided           | "Invalid token address"               |
+| 53   | `TooManyPrizes`              | Exceeds maximum number of prizes         | "Too many prizes configured"          |
+| 54   | `EmergencyTooEarly`          | Emergency withdraw too early            | "Emergency withdraw not available yet"|
+| 55   | `InvalidTicketRange`         | Invalid ticket range configured          | "Invalid ticket range"               |
+| 56   | `InsufficientAccumulatedFees`| Insufficient accumulated fees            | "Insufficient accumulated fees"       |
+| 57   | `PrizeConfigurationLocked`   | Prize configuration is locked            | "Prize configuration is locked"       |
+| 58   | `ExceedsMaxTicketsPerTx`     | Exceeds max tickets per transaction      | "Too many tickets for one transaction"|
 
 ---
 
@@ -96,32 +127,52 @@ The factory contract (`RaffleFactory`) manages raffle creation. All error codes 
 ```typescript
 // Frontend error mapping
 const errorMessages: Record<number, string> = {
-  // Instance errors
+  // Instance errors (1-58)
   1: "Raffle not found",
   2: "This raffle is not currently active",
   3: "Sorry, all tickets have been sold!",
   4: "Insufficient funds to complete this action",
   5: "You are not authorized to perform this action",
+  6: "Oracle address is not set",
+  7: "Randomness request already in progress",
+  8: "No randomness request found",
+  9: "Fallback randomness not available yet",
   11: "Prize not yet deposited",
   12: "Prize has already been claimed",
   13: "Prize has already been deposited",
   14: "You are not the winner of this raffle",
   15: "Please wait before claiming your prize",
   21: "Invalid parameters provided",
-  22: "This action is not allowed in the current raffle state",
-  23: "Contract is temporarily paused",
-  24: "Cannot change raffle to the requested state",
-  25: "This raffle has ended",
+  22: "Invalid ticket quantity",
+  23: "This action is not allowed in the current raffle state",
+  24: "Contract is temporarily paused",
+  25: "Cannot change raffle to the requested state",
+  26: "This raffle has ended",
   31: "Minimum ticket requirement not met",
   32: "Multiple tickets not allowed for this raffle",
   33: "No tickets have been sold yet",
   34: "Ticket not found",
+  35: "This raffle has already ended",
   41: "Calculation error occurred",
   42: "Contract already initialized",
   43: "Contract not initialized",
   44: "Please try again later",
+  45: "Token transfer failed",
+  46: "No active tickets available",
+  47: "Swap deadline has passed",
+  48: "Slippage tolerance exceeded",
+  49: "Invalid index provided",
+  50: "More prizes than tickets",
+  51: "Prize amount cannot be zero",
+  52: "Invalid token address",
+  53: "Too many prizes configured",
+  54: "Emergency withdraw not available yet",
+  55: "Invalid ticket range",
+  56: "Insufficient accumulated fees",
+  57: "Prize configuration is locked",
+  58: "Too many tickets for one transaction",
 
-  // Factory errors
+  // Factory errors (offset by 100 to avoid conflicts)
   101: "Factory already initialized",
   102: "You are not the admin",
   103: "Factory is temporarily paused",
@@ -129,6 +180,8 @@ const errorMessages: Record<number, string> = {
   105: "Raffle not found",
   111: "Admin transfer already pending",
   112: "No pending admin transfer",
+  118: "Treasury address is not set",
+  119: "Unsupported payment token",
 };
 
 function handleContractError(errorCode: number): string {
@@ -146,11 +199,60 @@ interface ErrorDisplayProps {
 }
 
 const ERROR_MESSAGES: Record<number, string> = {
+  // Instance errors
+  1: "Raffle not found",
+  2: "This raffle is not currently active",
   3: "Sorry, all tickets have been sold!",
   4: "Insufficient funds. Please top up your wallet.",
+  5: "You are not authorized to perform this action",
+  6: "Oracle address is not set",
+  7: "Randomness request already in progress",
+  8: "No randomness request found",
+  9: "Fallback randomness not available yet",
+  11: "Prize not yet deposited",
+  12: "Prize has already been claimed",
+  13: "Prize has already been deposited",
   14: "You are not the winner of this raffle",
-  25: "This raffle has ended",
-  // ... add more as needed
+  15: "Please wait before claiming your prize",
+  21: "Invalid parameters provided",
+  22: "Invalid ticket quantity",
+  23: "This action is not allowed in the current raffle state",
+  24: "Contract is temporarily paused",
+  25: "Cannot change raffle to the requested state",
+  26: "This raffle has ended",
+  31: "Minimum ticket requirement not met",
+  32: "Multiple tickets not allowed for this raffle",
+  33: "No tickets have been sold yet",
+  34: "Ticket not found",
+  35: "This raffle has already ended",
+  41: "Calculation error occurred",
+  42: "Contract already initialized",
+  43: "Contract not initialized",
+  44: "Please try again later",
+  45: "Token transfer failed",
+  46: "No active tickets available",
+  47: "Swap deadline has passed",
+  48: "Slippage tolerance exceeded",
+  49: "Invalid index provided",
+  50: "More prizes than tickets",
+  51: "Prize amount cannot be zero",
+  52: "Invalid token address",
+  53: "Too many prizes configured",
+  54: "Emergency withdraw not available yet",
+  55: "Invalid ticket range",
+  56: "Insufficient accumulated fees",
+  57: "Prize configuration is locked",
+  58: "Too many tickets for one transaction",
+  // Factory errors
+  101: "Factory already initialized",
+  102: "You are not the admin",
+  103: "Factory is temporarily paused",
+  104: "Invalid parameters provided",
+  105: "Raffle not found",
+  111: "Admin transfer already pending",
+  112: "No pending admin transfer",
+  118: "Treasury address is not set",
+  119: "Unsupported payment token",
 };
 
 export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errorCode }) => {
