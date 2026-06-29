@@ -543,8 +543,8 @@ Emitted when a verified winner claims their prize.
 | `tier_index` | `u32` | Prize tier index being claimed (0-based) |
 | `payment_token` | `Address` | Token contract used for the payout |
 | `gross_amount` | `i128` | Total prize amount before any deductions |
-| `net_amount` | `i128` | Actual amount transferred to the winner after fees |
-| `platform_fee` | `i128` | Fee amount retained by the platform |
+| `net_amount` | `i128` | Amount transferred to the winner (equals gross; fees are charged at ticket purchase) |
+| `platform_fee` | `i128` | Always 0 — protocol fees are collected on ticket sales, not prize claims |
 | `claimed_at` | `u64` | Ledger timestamp of the claim |
 
 **Emitted by:** `claim_prize`

@@ -20,6 +20,10 @@ This document describes all error codes used in the Tikka Raffle contracts. Fron
 
 The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle-instance/src/lib.rs`](contracts/raffle-instance/src/lib.rs).
 
+### Protocol Fee Model
+
+The protocol fee (`protocol_fee_bp`) is charged **once**, at ticket purchase. Winners receive the full gross prize amount on claim; `PrizeClaimed.platform_fee` is always `0`. Total protocol revenue equals the sum of fees collected from ticket sales.
+
 ### General Errors (1-10)
 
 | Code | Error                        | Description                                   | Frontend Message                                |

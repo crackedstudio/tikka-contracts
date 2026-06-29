@@ -298,6 +298,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 // protocol_fee_bp: Basis points (1 bp = 0.01%). 
 // Must be <= 10_000 (100%). 
 // Example: 250 = 2.5%
+// Charged on ticket purchase only — winners receive the full prize amount.
 
 ---
 
