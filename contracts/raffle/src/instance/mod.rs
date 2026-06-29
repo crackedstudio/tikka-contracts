@@ -89,7 +89,9 @@ pub struct Raffle {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    // TODO(#428): field used by swap router for non-native payment tokens
     pub swap_router: Option<Address>,
+    // TODO(#428): field used by TIKKA token discount on ticket prices
     pub tikka_token: Option<Address>,
     pub finalized_at: Option<u64>,
     pub winner_ticket_id: Option<u32>,
@@ -111,7 +113,9 @@ pub struct RaffleConfig {
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
+    // TODO(#428): field used by swap router for non-native payment tokens
     pub swap_router: Option<Address>,
+    // TODO(#428): field used by TIKKA token discount on ticket prices
     pub tikka_token: Option<Address>,
     /// SHA-256 hash of the off-chain metadata JSON. Must be non-zero (all-zero
     /// bytes are rejected as an unset sentinel value).
