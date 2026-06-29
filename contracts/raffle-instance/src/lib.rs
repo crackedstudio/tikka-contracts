@@ -862,16 +862,6 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
-        // SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
-        // already in progress; reject without reading further state
-        let drawing_lock: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::DrawingLock)
-            .unwrap_or(false);
-        if drawing_lock {
-            return Err(Error::DrawingAlreadyInProgress);
-        }
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
@@ -913,7 +903,9 @@ impl Contract {
         let caller = raffle.creator.clone();
         let pre_drawing_status = raffle.status.clone();
 
-        transition_to_drawing(&env, &mut raffle, now)?;
+        if raffle.status != RaffleStatus::Drawing {
+            transition_to_drawing(&env, &mut raffle, now)?;
+        }
 
         if raffle.randomness_source == RandomnessSource::External {
             match request_randomness(&env) {
