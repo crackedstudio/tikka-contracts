@@ -11,8 +11,8 @@ mod events;
 mod randomness;
 
 use raffle_shared::{
-    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
-    Ticket,
+    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource,
+    RandomnessType, Ticket,
 };
 
 use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
@@ -20,9 +20,9 @@ use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 use crate::events::{
     ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
     OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
-    TicketRefunded, TokensRescued, WinnerDrawn,
+    RaffleCancelled, RaffleCreated, RaffleFailed, RaffleFinalized, RaffleStatusChanged,
+    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, SwapDeadlineUpdated,
+    TicketPurchased, TicketRefunded, TokensRescued, WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
@@ -100,6 +100,7 @@ pub enum DataKey {
     RandomnessRequested,
     RandomnessRequestLedger,
     RandomnessRequestId,
+    DrawingLock,
     FinishTime,
     AccumulatedFees,
     /// Stores the commit entry for a ticket in the commit-reveal scheme.
@@ -168,6 +169,11 @@ pub enum Error {
     InsufficientAccumulatedFees = 56,
     PrizeConfigurationLocked = 57,
     ExceedsMaxTicketsPerTx = 58,
+    DrawingAlreadyInProgress = 59,
+    DrawingAlreadyComplete = 60,
+    InvalidStatusForDrawingTransition = 61,
+    InvalidEndTime = 62,
+    InvalidAdminAddress = 63,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -221,7 +227,7 @@ fn enforce_swap_guard(
 ) -> Result<(), Error> {
     // Calculate deadline based on current timestamp and raffle's configured deadline window
     let deadline = env.ledger().timestamp() + raffle.swap_deadline_seconds;
-    
+
     // Check deadline
     if env.ledger().timestamp() > deadline {
         return Err(Error::DeadlinePassed);
@@ -847,17 +853,18 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
+        let mut raffle = read_raffle(&env)?;
         // SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
-        // already in progress; reject without reading further state
+        // already in progress. A raffle already in Drawing may continue finalization because
+        // the lock belongs to that pending draw.
         let drawing_lock: bool = env
             .storage()
             .instance()
             .get(&DataKey::DrawingLock)
             .unwrap_or(false);
-        if drawing_lock {
+        if drawing_lock && raffle.status != RaffleStatus::Drawing {
             return Err(Error::DrawingAlreadyInProgress);
         }
-        let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
         if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
@@ -875,7 +882,7 @@ impl Contract {
         // #169: zero tickets sold is always a failure regardless of min_tickets,
         // ensuring the creator can recover their deposited prize via refund_prize.
         if raffle.tickets_sold == 0 || raffle.tickets_sold < raffle.min_tickets {
-            let old_status = raffle.status.clone();
+            let _old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
@@ -898,7 +905,9 @@ impl Contract {
         let caller = raffle.creator.clone();
         let pre_drawing_status = raffle.status.clone();
 
-        transition_to_drawing(&env, &mut raffle, now)?;
+        if raffle.status == RaffleStatus::Active {
+            transition_to_drawing(&env, &mut raffle, now)?;
+        }
 
         if raffle.randomness_source == RandomnessSource::External {
             match request_randomness(&env) {
@@ -1050,15 +1059,16 @@ impl Contract {
         caller: Address,
         do_refund: bool,
     ) -> Result<(), Error> {
-        // # SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
-        // already in progress; reject without reading further state
+        // # SECURITY: DrawingLock must still be held by the pending external draw.
+        // A cleared lock means the draw has already completed or was rolled back, so a
+        // timeout fallback must not write winner/cancellation state a second time.
         let drawing_lock: bool = env
             .storage()
             .instance()
             .get(&DataKey::DrawingLock)
             .unwrap_or(false);
-        if drawing_lock {
-            return Err(Error::DrawingAlreadyInProgress);
+        if !drawing_lock {
+            return Err(Error::DrawingAlreadyComplete);
         }
 
         caller.require_auth();
@@ -1413,7 +1423,6 @@ impl Contract {
     }
 
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
-        acquire_guard(&env)?;
         let raffle = read_raffle(&env)?;
 
         // #258: status check BEFORE require_auth to prevent double-spend on
@@ -1809,6 +1818,149 @@ mod test {
         let addr = sac.address();
         (addr.clone(), token::StellarAssetClient::new(env, &addr))
     }
+
+    fn setup_external_randomness_raffle(
+        env: &Env,
+    ) -> (
+        ContractClient<'_>,
+        Address,
+        Address,
+        Address,
+        Address,
+        token::StellarAssetClient<'_>,
+    ) {
+        env.mock_all_auths();
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+        let buyer_a = Address::generate(env);
+        let buyer_b = Address::generate(env);
+        let oracle = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let (payment_token, token_client) = create_token(env, &token_admin);
+
+        token_client.mint(&creator, &1_000_000);
+        token_client.mint(&buyer_a, &1_000_000);
+        token_client.mint(&buyer_b, &1_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(env, "oracle timeout fallback"),
+            end_time: 1,
+            no_deadline: false,
+            max_tickets: 3,
+            max_tickets_per_tx: 3,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token,
+            prize_amount: MIN_TICKET_PRICE,
+            prizes: vec![env, 10000u32],
+            randomness_source: RandomnessSource::External,
+            oracle_address: Some(oracle),
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(env, &[44u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: DEFAULT_SWAP_DEADLINE_SECONDS,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&buyer_a, &1);
+        client.buy_tickets(&buyer_b, &1);
+        env.ledger().set_timestamp(1);
+        client.finalize_raffle();
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Drawing);
+        assert_eq!(raffle.tickets_sold, 2);
+
+        (client, contract_id, creator, buyer_a, buyer_b, token_client)
+    }
+
+    fn drawing_lock(env: &Env, contract_id: &Address) -> bool {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::DataKey::DrawingLock)
+                .unwrap_or(false)
+        })
+    }
+
+    #[test]
+    fn fallback_with_refund_cancels_raffle() {
+        let env = Env::default();
+        let (client, contract_id, creator, buyer_a, _buyer_b, token_client) =
+            setup_external_randomness_raffle(&env);
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number += ORACLE_TIMEOUT_LEDGERS - 1;
+        });
+        assert_eq!(
+            client.try_trigger_randomness_fallback(&creator, &true),
+            Err(Ok(Error::FallbackTooEarly))
+        );
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number += 1;
+        });
+        client.trigger_randomness_fallback(&creator, &true);
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Cancelled);
+        assert!(!drawing_lock(&env, &contract_id));
+
+        let balance_before = token_client.balance(&buyer_a);
+        assert_eq!(client.refund_ticket(&1), MIN_TICKET_PRICE);
+        assert_eq!(
+            token_client.balance(&buyer_a),
+            balance_before + MIN_TICKET_PRICE
+        );
+    }
+
+    #[test]
+    fn fallback_without_refund_uses_internal_seed() {
+        let env = Env::default();
+        let (client, contract_id, creator, buyer_a, buyer_b, _token_client) =
+            setup_external_randomness_raffle(&env);
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number += ORACLE_TIMEOUT_LEDGERS;
+        });
+        client.trigger_randomness_fallback(&creator, &false);
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Finalized);
+        assert_eq!(raffle.winners.len(), 1);
+        let winner = raffle.winners.get(0).unwrap();
+        assert!(winner == buyer_a || winner == buyer_b);
+        assert!(!drawing_lock(&env, &contract_id));
+
+        let fairness = client.get_fairness_data();
+        assert_eq!(fairness.randomness_source, RandomnessSource::External);
+        assert_eq!(fairness.winning_ticket_indices.len(), 1);
+    }
+
+    #[test]
+    fn fallback_too_early_is_rejected() {
+        let env = Env::default();
+        let (client, _contract_id, creator, _buyer_a, _buyer_b, _token_client) =
+            setup_external_randomness_raffle(&env);
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number += ORACLE_TIMEOUT_LEDGERS - 1;
+        });
+
+        assert_eq!(
+            client.try_trigger_randomness_fallback(&creator, &false),
+            Err(Ok(Error::FallbackTooEarly))
+        );
+    }
     #[contract]
     pub struct MockFactory;
 
@@ -1861,6 +2013,7 @@ mod test {
             tikka_token: None,
             metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
             claim_lockup_seconds: 0, // => DEFAULT_CLAIM_LOCKUP_SECONDS (3600)
+            swap_deadline_seconds: DEFAULT_SWAP_DEADLINE_SECONDS,
         };
 
         client.init(&factory, &admin, &creator, &config);
@@ -1921,6 +2074,7 @@ mod test {
             tikka_token: None,
             metadata_hash: BytesN::from_array(&env, &[5u8; 32]),
             claim_lockup_seconds: 0,
+            swap_deadline_seconds: DEFAULT_SWAP_DEADLINE_SECONDS,
         };
 
         client.init(&factory, &admin, &creator, &config);
