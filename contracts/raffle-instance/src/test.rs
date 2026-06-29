@@ -48,6 +48,7 @@ fn test_oracle_fallback_with_ledger_delays() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[1; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -126,6 +127,7 @@ fn test_admin_updates_oracle_address() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[2; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -169,6 +171,7 @@ fn test_admin_sets_protocol_fee_before_sales() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[3; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -221,6 +224,7 @@ fn test_admin_withdraws_accumulated_fees() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[4; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -285,6 +289,7 @@ fn test_buy_tickets_rejects_quantity_above_per_tx_cap() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[5; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -337,6 +342,7 @@ fn test_finalize_raffle_sets_drawing_lock_and_blocks_reentry() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[7; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -408,6 +414,7 @@ fn test_finalize_rollback_on_randomness_request_failure() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[8; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -475,6 +482,7 @@ fn test_allow_multiple_false_single_ticket_per_buyer() {
         tikka_token: None,
         metadata_hash: BytesN::from_array(&env, &[6; 32]),
         claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
     };
 
     client.init(&factory, &admin, &creator, &config);
