@@ -38,3 +38,9 @@ jobs:
 
     - name: Run Tests
       run: cargo test
+
+    - name: Install cargo-deny
+      run: cargo install cargo-deny --locked
+
+    - name: Deny check
+      run: cargo deny check
