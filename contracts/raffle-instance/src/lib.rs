@@ -21,9 +21,9 @@ use crate::events::{
     ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
     OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
     RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
-    TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued, WinnerDrawn,
-    SwapDeadlineUpdated,
+    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, SwapDeadlineUpdated,
+    TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued,
+    WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
@@ -90,6 +90,7 @@ pub struct FairnessMetadata {
 }
 
 #[soroban_sdk::contracttype]
+#[derive(Clone)]
 pub enum DataKey {
     Raffle,
     TicketCount(Address),
@@ -105,13 +106,9 @@ pub enum DataKey {
     RandomnessRequestId,
     FinishTime,
     AccumulatedFees,
-    /// Stores the commit entry for a ticket in the commit-reveal scheme.
-    /// Keyed by ticket ID (not owner address) so the entry survives ticket
-    /// transfers: a ticket holder who committed and then transferred the
-    /// ticket still has their entropy contribution recorded here.
     CommitEntry(u32),
-    /// Set while a raffle is in the Drawing phase to block concurrent draw operations.
     DrawingLock,
+    TicketBuyers,
 }
 
 /// A single participant commit recorded during the commit phase of a
@@ -130,6 +127,7 @@ pub struct CommitRevealEntry {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
+    // === Basic raffle state errors (1-15) ===
     RaffleNotFound = 1,
     RaffleInactive = 2,
     TicketsSoldOut = 3,
@@ -139,31 +137,45 @@ pub enum Error {
     RandomnessAlreadyRequested = 7,
     NoRandomnessRequest = 8,
     FallbackTooEarly = 9,
+    // Reserved: 10 (for future use)
     PrizeNotDeposited = 11,
     PrizeAlreadyClaimed = 12,
     PrizeAlreadyDeposited = 13,
     NotWinner = 14,
     ClaimTooEarly = 15,
+
+    // === Parameter validation errors (21-26) ===
+    // Reserved: 16-20 (for future use)
     InvalidParameters = 21,
     InvalidQuantity = 22,
     InvalidStatus = 23,
     ContractPaused = 24,
     InvalidStateTransition = 25,
     RaffleExpired = 26,
+
+    // === Ticket-related errors (31-35) ===
+    // Reserved: 27-30 (for future use)
     InsufficientTickets = 31,
     MultipleTicketsNotAllowed = 32,
     NoTicketsSold = 33,
-    NoActiveTickets = 46,
     TicketNotFound = 34,
     RaffleEnded = 35,
+
+    // === System/contract errors (41-46) ===
+    // Reserved: 36-40 (for future use)
     ArithmeticOverflow = 41,
     AlreadyInitialized = 42,
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    NoActiveTickets = 46,
+
+    // === Swap/deadline errors (47-49) ===
     DeadlinePassed = 47,
     SlippageExceeded = 48,
     InvalidIndex = 49,
+
+    // === Prize configuration errors (50-58) ===
     MorePrizesThanTickets = 50,
     ZeroPrize = 51,
     InvalidTokenAddress = 52,
@@ -173,11 +185,13 @@ pub enum Error {
     InsufficientAccumulatedFees = 56,
     PrizeConfigurationLocked = 57,
     ExceedsMaxTicketsPerTx = 58,
+
+    // === Drawing state errors (59-63) ===
     DrawingAlreadyInProgress = 59,
-    DrawingAlreadyComplete = 60,
-    InvalidEndTime = 61,
-    InvalidAdminAddress = 62,
-    InvalidStatusForDrawingTransition = 63,
+    InvalidStatusForDrawingTransition = 60,
+    DrawingAlreadyComplete = 61,
+    InvalidEndTime = 62,
+    InvalidAdminAddress = 63,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -505,25 +519,16 @@ impl Contract {
         // Validate that the payment_token is a valid token contract
         validate_token_address(&env, &config.payment_token)?;
 
+        // Resolve default values for fields that use 0 as "use default"
+        let config = config.resolve_defaults();
+
         // #259: claim_lockup_seconds must be within [0, MAX_CLAIM_LOCKUP_SECONDS].
-        // Zero is interpreted as "use the default".
-        let claim_lockup_seconds = if config.claim_lockup_seconds == 0 {
-            DEFAULT_CLAIM_LOCKUP_SECONDS
-        } else {
-            config.claim_lockup_seconds
-        };
-        if claim_lockup_seconds > MAX_CLAIM_LOCKUP_SECONDS {
+        if config.claim_lockup_seconds > MAX_CLAIM_LOCKUP_SECONDS {
             return Err(Error::InvalidParameters);
         }
 
         // Swap deadline must be within [0, MAX_SWAP_DEADLINE_SECONDS].
-        // Zero is interpreted as "use the default".
-        let swap_deadline_seconds = if config.swap_deadline_seconds == 0 {
-            DEFAULT_SWAP_DEADLINE_SECONDS
-        } else {
-            config.swap_deadline_seconds
-        };
-        if swap_deadline_seconds > MAX_SWAP_DEADLINE_SECONDS {
+        if config.swap_deadline_seconds > MAX_SWAP_DEADLINE_SECONDS {
             return Err(Error::InvalidParameters);
         }
 
@@ -552,8 +557,8 @@ impl Contract {
             swap_router: config.swap_router,
             tikka_token: config.tikka_token,
             finalized_at: None,
-            claim_lockup_seconds,
-            swap_deadline_seconds,
+            claim_lockup_seconds: config.claim_lockup_seconds,
+            swap_deadline_seconds: config.swap_deadline_seconds,
             ticket_sales_paused: false,
         };
         write_raffle(&env, &raffle);
@@ -703,6 +708,19 @@ impl Contract {
         // Final availability check against persisted values
         if persisted_sold + quantity > persisted_raffle.max_tickets {
             return Err(Error::TicketsSoldOut);
+        }
+
+        // Track unique buyer addresses for later storage cleanup
+        if current_count == 0 {
+            let mut buyers: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TicketBuyers)
+                .unwrap_or_else(|| Vec::new(&env));
+            buyers.push_back(buyer.clone());
+            env.storage()
+                .persistent()
+                .set(&DataKey::TicketBuyers, &buyers);
         }
 
         // Now commit all changes atomically
@@ -1500,9 +1518,56 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        // Wipe all storage
+        // Wipe ticket storage
+        for i in 1..=raffle.tickets_sold {
+            env.storage().persistent().remove(&DataKey::Ticket(i));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::TicketRefunded(i));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::CommitEntry(i));
+        }
+
+        let buyers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TicketBuyers)
+            .unwrap_or_else(|| Vec::new(&env));
+        for buyer in buyers.iter() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::TicketCount(buyer.clone()));
+        }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::TicketBuyers);
+
+        // Wipe instance storage
         env.storage().instance().remove(&DataKey::Raffle);
-        // ... (other keys)
+        env.storage().instance().remove(&DataKey::Factory);
+        env.storage().instance().remove(&DataKey::Admin);
+        env.storage().instance().remove(&DataKey::Paused);
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
+        env.storage().instance().remove(&DataKey::AccumulatedFees);
+        env.storage()
+            .instance()
+            .remove(&DataKey::RandomnessRequested);
+        env.storage()
+            .instance()
+            .remove(&DataKey::RandomnessRequestLedger);
+        env.storage()
+            .instance()
+            .remove(&DataKey::RandomnessRequestId);
+        env.storage().instance().remove(&DataKey::DrawingLock);
+        env.storage().instance().remove(&DataKey::FinishTime);
+
+        // Wipe persistent instance-level keys
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RandomnessSeed);
+        env.storage().persistent().remove(&DataKey::Admin);
+
         Ok(())
     }
 
@@ -1912,7 +1977,7 @@ mod test {
             swap_router: None,
             tikka_token: None,
             metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
-            claim_lockup_seconds: 0,
+            claim_lockup_seconds: 0, // => DEFAULT_CLAIM_LOCKUP_SECONDS (3600)
             swap_deadline_seconds: 0,
         };
 
@@ -2084,5 +2149,131 @@ mod test {
         client.resume_ticket_sales(&admin);
         assert!(!client.is_ticket_sales_paused());
         assert_eq!(client.buy_tickets(&buyer, &1), 1);
+    }
+
+    #[test]
+    fn test_wipe_storage_removes_all_keys() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let buyer_a = Address::generate(&env);
+        let buyer_b = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &1_000_000);
+        token_mint.mint(&buyer_a, &1_000_000);
+        token_mint.mint(&buyer_b, &1_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(&env, "wipe test"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 10,
+            max_tickets_per_tx: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE * 10,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[9u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&buyer_a, &3);
+        client.buy_tickets(&buyer_b, &2);
+
+        client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+
+        assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+
+        client.wipe_storage();
+
+        env.as_contract(&contract_id, || {
+            for i in 1..=5 {
+                assert!(!env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::Ticket(i)));
+                assert!(!env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::TicketRefunded(i)));
+                assert!(!env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::CommitEntry(i)));
+            }
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::TicketCount(buyer_a.clone())));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::TicketCount(buyer_b.clone())));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::TicketBuyers));
+
+            assert!(!env.storage().instance().has(&DataKey::Raffle));
+            assert!(!env.storage().instance().has(&DataKey::Factory));
+            assert!(!env.storage().instance().has(&DataKey::Admin));
+            assert!(!env.storage().instance().has(&DataKey::Paused));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::ReentrancyGuard));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::AccumulatedFees));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::RandomnessRequested));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::RandomnessRequestLedger));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::RandomnessRequestId));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::DrawingLock));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::FinishTime));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::RandomnessSeed));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::Admin));
+        });
     }
 }

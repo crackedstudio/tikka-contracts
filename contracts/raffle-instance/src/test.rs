@@ -6,6 +6,7 @@ use soroban_sdk::{
     token::StellarAssetClient,
     Address, BytesN, Env, String,
 };
+use raffle_shared::{DEFAULT_CLAIM_LOCKUP_SECONDS, DEFAULT_SWAP_DEADLINE_SECONDS};
 
 #[test]
 fn test_oracle_fallback_with_ledger_delays() {
@@ -52,6 +53,11 @@ fn test_oracle_fallback_with_ledger_delays() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved (0 values replaced with defaults)
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
 
     // Remove factory from storage so buy_tickets skips the factory code path
     env.as_contract(&contract_id, || {
@@ -131,6 +137,12 @@ fn test_admin_updates_oracle_address() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.update_oracle_address(&new_oracle);
 
     let raffle = client.get_raffle();
@@ -175,6 +187,12 @@ fn test_admin_sets_protocol_fee_before_sales() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.set_protocol_fee_bp(&500);
 
     let raffle = client.get_raffle();
@@ -228,6 +246,12 @@ fn test_admin_withdraws_accumulated_fees() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.deposit_prize();
     client.buy_tickets(&buyer, &1);
     client.finalize_raffle();
@@ -293,6 +317,12 @@ fn test_buy_tickets_rejects_quantity_above_per_tx_cap() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     env.as_contract(&contract_id, || {
         env.storage().instance().remove(&DataKey::Factory);
     });
@@ -346,6 +376,12 @@ fn test_finalize_raffle_sets_drawing_lock_and_blocks_reentry() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.deposit_prize();
     client.buy_tickets(&creator, &1);
 
@@ -418,6 +454,12 @@ fn test_finalize_rollback_on_randomness_request_failure() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.deposit_prize();
     client.buy_tickets(&creator, &1);
 
@@ -486,6 +528,12 @@ fn test_allow_multiple_false_single_ticket_per_buyer() {
     };
 
     client.init(&factory, &admin, &creator, &config);
+
+    // Verify that defaults were resolved
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
+    assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+
     client.deposit_prize();
 
     // ACT: Buyer A buys first ticket
