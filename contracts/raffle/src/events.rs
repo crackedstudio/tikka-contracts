@@ -376,3 +376,13 @@ pub struct CheckpointCreated {
     pub ledger_timestamp: u64,
     pub aggregate_hash: soroban_sdk::BytesN<32>,
 }
+
+/// Emitted when a referrer earns a referral fee
+#[derive(Clone)]
+#[contractevent]
+pub struct ReferralEarned {
+    pub referrer: Address,
+    pub buyer: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}

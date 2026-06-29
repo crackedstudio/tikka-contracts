@@ -12,7 +12,7 @@ use crate::types::FairnessData;
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
-    RandomnessRequested, RandomnessType, SeedCommitted, SeedRevealed, TicketPurchased,
+    RandomnessRequested, RandomnessType, ReferralEarned, SeedCommitted, SeedRevealed, TicketPurchased,
     TicketRefunded, WinnerDrawn,
 };
 
@@ -88,6 +88,7 @@ pub struct Raffle {
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
+    pub referral_fee_bp: u32,
     pub treasury_address: Option<Address>,
     // TODO(#428): field used by swap router for non-native payment tokens
     pub swap_router: Option<Address>,
@@ -112,6 +113,7 @@ pub struct RaffleConfig {
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
+    pub referral_fee_bp: u32,
     pub treasury_address: Option<Address>,
     // TODO(#428): field used by swap router for non-native payment tokens
     pub swap_router: Option<Address>,
@@ -246,6 +248,7 @@ pub enum Error {
     AlreadyRevealed = 64,
     CommitRevealNotReady = 65,
     TicketAlreadyRefunded = 66,
+    SelfReferral = 67,
 }
 
 fn require_not_paused(env: &Env) -> Result<(), Error> {
@@ -606,6 +609,7 @@ impl Contract {
             randomness_source: config.randomness_source.clone(),
             oracle_address: config.oracle_address,
             protocol_fee_bp: config.protocol_fee_bp,
+            referral_fee_bp: config.referral_fee_bp,
             treasury_address: config.treasury_address,
             swap_router: config.swap_router,
             tikka_token: config.tikka_token,
@@ -677,7 +681,12 @@ impl Contract {
         Ok(())
     }
 
-    pub fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32, Error> {
+    pub fn buy_tickets(
+        env: Env,
+        buyer: Address,
+        quantity: u32,
+        referrer: Option<Address>,
+    ) -> Result<u32, Error> {
         let mut raffle = read_raffle(&env)?;
         buyer.require_auth();
         require_not_paused(&env)?;
@@ -770,6 +779,28 @@ impl Contract {
         token_client
             .try_transfer(&buyer, &contract_address, &total_price)
             .map_err(|_| Error::TokenTransferFailed)?;
+
+        // Payout referral fee atomically if referrer is provided
+        if let Some(ref referrer_addr) = referrer {
+            if *referrer_addr == buyer {
+                return Err(Error::SelfReferral);
+            }
+            if raffle.referral_fee_bp > 0 {
+                let total_referral_fee = (total_price * raffle.referral_fee_bp as i128) / 10000;
+                if total_referral_fee > 0 {
+                    token_client
+                        .try_transfer(&contract_address, referrer_addr, &total_referral_fee)
+                        .map_err(|_| Error::TokenTransferFailed)?;
+
+                    ReferralEarned {
+                        referrer: referrer_addr.clone(),
+                        buyer: buyer.clone(),
+                        amount: total_referral_fee,
+                        timestamp,
+                    }.publish(&env);
+                }
+            }
+        }
 
         // Single event containing the range of IDs
         TicketPurchased {
