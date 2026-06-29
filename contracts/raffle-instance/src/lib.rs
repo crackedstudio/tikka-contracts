@@ -175,6 +175,7 @@ pub enum Error {
     DrawingAlreadyComplete = 61,
     InvalidEndTime = 62,
     InvalidAdminAddress = 63,
+    InvalidSignature = 64,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -1054,8 +1055,10 @@ impl Contract {
             return Err(Error::InvalidParameters);
         }
 
-        let message = Bytes::from_array(&env, &random_seed.to_be_bytes());
-        env.crypto().ed25519_verify(&public_key, &message, &proof);
+        // Build structured message to prevent replay across raffles
+        let message = (env.current_contract_address(), request_id, random_seed).to_xdr(&env);
+        env.crypto().try_ed25519_verify(&public_key, &message, &proof)
+            .map_err(|_| Error::InvalidSignature)?;
 
         RandomnessReceived {
             oracle,
