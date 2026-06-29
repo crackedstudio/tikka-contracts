@@ -175,6 +175,21 @@ fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
     .publish(env);
 }
 
+/// Validate that an address is usable for a privileged role (admin/treasury).
+///
+/// Rejects the zero address (all-zero contract id) and any other non-existent
+/// address, as well as the factory's own address to prevent a self-referential
+/// admin or treasury that would brick the contract.
+fn require_valid_role_address(env: &Env, address: &Address) -> Result<(), ContractError> {
+    if !address.exists() {
+        return Err(ContractError::InvalidParameters);
+    }
+    if *address == env.current_contract_address() {
+        return Err(ContractError::InvalidParameters);
+    }
+    Ok(())
+}
+
 #[contractimpl]
 impl RaffleFactory {
     pub fn init_factory(
@@ -190,6 +205,8 @@ impl RaffleFactory {
         if protocol_fee_bp > MAX_PROTOCOL_FEE_BP {
             return Err(ContractError::InvalidParameters);
         }
+        require_valid_role_address(&env, &admin)?;
+        require_valid_role_address(&env, &treasury)?;
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
             .persistent()
@@ -227,6 +244,7 @@ impl RaffleFactory {
         if protocol_fee_bp > MAX_PROTOCOL_FEE_BP {
             return Err(ContractError::InvalidParameters);
         }
+        require_valid_role_address(&env, &treasury)?;
 
         let op_id = env
             .storage()
@@ -277,6 +295,7 @@ impl RaffleFactory {
                 if protocol_fee_bp > MAX_PROTOCOL_FEE_BP {
                     return Err(ContractError::InvalidParameters);
                 }
+                require_valid_role_address(&env, &treasury)?;
                 env.storage()
                     .persistent()
                     .set(&DataKey::ProtocolFeeBP, &protocol_fee_bp);
@@ -600,6 +619,8 @@ impl RaffleFactory {
             return Ok(());
         }
 
+        require_valid_role_address(&env, &new_admin)?;
+
         if env.storage().persistent().has(&DataKey::PendingAdmin) {
             return Err(ContractError::AdminTransferPending);
         }
@@ -831,6 +852,7 @@ impl RaffleFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::String;
     fn setup_factory(env: &Env) -> (RaffleFactoryClient<'_>, Address, Address) {
         let admin = Address::generate(env);
         let treasury = Address::generate(env);
@@ -893,6 +915,123 @@ mod tests {
         assert_eq!(
             client.try_init_factory(&admin, &wasm_hash, &0u32, &treasury),
             Err(Ok(ContractError::AlreadyInitialized))
+        );
+    }
+
+    /// Strkey of the all-zero contract id (the "zero address").
+    const ZERO_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
+    fn zero_address(env: &Env) -> Address {
+        Address::from_string(&String::from_str(env, ZERO_CONTRACT))
+    }
+
+    #[test]
+    fn test_init_factory_rejects_zero_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let treasury = Address::generate(&env);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.try_init_factory(&zero_address(&env), &wasm_hash, &0u32, &treasury),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_init_factory_rejects_zero_treasury() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.try_init_factory(&admin, &wasm_hash, &0u32, &zero_address(&env)),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_init_factory_rejects_self_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let treasury = Address::generate(&env);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.try_init_factory(&contract_id, &wasm_hash, &0u32, &treasury),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_init_factory_rejects_self_treasury() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let contract_id = env.register(RaffleFactory, ());
+        let client = RaffleFactoryClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.try_init_factory(&admin, &wasm_hash, &0u32, &contract_id),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_transfer_factory_admin_rejects_zero_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+
+        assert_eq!(
+            client.try_transfer_factory_admin(&zero_address(&env)),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_transfer_factory_admin_rejects_self() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+        let self_address = client.address.clone();
+
+        assert_eq!(
+            client.try_transfer_factory_admin(&self_address),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_set_config_rejects_zero_treasury() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+
+        assert_eq!(
+            client.try_set_config(&0u32, &zero_address(&env)),
+            Err(Ok(ContractError::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn test_set_config_rejects_self_treasury() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+        let self_address = client.address.clone();
+
+        assert_eq!(
+            client.try_set_config(&0u32, &self_address),
+            Err(Ok(ContractError::InvalidParameters))
         );
     }
 
