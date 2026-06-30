@@ -281,6 +281,7 @@ See `CONTRIBUTING.md` for contribution guidelines and PR expectations.
 
 ## 📚 Documentation
 
+-   **Architecture Diagram**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 -   **Stellar Soroban**: https://developers.stellar.org/docs/build/smart-contracts/overview
 -   **Soroban Examples**: https://github.com/stellar/soroban-examples
 
