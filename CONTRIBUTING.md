@@ -6,7 +6,8 @@ Thanks for your interest in contributing to Tikka! This project targets Stellar/
 
 1. Fork the repository and create a feature branch.
 2. Make your changes with clear, focused commits.
-3. Run tests locally before opening a PR.
+3. Run `cargo fmt --all` to format code before committing.
+4. Run tests locally before opening a PR.
 
 ## Development Expectations
 
@@ -26,6 +27,7 @@ cargo test -p raffle-instance
 -   Provide a concise summary of what changed and why.
 -   Link any relevant issues.
 -   Note any follow-up work or limitations.
+-   Use the PR template at `.github/PULL_REQUEST_TEMPLATE.md` to ensure all required information is included.
 
 ## Code of Conduct
 

@@ -32,9 +32,23 @@ jobs:
 
     - name: Build Contracts
       run: cargo build --target wasm32-unknown-unknown --release
-      
+
+    - name: Check WASM Binary Size (128KB limit)
+      run: |
+        MAX_SIZE=131072
+        FAILED=0
+        for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+          SIZE=$(stat -c%s "$wasm")
+          echo "$wasm: ${SIZE} bytes"
+          if [ "$SIZE" -gt "$MAX_SIZE" ]; then
+            echo "ERROR: $wasm exceeds 128KB limit (${SIZE} > ${MAX_SIZE} bytes)"
+            FAILED=1
+          fi
+        done
+        exit $FAILED
+
     - name: Run Linter (Clippy)
       run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run Tests
-      run: cargo test
+      run: cargo test --workspace

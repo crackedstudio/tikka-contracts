@@ -1,4 +1,5 @@
 import { Keypair } from '@stellar/stellar-sdk';
+import { decodeSecretKey, zeroizeBuffer } from './secret-key';
 
 export interface SecretsAdapter {
   getSecret(key: string): Promise<string>;
@@ -11,35 +12,20 @@ export class EnvSecretsAdapter implements SecretsAdapter {
   async getSecret(key: string): Promise<string> {
     const secret = process.env[key];
     if (!secret) {
-      throw new Error(`Secret not found in environment: ${key}`);
+      throw new Error('ORACLE_SECRET_KEY env var not set');
     }
     return secret;
   }
 }
 
-/**
- * Adapter for loading secrets from AWS Secrets Manager in production.
- */
-export class AwsSecretsAdapter implements SecretsAdapter {
-  constructor(private readonly region: string = 'us-east-1') {}
-
-  async getSecret(secretName: string): Promise<string> {
-    // TODO: Implement actual AWS Secrets Manager fetch
-    // import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
-    // const client = new SecretsManagerClient({ region: this.region });
-    // const response = await client.send(new GetSecretValueCommand({ SecretId: secretName }));
-    // return response.SecretString;
-    throw new Error('AWS Secrets Manager adapter not fully implemented');
-  }
-}
-
 export class KeyService {
   private keypair!: Keypair;
+  private secretBytes?: Buffer;
   private initialized = false;
 
   constructor(
     private readonly adapter: SecretsAdapter = new EnvSecretsAdapter(),
-    private readonly secretKeyName: string = 'ORACLE_SECRET_KEY'
+    private readonly secretKeyName: string = 'ORACLE_SECRET_KEY',
   ) {}
 
   /**
@@ -47,46 +33,58 @@ export class KeyService {
    * Must be called at application startup.
    */
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    if (this.initialized) {
+      return;
+    }
 
     try {
-      const secret = await this.adapter.getSecret(this.secretKeyName);
-      this.keypair = Keypair.fromSecret(secret);
+      const rawSecret = await this.adapter.getSecret(this.secretKeyName);
+      this.secretBytes = decodeSecretKey(rawSecret);
+      this.keypair = Keypair.fromRawEd25519Seed(this.secretBytes);
       this.initialized = true;
-    } catch (error) {
-      // Do not log the secret or full error details that might leak it
+    } catch {
       console.error('Failed to initialize KeyService: Invalid or missing oracle secret key.');
       throw new Error('KeyService initialization failed.');
     }
   }
 
-  /**
-   * Retrieves the raw Keypair.
-   */
   getKeypair(): Keypair {
     this.ensureInitialized();
     return this.keypair;
   }
 
-  /**
-   * Retrieves the public key (G...)
-   */
   getPublicKey(): string {
     this.ensureInitialized();
     return this.keypair.publicKey();
   }
 
-  /**
-   * Signs a buffer of data with the oracle's secret key.
-   */
+  getPublicKeyBytes(): Uint8Array {
+    this.ensureInitialized();
+    return new Uint8Array(this.keypair.rawPublicKey());
+  }
+
   sign(data: Buffer): Buffer {
     this.ensureInitialized();
     return this.keypair.sign(data);
   }
 
-  private ensureInitialized() {
+  /**
+   * Zeroizes private key material from memory. Call on shutdown.
+   */
+  shutdown(): void {
+    if (this.secretBytes) {
+      zeroizeBuffer(this.secretBytes);
+      this.secretBytes = undefined;
+    }
+    this.initialized = false;
+  }
+
+  private ensureInitialized(): void {
     if (!this.initialized) {
       throw new Error('KeyService is not initialized. Call initialize() at startup.');
     }
   }
 }
+
+export { AwsKmsSecretsAdapter, GcpSecretsAdapter, VaultSecretsAdapter } from './secrets-adapters';
+export { decodeSecretKey } from './secret-key';

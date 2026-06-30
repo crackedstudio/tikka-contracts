@@ -20,6 +20,10 @@ This document describes all error codes used in the Tikka Raffle contracts. Fron
 
 The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle-instance/src/lib.rs`](contracts/raffle-instance/src/lib.rs).
 
+### Protocol Fee Model
+
+The protocol fee (`protocol_fee_bp`) is charged **once**, at ticket purchase. Winners receive the full gross prize amount on claim; `PrizeClaimed.platform_fee` is always `0`. Total protocol revenue equals the sum of fees collected from ticket sales.
+
 ### General Errors (1-10)
 
 | Code | Error                        | Description                                   | Frontend Message                                |
@@ -80,7 +84,7 @@ The instance contract (`Raffle`) handles individual raffle operations. All error
 | 49   | `InvalidIndex`           | Invalid index provided            | "Invalid index provided"       |
 | 50   | `MorePrizesThanTickets`  | More prizes than tickets          | "More prizes than tickets"     |
 
-### Additional Errors (51-58)
+### Additional Errors (51-63)
 
 | Code | Error                        | Description                              | Frontend Message                      |
 | ---- | ---------------------------- | ---------------------------------------- | ------------------------------------- |
@@ -92,6 +96,11 @@ The instance contract (`Raffle`) handles individual raffle operations. All error
 | 56   | `InsufficientAccumulatedFees`| Insufficient accumulated fees            | "Insufficient accumulated fees"       |
 | 57   | `PrizeConfigurationLocked`   | Prize configuration is locked            | "Prize configuration is locked"       |
 | 58   | `ExceedsMaxTicketsPerTx`     | Exceeds max tickets per transaction      | "Too many tickets for one transaction"|
+| 59   | `DrawingAlreadyInProgress`   | A draw is already in progress            | "Drawing already in progress"         |
+| 60   | `DrawingAlreadyComplete`     | Randomness was already provided            | "Drawing already complete"            |
+| 61   | `InvalidEndTime`             | Raffle end time is invalid               | "Invalid raffle end time"             |
+| 62   | `InvalidAdminAddress`        | Admin address is invalid                 | "Invalid admin address"               |
+| 63   | `InvalidStatusForDrawingTransition` | Raffle status cannot enter Drawing | "Cannot start drawing in current state"|
 
 ---
 
@@ -127,7 +136,7 @@ The factory contract (`RaffleFactory`) manages raffle creation. All error codes 
 ```typescript
 // Frontend error mapping
 const errorMessages: Record<number, string> = {
-  // Instance errors (1-58)
+  // Instance errors (1-63)
   1: "Raffle not found",
   2: "This raffle is not currently active",
   3: "Sorry, all tickets have been sold!",
@@ -171,6 +180,11 @@ const errorMessages: Record<number, string> = {
   56: "Insufficient accumulated fees",
   57: "Prize configuration is locked",
   58: "Too many tickets for one transaction",
+  59: "Drawing already in progress",
+  60: "Drawing already complete",
+  61: "Invalid raffle end time",
+  62: "Invalid admin address",
+  63: "Cannot start drawing in current state",
 
   // Factory errors (offset by 100 to avoid conflicts)
   101: "Factory already initialized",
@@ -243,6 +257,11 @@ const ERROR_MESSAGES: Record<number, string> = {
   56: "Insufficient accumulated fees",
   57: "Prize configuration is locked",
   58: "Too many tickets for one transaction",
+  59: "Drawing already in progress",
+  60: "Drawing already complete",
+  61: "Invalid raffle end time",
+  62: "Invalid admin address",
+  63: "Cannot start drawing in current state",
   // Factory errors
   101: "Factory already initialized",
   102: "You are not the admin",

@@ -169,6 +169,18 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
     }
 }
 
+/// Builds the Ed25519 message that binds a VRF proof to a specific raffle request.
+///
+/// The oracle must sign this exact byte sequence when calling `provide_randomness`.
+pub fn build_vrf_proof_message(env: &Env, request_id: u64, random_seed: u64) -> Bytes {
+    (
+        env.current_contract_address(),
+        request_id,
+        random_seed,
+    )
+        .to_xdr(env)
+}
+
 /// Oracle-backed strategy using an externally provided VRF seed.
 ///
 /// Used by [`provide_randomness`] after the oracle has delivered a

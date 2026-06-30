@@ -16,7 +16,6 @@ pub enum RaffleStatus {
     Cancelled = 3,
     Failed = 4,
     Claimed = 5,
-    Finalizing = 7,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -68,6 +67,7 @@ pub struct RaffleConfig {
     pub prizes: Vec<u32>,
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
+    /// Protocol fee in basis points (100 = 1%). Charged on ticket purchase only.
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
@@ -79,6 +79,18 @@ pub struct RaffleConfig {
     /// Swap deadline window in seconds (added to current timestamp for token swaps).
     /// Defaults to 300 (5 minutes) if zero. Configurable to handle network congestion.
     pub swap_deadline_seconds: u64,
+}
+
+impl RaffleConfig {
+    pub fn resolve_defaults(mut self) -> Self {
+        if self.claim_lockup_seconds == 0 {
+            self.claim_lockup_seconds = DEFAULT_CLAIM_LOCKUP_SECONDS;
+        }
+        if self.swap_deadline_seconds == 0 {
+            self.swap_deadline_seconds = DEFAULT_SWAP_DEADLINE_SECONDS;
+        }
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -133,6 +145,8 @@ pub enum AdminOp {
 
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
 pub const MAX_PAGE_LIMIT: u32 = 200;
+pub const DEFAULT_CLAIM_LOCKUP_SECONDS: u64 = 3_600;
+pub const DEFAULT_SWAP_DEADLINE_SECONDS: u64 = 300;
 
 pub fn effective_limit(requested: u32) -> u32 {
     if requested == 0 {

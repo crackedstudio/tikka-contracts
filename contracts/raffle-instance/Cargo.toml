@@ -16,3 +16,4 @@ raffle-shared = { path = "../raffle-shared" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
