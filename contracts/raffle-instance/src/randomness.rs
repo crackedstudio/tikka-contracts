@@ -49,7 +49,6 @@ use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 /// **For low-stakes raffles only.**  See the module-level comment for a full
 /// explanation of the limitations and the recommended alternative for
 /// high-value draws.
-#[allow(dead_code)]
 pub fn build_internal_seed(env: &Env, raffle_id: &Address) -> BytesN<32> {
     let timestamp = env.ledger().timestamp();
     let sequence = env.ledger().sequence();
@@ -68,7 +67,6 @@ pub fn build_internal_seed(env: &Env, raffle_id: &Address) -> BytesN<32> {
 /// In that case we expect the returned hash to be invalid rather than silently
 /// falling back to a zeroed seed, which would make winner selection
 /// deterministic and insecure.
-#[allow(dead_code)]
 fn hash_bytes32(env: &Env, input: &Bytes) -> BytesN<32> {
     let hash: BytesN<32> = env.crypto().sha256(input).into();
     if hash.to_array() == [0u8; 32] {
@@ -90,20 +88,14 @@ pub trait WinnerSelectionStrategy {
 ///
 /// **For low-stakes raffles only** — see [`build_internal_seed`] for the full
 /// security caveat.
-#[allow(dead_code)]
 pub struct PrngWinnerSelection {
-    pub timestamp: u64,
-    pub sequence: u32,
     pub raffle_id: Address,
     pub tickets_sold: u32,
 }
 
-#[allow(dead_code)]
 impl PrngWinnerSelection {
-    pub fn new(timestamp: u64, sequence: u32, raffle_id: Address, tickets_sold: u32) -> Self {
+    pub fn new(raffle_id: Address, tickets_sold: u32) -> Self {
         Self {
-            timestamp,
-            sequence,
             raffle_id,
             tickets_sold,
         }
@@ -320,7 +312,7 @@ mod tests {
     fn prng_selection_is_in_ticket_range() {
         let env = Env::default();
         let raffle_id = Address::generate(&env);
-        let strategy = PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id, 17);
+        let strategy = PrngWinnerSelection::new(raffle_id, 17);
 
         let contract_id = env
             .register_stellar_asset_contract_v2(Address::generate(&env))
@@ -344,11 +336,11 @@ mod tests {
             .register_stellar_asset_contract_v2(Address::generate(&env))
             .address();
         let first = env.as_contract(&contract_id, || {
-            PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id.clone(), 17)
+            PrngWinnerSelection::new(raffle_id.clone(), 17)
                 .select_winner_indices(&env, 17, 8)
         });
         let second = env.as_contract(&contract_id, || {
-            PrngWinnerSelection::new(1_700_000_000, 99_001, raffle_id, 17)
+            PrngWinnerSelection::new(raffle_id, 17)
                 .select_winner_indices(&env, 17, 8)
         });
 
@@ -369,8 +361,8 @@ mod tests {
             .address();
 
         let (fp_a, fp_b) = env.as_contract(&contract, || {
-            let s_a = PrngWinnerSelection::new(0, 0, id_a, 10);
-            let s_b = PrngWinnerSelection::new(0, 0, id_b, 10);
+            let s_a = PrngWinnerSelection::new(id_a, 10);
+            let s_b = PrngWinnerSelection::new(id_b, 10);
             (s_a.seed_fingerprint(&env), s_b.seed_fingerprint(&env))
         });
 
@@ -390,8 +382,8 @@ mod tests {
             .address();
 
         let (fp_a, fp_b) = env.as_contract(&contract, || {
-            let s_a = PrngWinnerSelection::new(0, 0, raffle_id.clone(), 10);
-            let s_b = PrngWinnerSelection::new(0, 0, raffle_id, 11);
+            let s_a = PrngWinnerSelection::new(raffle_id.clone(), 10);
+            let s_b = PrngWinnerSelection::new(raffle_id, 11);
             (s_a.seed_fingerprint(&env), s_b.seed_fingerprint(&env))
         });
 

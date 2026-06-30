@@ -238,6 +238,15 @@ pub struct SwapDeadlineUpdated {
 
 #[derive(Clone)]
 #[contractevent]
+pub struct EndTimeExtended {
+    pub old_end_time: u64,
+    pub new_end_time: u64,
+    pub extended_by: Address,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
 pub struct EmergencyWithdrawn {
     pub withdrawn_by: Address,
     pub to: Address,

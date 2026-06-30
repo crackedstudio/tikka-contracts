@@ -71,6 +71,9 @@ pub enum DataKey {
     TotalVolumePerAsset(Address),
     /// Kept for test-only address generation; not used for indexing.
     RaffleInstancesCount,
+    /// Per-creator raffle index: creator Address → Vec<Address> of raffle addresses.
+    /// Appended to on every successful `create_raffle`.
+    CreatorRaffles(Address),
 }
 
 #[derive(Clone)]
@@ -457,7 +460,7 @@ impl RaffleFactory {
         env.invoke_contract::<()>(
             &raffle_address,
             &Symbol::new(&env, "init"),
-            (factory_address, admin, creator, final_config).into_val(&env),
+            (factory_address, admin, creator.clone(), final_config).into_val(&env),
         );
 
         // --- O(1) stable-map registration ---
@@ -475,6 +478,19 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&DataKey::NextRaffleId, &(stable_id.saturating_add(1)));
+
+        // --- per-creator index ---
+        // Append the new raffle address to the creator's list so callers can
+        // query all raffles for a given creator without scanning the full list.
+        let mut creator_raffles: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorRaffles(creator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        creator_raffles.push_back(raffle_address.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorRaffles(creator.clone()), &creator_raffles);
 
         // Increment the live-count for stats.
         let live_count: u32 = env
@@ -631,6 +647,48 @@ impl RaffleFactory {
         }
 
         let has_more = end < next_id;
+        PageResultRaffles {
+            items,
+            total,
+            has_more,
+        }
+    }
+
+    /// Return a paginated list of raffle addresses created by `creator`.
+    ///
+    /// `params.offset` is an index into the creator's personal raffle list
+    /// (not the global stable-ID space).  `params.limit` is clamped by
+    /// `effective_limit` (1–200, default 100).
+    pub fn get_raffles_by_creator(
+        env: Env,
+        creator: Address,
+        params: PaginationParams,
+    ) -> PageResultRaffles {
+        let creator_raffles: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorRaffles(creator))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let total = creator_raffles.len();
+        let lim = effective_limit(params.limit);
+        let offset = params.offset;
+
+        if offset >= total {
+            return PageResultRaffles {
+                items: Vec::new(&env),
+                total,
+                has_more: false,
+            };
+        }
+
+        let end = offset.saturating_add(lim).min(total);
+        let mut items: Vec<Address> = Vec::new(&env);
+        for i in offset..end {
+            items.push_back(creator_raffles.get(i).unwrap());
+        }
+
+        let has_more = end < total;
         PageResultRaffles {
             items,
             total,
@@ -1278,5 +1336,175 @@ mod tests {
             client.try_clean_old_raffle(&1u32),
             Err(Ok(ContractError::InvalidRaffleId))
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Creator index tests
+    // -----------------------------------------------------------------------
+
+    /// Seed the per-creator index directly in storage with `addrs`.
+    fn seed_creator_index(env: &Env, factory_id: &Address, creator: &Address, addrs: &[Address]) {
+        env.as_contract(factory_id, || {
+            let mut v: Vec<Address> = Vec::new(env);
+            for a in addrs {
+                v.push_back(a.clone());
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::CreatorRaffles(creator.clone()), &v);
+        });
+    }
+
+    #[test]
+    fn test_get_raffles_by_creator_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+        let creator = Address::generate(&env);
+
+        let page = client.get_raffles_by_creator(
+            &creator,
+            &raffle_shared::PaginationParams { limit: 10, offset: 0 },
+        );
+        assert_eq!(page.items.len(), 0u32);
+        assert_eq!(page.total, 0u32);
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn test_get_raffles_by_creator_basic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+
+        let creator_a = Address::generate(&env);
+        let creator_b = Address::generate(&env);
+
+        // 5 raffles for A, 3 for B.
+        let mut a_addrs = [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ];
+        let b_addrs = [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ];
+
+        seed_creator_index(&env, &client.address, &creator_a, &a_addrs);
+        seed_creator_index(&env, &client.address, &creator_b, &b_addrs);
+
+        // Creator A: full page.
+        let page_a = client.get_raffles_by_creator(
+            &creator_a,
+            &raffle_shared::PaginationParams { limit: 10, offset: 0 },
+        );
+        assert_eq!(page_a.total, 5u32);
+        assert_eq!(page_a.items.len(), 5u32);
+        assert!(!page_a.has_more);
+        for (i, addr) in a_addrs.iter().enumerate() {
+            assert_eq!(page_a.items.get(i as u32).unwrap(), addr.clone());
+        }
+
+        // Creator B: full page.
+        let page_b = client.get_raffles_by_creator(
+            &creator_b,
+            &raffle_shared::PaginationParams { limit: 10, offset: 0 },
+        );
+        assert_eq!(page_b.total, 3u32);
+        assert_eq!(page_b.items.len(), 3u32);
+        assert!(!page_b.has_more);
+        for (i, addr) in b_addrs.iter().enumerate() {
+            assert_eq!(page_b.items.get(i as u32).unwrap(), addr.clone());
+        }
+    }
+
+    #[test]
+    fn test_get_raffles_by_creator_pagination() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+
+        let creator = Address::generate(&env);
+        let addrs = [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ];
+        seed_creator_index(&env, &client.address, &creator, &addrs);
+
+        // Page 0: offset=0, limit=3 → items 0,1,2; has_more=true.
+        let p0 = client.get_raffles_by_creator(
+            &creator,
+            &raffle_shared::PaginationParams { limit: 3, offset: 0 },
+        );
+        assert_eq!(p0.items.len(), 3u32);
+        assert_eq!(p0.total, 5u32);
+        assert!(p0.has_more);
+        assert_eq!(p0.items.get(0).unwrap(), addrs[0].clone());
+        assert_eq!(p0.items.get(2).unwrap(), addrs[2].clone());
+
+        // Page 1: offset=3, limit=3 → items 3,4; has_more=false.
+        let p1 = client.get_raffles_by_creator(
+            &creator,
+            &raffle_shared::PaginationParams { limit: 3, offset: 3 },
+        );
+        assert_eq!(p1.items.len(), 2u32);
+        assert_eq!(p1.total, 5u32);
+        assert!(!p1.has_more);
+        assert_eq!(p1.items.get(0).unwrap(), addrs[3].clone());
+        assert_eq!(p1.items.get(1).unwrap(), addrs[4].clone());
+
+        // Out-of-range offset → empty, has_more=false.
+        let p_oor = client.get_raffles_by_creator(
+            &creator,
+            &raffle_shared::PaginationParams { limit: 10, offset: 99 },
+        );
+        assert_eq!(p_oor.items.len(), 0u32);
+        assert!(!p_oor.has_more);
+
+        // Exact boundary: offset=5 (== total) → empty.
+        let p_exact = client.get_raffles_by_creator(
+            &creator,
+            &raffle_shared::PaginationParams { limit: 10, offset: 5 },
+        );
+        assert_eq!(p_exact.items.len(), 0u32);
+        assert!(!p_exact.has_more);
+    }
+
+    #[test]
+    fn test_creator_index_isolates_separate_creators() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, _treasury) = setup_factory(&env);
+
+        let creator_a = Address::generate(&env);
+        let creator_b = Address::generate(&env);
+
+        let a_addrs = [Address::generate(&env), Address::generate(&env)];
+        let b_addrs = [Address::generate(&env)];
+
+        seed_creator_index(&env, &client.address, &creator_a, &a_addrs);
+        seed_creator_index(&env, &client.address, &creator_b, &b_addrs);
+
+        // A sees only its own raffles.
+        let pa = client.get_raffles_by_creator(
+            &creator_a,
+            &raffle_shared::PaginationParams { limit: 10, offset: 0 },
+        );
+        assert_eq!(pa.total, 2u32);
+
+        // B sees only its own raffle.
+        let pb = client.get_raffles_by_creator(
+            &creator_b,
+            &raffle_shared::PaginationParams { limit: 10, offset: 0 },
+        );
+        assert_eq!(pb.total, 1u32);
+        assert_eq!(pb.items.get(0).unwrap(), b_addrs[0].clone());
     }
 }

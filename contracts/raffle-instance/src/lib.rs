@@ -15,15 +15,15 @@ use raffle_shared::{
     Ticket,
 };
 
-use self::randomness::{build_vrf_proof_message, OracleSeedWinnerSelection, WinnerSelectionStrategy};
+use self::randomness::{build_vrf_proof_message, OracleSeedWinnerSelection, PrngWinnerSelection, WinnerSelectionStrategy};
 
 use crate::events::{
-    ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
-    OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, SwapDeadlineUpdated,
-    TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued,
-    WinnerDrawn,
+    ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, EndTimeExtended,
+    FeesWithdrawn, OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded,
+    ProtocolFeeUpdated, RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed,
+    RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested,
+    SwapDeadlineUpdated, TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed,
+    TokensRescued, WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
@@ -40,6 +40,8 @@ pub const DEFAULT_SWAP_DEADLINE_SECONDS: u64 = 300; // 5 minutes
 pub const MAX_SWAP_DEADLINE_SECONDS: u64 = 3_600; // 1 hour
 /// Emergency withdraw delay (seconds). Set to 90 days.
 pub const EMERGENCY_WITHDRAW_DELAY_SECONDS: u64 = 90 * 24 * 3600; // 7776000
+/// Maximum end-time extension from the current timestamp (30 days).
+pub const MAX_EXTENSION_SECONDS: u64 = 30 * 24 * 3600; // 2592000
 
 #[contract]
 pub struct Contract;
@@ -109,6 +111,10 @@ pub enum DataKey {
     CommitEntry(u32),
     DrawingLock,
     TicketBuyers,
+    /// Per-owner ticket ID index: owner Address → Vec<u32> of ticket IDs.
+    /// Appended to on every successful ticket purchase, allowing O(1) owner
+    /// lookups without scanning the full ticket space.
+    OwnerTickets(Address),
 }
 
 /// A single participant commit recorded during the commit phase of a
@@ -738,6 +744,19 @@ impl Contract {
                 .set(&DataKey::Ticket(ticket_id), &ticket);
             ticket_ids.push_back(ticket_id);
         }
+
+        // Maintain the per-owner ticket ID index so get_my_tickets is O(1).
+        let mut owner_tickets: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OwnerTickets(buyer.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        for i in 0..ticket_ids.len() {
+            owner_tickets.push_back(ticket_ids.get(i).unwrap());
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::OwnerTickets(buyer.clone()), &owner_tickets);
 
         // Update ticket count and raffle sold
         env.storage().persistent().set(
@@ -1515,6 +1534,18 @@ impl Contract {
         })
     }
 
+    /// Return all ticket IDs owned by `owner`.
+    ///
+    /// Uses the `OwnerTickets` index maintained during `buy_tickets` for an
+    /// O(1) read.  Falls back to an empty Vec when the address has never
+    /// purchased a ticket.
+    pub fn get_my_tickets(env: Env, owner: Address) -> Vec<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OwnerTickets(owner))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     pub fn wipe_storage(env: Env) -> Result<(), Error> {
         let factory: Address = env
             .storage()
@@ -1551,6 +1582,9 @@ impl Contract {
             env.storage()
                 .persistent()
                 .remove(&DataKey::TicketCount(buyer.clone()));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::OwnerTickets(buyer.clone()));
         }
         env.storage()
             .persistent()
@@ -1833,6 +1867,48 @@ impl Contract {
 
         Ok(())
     }
+
+    /// Extend the raffle end time.
+    ///
+    /// Rules:
+    /// - Only the creator may call this.
+    /// - Raffle must be Active (not yet sold out, not cancelled/finalized).
+    /// - Only applies to deadline-based raffles (`no_deadline == false`).
+    /// - `new_end_time` must be strictly greater than the current `end_time`.
+    /// - `new_end_time` must be at most 30 days from the current ledger timestamp.
+    pub fn extend_end_time(env: Env, new_end_time: u64) -> Result<(), Error> {
+        let mut raffle = read_raffle(&env)?;
+        raffle.creator.require_auth();
+
+        if raffle.status != RaffleStatus::Active {
+            return Err(Error::InvalidStatus);
+        }
+        if raffle.no_deadline {
+            return Err(Error::InvalidParameters);
+        }
+
+        let now = env.ledger().timestamp();
+        if new_end_time <= raffle.end_time {
+            return Err(Error::InvalidParameters);
+        }
+        if new_end_time > now + MAX_EXTENSION_SECONDS {
+            return Err(Error::InvalidParameters);
+        }
+
+        let old_end_time = raffle.end_time;
+        raffle.end_time = new_end_time;
+        write_raffle(&env, &raffle);
+
+        EndTimeExtended {
+            old_end_time,
+            new_end_time,
+            extended_by: raffle.creator,
+            timestamp: now,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
 }
 
 fn do_finalize_with_seed(
@@ -1857,9 +1933,19 @@ fn do_finalize_with_seed(
         return Err(Error::NoActiveTickets);
     }
 
-    let selector = OracleSeedWinnerSelection::new(seed);
-    let winning_ticket_ids =
-        selector.select_winner_indices(env, total_tickets, raffle.prizes.len());
+    let winning_ticket_ids = match raffle.randomness_source {
+        RandomnessSource::Internal | RandomnessSource::CommitReveal => {
+            PrngWinnerSelection::new(
+                env.current_contract_address(),
+                total_tickets,
+            )
+            .select_winner_indices(env, total_tickets, raffle.prizes.len())
+        }
+        RandomnessSource::External => {
+            OracleSeedWinnerSelection::new(seed)
+                .select_winner_indices(env, total_tickets, raffle.prizes.len())
+        }
+    };
     let mut winners = Vec::new(env);
 
     for i in 0..winning_ticket_ids.len() {
@@ -2522,5 +2608,391 @@ mod test {
             &request_id_b,
         );
         assert!(replay.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_my_tickets tests
+    // -----------------------------------------------------------------------
+
+    /// Shared setup: raffle with no deadline, multiple tickets allowed, max 20.
+    fn setup_multi_ticket_raffle(
+        env: &Env,
+    ) -> (
+        ContractClient<'_>,
+        Address, // admin
+        Address, // creator
+        token::StellarAssetClient<'_>,
+    ) {
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+
+        let token_admin = Address::generate(env);
+        let (token_addr, token_mint) = create_token(env, &token_admin);
+        token_mint.mint(&creator, &10_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(env, "my-tickets raffle"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 20,
+            max_tickets_per_tx: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE * 20,
+            prizes: vec![env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(env, &[11u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+
+        (client, admin, creator, token_mint)
+    }
+
+    #[test]
+    fn get_my_tickets_empty_for_unknown_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, _token_mint) = setup_multi_ticket_raffle(&env);
+        let stranger = Address::generate(&env);
+
+        let ids = client.get_my_tickets(&stranger);
+        assert_eq!(ids.len(), 0u32);
+    }
+
+    #[test]
+    fn get_my_tickets_returns_purchased_ids() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, token_mint) = setup_multi_ticket_raffle(&env);
+        let buyer = Address::generate(&env);
+        token_mint.mint(&buyer, &1_000_000);
+
+        // Buy 3 tickets.
+        client.buy_tickets(&buyer, &3);
+
+        let ids = client.get_my_tickets(&buyer);
+        assert_eq!(ids.len(), 3u32);
+        assert_eq!(ids.get(0).unwrap(), 1u32);
+        assert_eq!(ids.get(1).unwrap(), 2u32);
+        assert_eq!(ids.get(2).unwrap(), 3u32);
+    }
+
+    #[test]
+    fn get_my_tickets_across_multiple_purchases() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, token_mint) = setup_multi_ticket_raffle(&env);
+        let buyer = Address::generate(&env);
+        token_mint.mint(&buyer, &10_000_000);
+
+        // Two separate purchase transactions.
+        client.buy_tickets(&buyer, &2);
+        client.buy_tickets(&buyer, &3);
+
+        let ids = client.get_my_tickets(&buyer);
+        assert_eq!(ids.len(), 5u32);
+        assert_eq!(ids.get(0).unwrap(), 1u32);
+        assert_eq!(ids.get(4).unwrap(), 5u32);
+    }
+
+    #[test]
+    fn get_my_tickets_isolates_buyers() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, token_mint) = setup_multi_ticket_raffle(&env);
+        let buyer_a = Address::generate(&env);
+        let buyer_b = Address::generate(&env);
+        token_mint.mint(&buyer_a, &1_000_000);
+        token_mint.mint(&buyer_b, &1_000_000);
+
+        // buyer_a buys 3, buyer_b buys 2 → IDs 1-3 for A, 4-5 for B.
+        client.buy_tickets(&buyer_a, &3);
+        client.buy_tickets(&buyer_b, &2);
+
+        let ids_a = client.get_my_tickets(&buyer_a);
+        assert_eq!(ids_a.len(), 3u32);
+        assert_eq!(ids_a.get(0).unwrap(), 1u32);
+        assert_eq!(ids_a.get(2).unwrap(), 3u32);
+
+        let ids_b = client.get_my_tickets(&buyer_b);
+        assert_eq!(ids_b.len(), 2u32);
+        assert_eq!(ids_b.get(0).unwrap(), 4u32);
+        assert_eq!(ids_b.get(1).unwrap(), 5u32);
+    }
+
+    #[test]
+    fn wipe_storage_removes_owner_tickets_index() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let buyer = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &1_000_000);
+        token_mint.mint(&buyer, &1_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(&env, "wipe owner-tickets"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 10,
+            max_tickets_per_tx: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE * 10,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[12u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&buyer, &3);
+
+        client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+        client.wipe_storage();
+
+        env.as_contract(&contract_id, || {
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::OwnerTickets(buyer.clone())));
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // extend_end_time tests
+    // -----------------------------------------------------------------------
+
+    fn setup_deadline_raffle(
+        env: &Env,
+        end_time: u64,
+    ) -> (ContractClient<'_>, Address, Address, token::StellarAssetClient<'_>) {
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+
+        let token_admin = Address::generate(env);
+        let (token_addr, token_mint) = create_token(env, &token_admin);
+        token_mint.mint(&creator, &10_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(env, "extend deadline raffle"),
+            end_time,
+            no_deadline: false,
+            max_tickets: 20,
+            max_tickets_per_tx: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE * 20,
+            prizes: vec![env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(env, &[20u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+
+        (client, admin, creator, token_mint)
+    }
+
+    #[test]
+    fn extend_end_time_basic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let original_end = now + 3_600;
+        let (client, _admin, _creator, _token_mint) = setup_deadline_raffle(&env, original_end);
+
+        let new_end = original_end + 7_200;
+        client.extend_end_time(&new_end);
+
+        assert_eq!(client.get_raffle().end_time, new_end);
+    }
+
+    #[test]
+    fn extend_end_time_twice() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let original_end = now + 3_600;
+        let (client, _admin, _creator, _token_mint) = setup_deadline_raffle(&env, original_end);
+
+        // First extension.
+        let first_new_end = original_end + 7_200;
+        client.extend_end_time(&first_new_end);
+        assert_eq!(client.get_raffle().end_time, first_new_end);
+
+        // Second extension.
+        let second_new_end = first_new_end + 3_600;
+        client.extend_end_time(&second_new_end);
+        assert_eq!(client.get_raffle().end_time, second_new_end);
+    }
+
+    #[test]
+    fn extend_end_time_rejects_not_greater() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let original_end = now + 3_600;
+        let (client, _admin, _creator, _token_mint) = setup_deadline_raffle(&env, original_end);
+
+        // Same value.
+        assert_eq!(
+            client.try_extend_end_time(&original_end),
+            Err(Ok(Error::InvalidParameters))
+        );
+        // Earlier value.
+        assert_eq!(
+            client.try_extend_end_time(&(original_end - 1)),
+            Err(Ok(Error::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn extend_end_time_rejects_beyond_30_days() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let original_end = now + 3_600;
+        let (client, _admin, _creator, _token_mint) = setup_deadline_raffle(&env, original_end);
+
+        let too_far = now + MAX_EXTENSION_SECONDS + 1;
+        assert_eq!(
+            client.try_extend_end_time(&too_far),
+            Err(Ok(Error::InvalidParameters))
+        );
+
+        // Exactly at the boundary is allowed.
+        let at_boundary = now + MAX_EXTENSION_SECONDS;
+        client.extend_end_time(&at_boundary);
+        assert_eq!(client.get_raffle().end_time, at_boundary);
+    }
+
+    #[test]
+    fn extend_end_time_rejects_no_deadline_raffle() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &1_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(&env, "no-deadline"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 10,
+            max_tickets_per_tx: 10,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr,
+            prize_amount: MIN_TICKET_PRICE * 10,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[21u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+
+        assert_eq!(
+            client.try_extend_end_time(&(now + 3_600)),
+            Err(Ok(Error::InvalidParameters))
+        );
+    }
+
+    #[test]
+    fn extend_end_time_rejects_non_active_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let now = 1_000u64;
+        env.ledger().set_timestamp(now);
+
+        let original_end = now + 3_600;
+        let (client, _admin, _creator, _token_mint) = setup_deadline_raffle(&env, original_end);
+
+        client.cancel_raffle(&raffle_shared::CancelReason::CreatorCancelled);
+
+        assert_eq!(
+            client.try_extend_end_time(&(original_end + 7_200)),
+            Err(Ok(Error::InvalidStatus))
+        );
     }
 }
