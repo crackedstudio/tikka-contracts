@@ -155,7 +155,7 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
                 // Check if this index is already in the selected indices
                 let mut found = false;
                 for i in 0..indices.len() {
-                    if indices.get(i).unwrap() == idx {
+                    if indices.get(i) == Some(idx) {
                         found = true;
                         break;
                     }
@@ -177,12 +177,7 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
 ///
 /// The oracle must sign this exact byte sequence when calling `provide_randomness`.
 pub fn build_vrf_proof_message(env: &Env, request_id: u64, random_seed: u64) -> Bytes {
-    (
-        env.current_contract_address(),
-        request_id,
-        random_seed,
-    )
-        .to_xdr(env)
+    (env.current_contract_address(), request_id, random_seed).to_xdr(env)
 }
 
 /// Oracle-backed strategy using an externally provided VRF seed.

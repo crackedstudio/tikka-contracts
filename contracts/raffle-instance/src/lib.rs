@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, token, xdr::ToXdr, Address, Bytes, BytesN, Env, IntoVal,
@@ -18,7 +19,9 @@ use raffle_shared::{
     Ticket,
 };
 
-use self::randomness::{build_vrf_proof_message, OracleSeedWinnerSelection, WinnerSelectionStrategy};
+use self::randomness::{
+    build_vrf_proof_message, OracleSeedWinnerSelection, WinnerSelectionStrategy,
+};
 
 use crate::events::{
     ContractPaused, ContractUnpaused, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled,
@@ -26,7 +29,7 @@ use crate::events::{
     RandomnessReceived, RandomnessRequested, TicketPurchased, WinnerDrawn,
     ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
     OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
+    RaffleCancelled, RaffleCreated, RaffleFailed, RaffleFinalized, RaffleStatusChanged,
     RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, SwapDeadlineUpdated,
     TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued,
     WinnerDrawn,
@@ -422,7 +425,7 @@ fn calculate_tier_prize(raffle: &Raffle, tier_index: u32) -> Result<i128, Error>
     if tier_index == last_tier_index {
         let mut allocated_before_last = 0i128;
         for i in 0..last_tier_index {
-            let prize_bp = raffle.prizes.get(i).unwrap();
+            let prize_bp = raffle.prizes.get(i).ok_or(Error::InvalidIndex)?;
             let amount = raffle
                 .prize_amount
                 .checked_mul(prize_bp as i128)
@@ -439,7 +442,7 @@ fn calculate_tier_prize(raffle: &Raffle, tier_index: u32) -> Result<i128, Error>
             .ok_or(Error::ArithmeticOverflow);
     }
 
-    let prize_bp = raffle.prizes.get(tier_index).unwrap();
+    let prize_bp = raffle.prizes.get(tier_index).ok_or(Error::InvalidIndex)?;
     raffle
         .prize_amount
         .checked_mul(prize_bp as i128)
@@ -1515,11 +1518,8 @@ impl Contract {
                         .instance()
                         .get(&DataKey::RandomnessRequestLedger)
                         .unwrap_or(0);
-                    let estimated_seconds = (env
-                        .ledger()
-                        .sequence()
-                        .saturating_sub(request_ledger) as u64)
-                        * 5;
+                    let estimated_seconds =
+                        (env.ledger().sequence().saturating_sub(request_ledger) as u64) * 5;
                     if estimated_seconds < EMERGENCY_WITHDRAW_DELAY_SECONDS {
                         return Err(Error::EmergencyTooEarly);
                     }
@@ -1719,9 +1719,7 @@ impl Contract {
             env.storage()
                 .persistent()
                 .remove(&DataKey::TicketRefunded(i));
-            env.storage()
-                .persistent()
-                .remove(&DataKey::CommitEntry(i));
+            env.storage().persistent().remove(&DataKey::CommitEntry(i));
         }
 
         let buyers: Vec<Address> = env
@@ -1734,9 +1732,7 @@ impl Contract {
                 .persistent()
                 .remove(&DataKey::TicketCount(buyer.clone()));
         }
-        env.storage()
-            .persistent()
-            .remove(&DataKey::TicketBuyers);
+        env.storage().persistent().remove(&DataKey::TicketBuyers);
 
         // Wipe instance storage
         env.storage().instance().remove(&DataKey::Raffle);
@@ -1758,9 +1754,7 @@ impl Contract {
         env.storage().instance().remove(&DataKey::FinishTime);
 
         // Wipe persistent instance-level keys
-        env.storage()
-            .persistent()
-            .remove(&DataKey::RandomnessSeed);
+        env.storage().persistent().remove(&DataKey::RandomnessSeed);
         env.storage().persistent().remove(&DataKey::Admin);
 
         Ok(())
@@ -2637,18 +2631,9 @@ mod test {
 
         env.as_contract(&contract_id, || {
             for i in 1..=5 {
-                assert!(!env
-                    .storage()
-                    .persistent()
-                    .has(&DataKey::Ticket(i)));
-                assert!(!env
-                    .storage()
-                    .persistent()
-                    .has(&DataKey::TicketRefunded(i)));
-                assert!(!env
-                    .storage()
-                    .persistent()
-                    .has(&DataKey::CommitEntry(i)));
+                assert!(!env.storage().persistent().has(&DataKey::Ticket(i)));
+                assert!(!env.storage().persistent().has(&DataKey::TicketRefunded(i)));
+                assert!(!env.storage().persistent().has(&DataKey::CommitEntry(i)));
             }
             assert!(!env
                 .storage()
@@ -2658,51 +2643,24 @@ mod test {
                 .storage()
                 .persistent()
                 .has(&DataKey::TicketCount(buyer_b.clone())));
-            assert!(!env
-                .storage()
-                .persistent()
-                .has(&DataKey::TicketBuyers));
+            assert!(!env.storage().persistent().has(&DataKey::TicketBuyers));
 
             assert!(!env.storage().instance().has(&DataKey::Raffle));
             assert!(!env.storage().instance().has(&DataKey::Factory));
             assert!(!env.storage().instance().has(&DataKey::Admin));
             assert!(!env.storage().instance().has(&DataKey::Paused));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::ReentrancyGuard));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::AccumulatedFees));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::RandomnessRequested));
+            assert!(!env.storage().instance().has(&DataKey::ReentrancyGuard));
+            assert!(!env.storage().instance().has(&DataKey::AccumulatedFees));
+            assert!(!env.storage().instance().has(&DataKey::RandomnessRequested));
             assert!(!env
                 .storage()
                 .instance()
                 .has(&DataKey::RandomnessRequestLedger));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::RandomnessRequestId));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::DrawingLock));
-            assert!(!env
-                .storage()
-                .instance()
-                .has(&DataKey::FinishTime));
-            assert!(!env
-                .storage()
-                .persistent()
-                .has(&DataKey::RandomnessSeed));
-            assert!(!env
-                .storage()
-                .persistent()
-                .has(&DataKey::Admin));
+            assert!(!env.storage().instance().has(&DataKey::RandomnessRequestId));
+            assert!(!env.storage().instance().has(&DataKey::DrawingLock));
+            assert!(!env.storage().instance().has(&DataKey::FinishTime));
+            assert!(!env.storage().persistent().has(&DataKey::RandomnessSeed));
+            assert!(!env.storage().persistent().has(&DataKey::Admin));
         });
     }
 
@@ -2758,8 +2716,7 @@ mod test {
         let too_early = client.try_emergency_withdraw(&creator);
         assert_eq!(too_early.err(), Some(Ok(Error::EmergencyTooEarly)));
 
-        let ledgers_for_delay =
-            (EMERGENCY_WITHDRAW_DELAY_SECONDS / 5) as u32 + 1;
+        let ledgers_for_delay = (EMERGENCY_WITHDRAW_DELAY_SECONDS / 5) as u32 + 1;
         env.ledger().with_mut(|l| {
             l.sequence_number += ledgers_for_delay;
         });
@@ -2826,7 +2783,8 @@ mod test {
         let too_early = client.try_emergency_withdraw(&creator);
         assert_eq!(too_early.err(), Some(Ok(Error::EmergencyTooEarly)));
 
-        env.ledger().set_timestamp(end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS + 1);
+        env.ledger()
+            .set_timestamp(end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS + 1);
         client.emergency_withdraw(&creator);
 
         let after = client.get_raffle();
@@ -2835,14 +2793,7 @@ mod test {
 
     fn setup_external_drawing_raffle(
         env: &Env,
-    ) -> (
-        Address,
-        ContractClient<'_>,
-        Address,
-        Address,
-        Address,
-        u64,
-    ) {
+    ) -> (Address, ContractClient<'_>, Address, Address, Address, u64) {
         let contract_id = env.register(Contract, ());
         let client = ContractClient::new(env, &contract_id);
 
@@ -2889,14 +2840,7 @@ mod test {
                 .unwrap()
         });
 
-        (
-            contract_id,
-            client,
-            creator,
-            oracle,
-            admin,
-            request_id,
-        )
+        (contract_id, client, creator, oracle, admin, request_id)
     }
 
     #[test]
@@ -2925,18 +2869,13 @@ mod test {
         for (idx, byte) in message_a.iter().enumerate() {
             msg_a[idx] = byte;
         }
-        let proof_a =
-            BytesN::from_array(&env, &signing_key.sign(&msg_a[..msg_len]).to_bytes());
+        let proof_a = BytesN::from_array(&env, &signing_key.sign(&msg_a[..msg_len]).to_bytes());
 
         client_a.provide_randomness(&random_seed, &public_key, &proof_a, &request_id_a);
         assert_eq!(client_a.get_raffle().status, RaffleStatus::Finalized);
 
-        let replay = client_b.try_provide_randomness(
-            &random_seed,
-            &public_key,
-            &proof_a,
-            &request_id_b,
-        );
+        let replay =
+            client_b.try_provide_randomness(&random_seed, &public_key, &proof_a, &request_id_b);
         assert!(replay.is_err());
     }
 

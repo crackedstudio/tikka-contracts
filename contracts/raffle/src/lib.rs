@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
@@ -182,8 +183,7 @@ fn require_valid_role_address(env: &Env, address: &Address) -> Result<(), Contra
     #[cfg(test)]
     {
         use soroban_sdk::String;
-        const ZERO_CONTRACT: &str =
-            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        const ZERO_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
         let zero = Address::from_string(&String::from_str(env, ZERO_CONTRACT));
         if *address == zero {
             return Err(ContractError::InvalidParameters);
@@ -416,7 +416,11 @@ impl RaffleFactory {
         final_config.protocol_fee_bp = protocol_fee_bp;
         final_config.treasury_address = Some(treasury);
 
-        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotAuthorized)?;
         let factory_address = env.current_contract_address();
 
         let salt = env
@@ -429,7 +433,7 @@ impl RaffleFactory {
                 .storage()
                 .persistent()
                 .get(&DataKey::InstanceWasmHash)
-                .unwrap();
+                .ok_or(ContractError::InvalidParameters)?;
             let salt = env
                 .crypto()
                 .sha256(&(creator.clone(), final_config.description.clone()).to_xdr(&env));
@@ -711,7 +715,11 @@ impl RaffleFactory {
             .ok_or(ContractError::NoPendingTransfer)?;
         pending.require_auth();
 
-        let old_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let old_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotAuthorized)?;
 
         env.storage().persistent().set(&DataKey::Admin, &pending);
         env.storage().persistent().remove(&DataKey::PendingAdmin);
@@ -1239,12 +1247,8 @@ mod tests {
                     .set(&DataKey::RaffleById(i), &addr);
                 addrs.push_back(addr);
             }
-            env.storage()
-                .persistent()
-                .set(&DataKey::NextRaffleId, &n);
-            env.storage()
-                .persistent()
-                .set(&DataKey::RaffleCount, &n);
+            env.storage().persistent().set(&DataKey::NextRaffleId, &n);
+            env.storage().persistent().set(&DataKey::RaffleCount, &n);
         });
         addrs
     }

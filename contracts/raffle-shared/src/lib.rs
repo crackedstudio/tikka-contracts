@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
 
