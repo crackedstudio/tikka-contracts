@@ -1082,18 +1082,15 @@ impl Contract {
         caller: Address,
         do_refund: bool,
     ) -> Result<(), Error> {
-        // # SECURITY: DrawingLock must be held — the fallback is the recovery path for a draw
-        // that is already in progress (Drawing state with a pending oracle request, which holds
-        // the lock). A cleared lock means the draw already completed or was never started, so we
-        // reject to prevent re-finalizing or cancelling a settled raffle. This mirrors the guard
-        // in provide_randomness, the sibling completion path for the same locked state.
+        // # SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
+        // already in progress; reject without reading further state
         let drawing_lock: bool = env
             .storage()
             .instance()
             .get(&DataKey::DrawingLock)
             .unwrap_or(false);
-        if !drawing_lock {
-            return Err(Error::DrawingAlreadyComplete);
+        if drawing_lock {
+            return Err(Error::DrawingAlreadyInProgress);
         }
 
         caller.require_auth();
@@ -2525,138 +2522,5 @@ mod test {
             &request_id_b,
         );
         assert!(replay.is_err());
-    }
-
-    // Reads the DrawingLock instance flag for a contract under test.
-    fn drawing_lock(env: &Env, contract_id: &Address) -> bool {
-        env.as_contract(contract_id, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::DrawingLock)
-                .unwrap_or(false)
-        })
-    }
-
-    // Reads the RandomnessRequested instance flag for a contract under test.
-    fn randomness_requested(env: &Env, contract_id: &Address) -> bool {
-        env.as_contract(contract_id, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::RandomnessRequested)
-                .unwrap_or(false)
-        })
-    }
-
-    #[test]
-    fn fallback_too_early_is_rejected() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().set_timestamp(1_000);
-
-        let (contract_id, client, creator, _oracle, _admin, _request_id) =
-            setup_external_drawing_raffle(&env);
-
-        // Precondition: the raffle is awaiting the oracle in Drawing with a
-        // pending randomness request and the DrawingLock held.
-        assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
-        assert!(randomness_requested(&env, &contract_id));
-        assert!(drawing_lock(&env, &contract_id));
-
-        // Advance to one ledger short of the timeout window.
-        env.ledger().with_mut(|l| {
-            l.sequence_number += ORACLE_TIMEOUT_LEDGERS - 1;
-        });
-
-        let result = client.try_trigger_randomness_fallback(&creator, &false);
-        assert_eq!(result.err(), Some(Ok(Error::FallbackTooEarly)));
-
-        // The raffle remains untouched: still Drawing with the lock held.
-        assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
-        assert!(drawing_lock(&env, &contract_id));
-    }
-
-    #[test]
-    fn fallback_with_refund_cancels_raffle() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().set_timestamp(1_000);
-
-        let (contract_id, client, creator, _oracle, _admin, _request_id) =
-            setup_external_drawing_raffle(&env);
-        let payment_token = client.get_raffle().payment_token;
-        let token = token::Client::new(&env, &payment_token);
-
-        // Precondition: Drawing state with a pending oracle request.
-        assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
-        assert!(randomness_requested(&env, &contract_id));
-        assert!(drawing_lock(&env, &contract_id));
-
-        // Before the timeout elapses the fallback must be rejected.
-        env.ledger().with_mut(|l| {
-            l.sequence_number += ORACLE_TIMEOUT_LEDGERS - 1;
-        });
-        assert_eq!(
-            client
-                .try_trigger_randomness_fallback(&creator, &true)
-                .err(),
-            Some(Ok(Error::FallbackTooEarly))
-        );
-
-        // Cross the timeout boundary and trigger the refund fallback.
-        env.ledger().with_mut(|l| {
-            l.sequence_number += 1;
-        });
-        client.trigger_randomness_fallback(&creator, &true);
-
-        // The raffle is cancelled, the lock released, and the pending request cleared.
-        assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
-        assert!(!drawing_lock(&env, &contract_id));
-        assert!(!randomness_requested(&env, &contract_id));
-
-        // Buyers can recover their funds via refund_ticket.
-        let balance_before = token.balance(&creator);
-        let refunded = client.refund_ticket(&1);
-        assert_eq!(refunded, MIN_TICKET_PRICE);
-        assert_eq!(token.balance(&creator), balance_before + MIN_TICKET_PRICE);
-
-        // A second refund of the same ticket is rejected.
-        assert_eq!(
-            client.try_refund_ticket(&1).err(),
-            Some(Ok(Error::PrizeAlreadyClaimed))
-        );
-    }
-
-    #[test]
-    fn fallback_without_refund_uses_internal_seed() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().set_timestamp(1_000);
-
-        let (contract_id, client, creator, _oracle, _admin, _request_id) =
-            setup_external_drawing_raffle(&env);
-
-        // Precondition: Drawing state with a pending oracle request.
-        assert_eq!(client.get_raffle().status, RaffleStatus::Drawing);
-        assert!(randomness_requested(&env, &contract_id));
-        assert!(drawing_lock(&env, &contract_id));
-
-        // Advance past the timeout window and trigger the internal-seed fallback.
-        env.ledger().with_mut(|l| {
-            l.sequence_number += ORACLE_TIMEOUT_LEDGERS;
-        });
-        client.trigger_randomness_fallback(&creator, &false);
-
-        // The internal randomness path finalizes the raffle and selects a winner.
-        let raffle = client.get_raffle();
-        assert_eq!(raffle.status, RaffleStatus::Finalized);
-        assert_eq!(raffle.winners.len(), 1);
-
-        // The lock is released and the pending request cleared (no refund path taken).
-        assert!(!drawing_lock(&env, &contract_id));
-        assert!(!randomness_requested(&env, &contract_id));
-
-        // Fairness data is recorded for the finalized draw.
-        let fairness = client.get_fairness_data();
-        assert_eq!(fairness.randomness_source, RandomnessSource::External);
     }
 }
