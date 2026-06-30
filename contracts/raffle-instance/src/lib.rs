@@ -1360,6 +1360,64 @@ impl RaffleInstance {
         Ok(())
     }
 
+    /// Executes a previously scheduled admin cancellation (#406).
+    ///
+    /// Only succeeds once the timelock set by `cancel_raffle` has elapsed.
+    /// Calling it earlier returns `CancelTimelockActive`; calling it with no
+    /// pending schedule returns `CancelNotScheduled`.
+    pub fn execute_admin_cancel(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        let cancel_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminCancel)
+            .ok_or(Error::CancelNotScheduled)?;
+
+        let mut raffle = read_raffle(&env)?;
+
+        if raffle.status == RaffleStatus::Finalized
+            || raffle.status == RaffleStatus::Cancelled
+            || raffle.status == RaffleStatus::Claimed
+        {
+            return Err(Error::InvalidStatus);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < cancel_at {
+            return Err(Error::CancelTimelockActive);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminCancel);
+
+        raffle.status = RaffleStatus::Cancelled;
+        write_raffle(&env, &raffle);
+
+        RaffleCancelled {
+            creator: raffle.creator.clone(),
+            reason: CancelReason::AdminCancelled,
+            tickets_sold: raffle.tickets_sold,
+            prize_refunded: raffle.prize_deposited,
+            timestamp: now,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Returns the timestamp at which a scheduled admin cancel becomes
+    /// executable, or `None` if no cancel is currently scheduled (#406).
+    pub fn get_pending_cancel(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PendingAdminCancel)
+    }
+
     pub fn refund_prize(env: Env) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
@@ -1476,9 +1534,19 @@ impl RaffleInstance {
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
         let raffle = read_raffle(&env)?;
 
+        // #406: Ticket holders may refund as soon as an admin cancel is
+        // *scheduled*, without waiting for the timelock to execute the cancel.
+        let cancel_scheduled = env
+            .storage()
+            .instance()
+            .has(&DataKey::PendingAdminCancel);
+
         // #258: status check BEFORE require_auth to prevent double-spend on
         // status transitions that occur between auth and the gate.
-        if raffle.status != RaffleStatus::Cancelled && raffle.status != RaffleStatus::Failed {
+        if raffle.status != RaffleStatus::Cancelled
+            && raffle.status != RaffleStatus::Failed
+            && !cancel_scheduled
+        {
             return Err(Error::InvalidStatus);
         }
 
@@ -1686,6 +1754,9 @@ impl RaffleInstance {
             .remove(&DataKey::RandomnessRequestId);
         env.storage().instance().remove(&DataKey::DrawingLock);
         env.storage().instance().remove(&DataKey::FinishTime);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminCancel);
 
         // Wipe persistent instance-level keys
         env.storage().persistent().remove(&DataKey::RandomnessSeed);
@@ -1924,7 +1995,7 @@ mod tests {
 mod test {
     use super::*;
     use raffle_shared::RaffleConfig;
-    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::{vec, Address, BytesN, Env, String};
 
     // Deploy a Stellar Asset Contract we control, return (token_client, admin_client).
@@ -2247,6 +2318,111 @@ mod test {
         self::admin::emergency_withdraw(env, caller)
     }
 
+    /// #406: Admin cancel of a raffle with sold tickets must be timelocked.
+    /// Scheduling, then executing within the window, must fail.
+    #[test]
+    fn admin_cancel_with_sold_tickets_requires_timelock() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, buyer, _factory, _token_mint) = setup_active_raffle(&env);
+        client.buy_tickets(&buyer, &3);
+        assert_eq!(client.get_raffle().tickets_sold, 3);
+
+        // No cancel is scheduled yet.
+        assert!(client.get_pending_cancel().is_none());
+
+        // Admin cancel only *schedules*: status and prize stay untouched, and
+        // exactly one event (CancelScheduled) is emitted.
+        let events_before = env.events().all().len();
+        client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+        assert_eq!(env.events().all().len() - events_before, 1);
+
+        assert_eq!(client.get_raffle().status, RaffleStatus::Active);
+        assert!(client.get_raffle().prize_deposited);
+
+        let cancel_at = client.get_pending_cancel().expect("cancel scheduled");
+        assert_eq!(cancel_at, 1_000 + ADMIN_CANCEL_TIMELOCK_SECONDS);
+
+        // Executing immediately fails — the timelock is still active.
+        assert_eq!(
+            client.try_execute_admin_cancel(),
+            Err(Ok(Error::CancelTimelockActive))
+        );
+
+        // One second before the deadline still fails.
+        env.ledger().set_timestamp(cancel_at - 1);
+        assert_eq!(
+            client.try_execute_admin_cancel(),
+            Err(Ok(Error::CancelTimelockActive))
+        );
+
+        // At/after the deadline the cancel finally executes.
+        env.ledger().set_timestamp(cancel_at);
+        client.execute_admin_cancel();
+        assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+        assert!(client.get_pending_cancel().is_none());
+    }
+
+    /// #406: `execute_admin_cancel` with no scheduled cancel must fail.
+    #[test]
+    fn execute_admin_cancel_without_schedule_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, buyer, _factory, _token_mint) = setup_active_raffle(&env);
+        client.buy_tickets(&buyer, &1);
+
+        assert_eq!(
+            client.try_execute_admin_cancel(),
+            Err(Ok(Error::CancelNotScheduled))
+        );
+    }
+
+    /// #406: An admin cancel of a raffle with *zero* tickets sold takes effect
+    /// immediately — no timelock is needed because there are no buyers to rug.
+    #[test]
+    fn admin_cancel_with_no_tickets_is_immediate() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, _buyer, _factory, _token_mint) = setup_active_raffle(&env);
+
+        client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+        assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
+        assert!(client.get_pending_cancel().is_none());
+    }
+
+    /// #406: Ticket holders can refund immediately once a cancel is scheduled,
+    /// without waiting for the timelock to execute.
+    #[test]
+    fn ticket_holders_refund_immediately_after_cancel_scheduled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _creator, buyer, _factory, _token_mint) = setup_active_raffle(&env);
+        client.buy_tickets(&buyer, &2);
+
+        // While the raffle is Active and no cancel is scheduled, refunds are
+        // rejected.
+        assert_eq!(
+            client.try_refund_ticket(&1),
+            Err(Ok(Error::InvalidStatus))
+        );
+
+        // Schedule the admin cancel. The raffle is still Active...
+        client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+        assert_eq!(client.get_raffle().status, RaffleStatus::Active);
+
+        // ...yet ticket holders can refund right away, before the timelock.
+        assert_eq!(client.refund_ticket(&1), MIN_TICKET_PRICE);
+        assert_eq!(client.refund_ticket(&2), MIN_TICKET_PRICE);
+    }
+
     #[test]
     fn test_wipe_storage_removes_all_keys() {
         let env = Env::default();
@@ -2298,7 +2474,13 @@ mod test {
         client.buy_tickets(&buyer_a, &3);
         client.buy_tickets(&buyer_b, &2);
 
+        // #406: with tickets sold, an admin cancel is scheduled behind a
+        // timelock and only takes effect after `execute_admin_cancel`.
         client.cancel_raffle(&raffle_shared::CancelReason::AdminCancelled);
+        assert_eq!(client.get_raffle().status, RaffleStatus::Active);
+        env.ledger()
+            .set_timestamp(1_000 + ADMIN_CANCEL_TIMELOCK_SECONDS);
+        client.execute_admin_cancel();
 
         assert_eq!(client.get_raffle().status, RaffleStatus::Cancelled);
 

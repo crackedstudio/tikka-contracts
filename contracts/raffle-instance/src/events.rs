@@ -116,6 +116,21 @@ pub struct RaffleCancelled {
     pub timestamp: u64,
 }
 
+/// Emitted when an admin schedules a cancellation of a raffle that has already
+/// sold tickets. The actual cancel only executes via `execute_admin_cancel`
+/// once `cancel_at` has passed. Ticket holders may refund immediately as soon
+/// as this event is emitted (#406).
+#[derive(Clone)]
+#[contractevent]
+pub struct CancelScheduled {
+    pub creator: Address,
+    pub scheduled_by: Address,
+    pub tickets_sold: u32,
+    /// Unix timestamp at which the cancel becomes executable.
+    pub cancel_at: u64,
+    pub timestamp: u64,
+}
+
 #[derive(Clone)]
 #[contractevent]
 pub struct RaffleFailed {
