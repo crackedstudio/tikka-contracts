@@ -79,7 +79,6 @@ pub enum DataKey {
 pub struct ProtocolStats {
     pub total_raffles_created: u32,
     pub protocol_fee_bp: u32,
-        referral_fee_bp: 0,
     pub paused: bool,
     pub total_unique_participants: u32,
 }
@@ -180,7 +179,6 @@ impl RaffleFactory {
         admin: Address,
         wasm_hash: soroban_sdk::BytesN<32>,
         protocol_fee_bp: u32,
-        referral_fee_bp: 0,
         treasury: Address,
     ) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Admin) {
@@ -213,7 +211,6 @@ impl RaffleFactory {
     pub fn set_config(
         env: Env,
         protocol_fee_bp: u32,
-        referral_fee_bp: 0,
         treasury: Address,
     ) -> Result<u32, ContractError> {
         let admin = require_factory_admin(&env)?;
