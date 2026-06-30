@@ -33,6 +33,7 @@ use crate::events::{
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
+const RANDOMNESS_MIN_DELAY_LEDGERS: u32 = 10;
 pub const MAX_DESCRIPTION_LENGTH: u32 = 1000;
 pub const MAX_TICKETS_LIMIT: u32 = 100_000;
 pub const MAX_PRIZES: u32 = 100;
@@ -200,6 +201,7 @@ pub enum Error {
     DrawingAlreadyComplete = 61,
     InvalidEndTime = 62,
     InvalidAdminAddress = 63,
+    RandomnessTooEarly = 64,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
