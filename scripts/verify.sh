@@ -8,7 +8,7 @@ fi
 
 NETWORK="${STELLAR_NETWORK:-testnet}"
 CONTRACT_ID="${RAFFLE_CONTRACT_ADDRESS}"
-WASM_FILE="target/wasm32v1-none/release/raffle-instance.wasm"
+WASM_FILE="target/wasm32v1-none/release/raffle-factory.wasm"
 
 if [ -z "$CONTRACT_ID" ]; then
     echo "Error: RAFFLE_CONTRACT_ADDRESS environment variable is required"

@@ -1,0 +1,316 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/contracts/raffle/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/fuzz/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+    Checking hello-world v0.0.0 (/home/oseh/Applications/tikka-contracts/contracts/raffle)
+error: expected `:`, found `,`
+  --> contracts/raffle/src/lib.rs:82:21
+   |
+75 | pub struct ProtocolStats {
+   |            ------------- while parsing this struct
+...
+82 |     MinCreationDelay, // Global config (u64 seconds)
+   |                     ^ expected `:`
+
+error: expected `:`
+  --> contracts/raffle/src/lib.rs:82:21
+   |
+82 |     MinCreationDelay, // Global config (u64 seconds)
+   |                     ^
+
+error[E0425]: cannot find value `tickets` in this scope
+   --> contracts/raffle/src/instance/mod.rs:741:17
+    |
+741 |         let n = tickets.len() as u64;
+    |                 ^^^^^^^ not found in this scope
+
+error[E0433]: failed to resolve: use of undeclared type `RandomnessType`
+   --> contracts/raffle/src/instance/mod.rs:801:34
+    |
+801 |                 randomness_type: RandomnessType::Prng,
+    |                                  ^^^^^^^^^^^^^^ use of undeclared type `RandomnessType`
+    |
+help: consider importing this enum
+    |
+  2 + use crate::events::RandomnessType;
+    |
+
+error[E0425]: cannot find value `claimed_winners` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1012:34
+     |
+1012 |         raffle.claimed_winners = claimed_winners;
+     |                                  ^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0433]: failed to resolve: use of undeclared type `RandomnessType`
+    --> contracts/raffle/src/instance/mod.rs:1040:34
+     |
+1040 |                 randomness_type: RandomnessType::Vrf,
+     |                                  ^^^^^^^^^^^^^^ use of undeclared type `RandomnessType`
+     |
+help: consider importing this enum
+     |
+   2 + use crate::events::RandomnessType;
+     |
+
+error[E0425]: cannot find value `winner_ticket` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1151:21
+     |
+1151 |                     winner_ticket.owner.clone(),
+     |                     ^^^^^^^^^^^^^ help: a local variable with a similar name exists: `winner_index`
+
+error[E0433]: failed to resolve: use of undeclared type `RandomnessType`
+    --> contracts/raffle/src/instance/mod.rs:1194:34
+     |
+1194 |                 randomness_type: RandomnessType::Fallback,
+     |                                  ^^^^^^^^^^^^^^ use of undeclared type `RandomnessType`
+     |
+help: consider importing this enum
+     |
+   2 + use crate::events::RandomnessType;
+     |
+
+error[E0433]: failed to resolve: use of undeclared type `RandomnessType`
+    --> contracts/raffle/src/instance/mod.rs:1434:34
+     |
+1434 |                 randomness_type: RandomnessType::Vrf,
+     |                                  ^^^^^^^^^^^^^^ use of undeclared type `RandomnessType`
+     |
+help: consider importing this enum
+     |
+   2 + use crate::events::RandomnessType;
+     |
+
+error[E0425]: cannot find value `old_status` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1531:28
+     |
+1531 |                 r.status = old_status.clone();
+     |                            ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `ProtocolStats` in this scope
+  --> contracts/raffle/src/lib.rs:73:10
+   |
+73 | #[derive(Clone)]
+   |          ^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `ProtocolStats` in this scope
+  --> contracts/raffle/src/lib.rs:73:10
+   |
+73 | #[derive(Clone)]
+   |          ^^^^^ not found in this scope
+
+error[E0425]: cannot find type `ProtocolStats` in this scope
+   --> contracts/raffle/src/lib.rs:429:44
+    |
+429 |     pub fn get_protocol_stats(env: Env) -> ProtocolStats {
+    |                                            ^^^^^^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `ProtocolStats` in this scope
+   --> contracts/raffle/src/lib.rs:451:9
+    |
+451 |         ProtocolStats {
+    |         ^^^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `String`
+ --> contracts/raffle/src/lib.rs:7:5
+  |
+7 |     String, Symbol, Vec,
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `PageResult_Tickets`, `PaginationParams`, and `effective_limit`
+ --> contracts/raffle/src/instance/mod.rs:8:20
+  |
+8 | use crate::types::{effective_limit, FairnessData, PageResult_Tickets, PaginationParams};
+  |                    ^^^^^^^^^^^^^^^                ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `RandomnessSource`
+  --> contracts/raffle/src/lib.rs:14:30
+   |
+14 | use instance::{RaffleConfig, RandomnessSource};
+   |                              ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::prng::Prng::u64_in_range`: use env.prng().gen_range(...)
+  --> contracts/raffle/src/instance/randomness.rs:63:34
+   |
+63 |             let idx = env.prng().u64_in_range(0..(total_tickets as u64)) as u32;
+   |                                  ^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:139:18
+    |
+139 |     env.events().publish(
+    |                  ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:470:22
+    |
+470 |         env.events().publish(
+    |                      ^^^^^^^
+
+error[E0425]: cannot find function `require_not_paused` in this scope
+   --> contracts/raffle/src/instance/mod.rs:490:9
+    |
+490 |         require_not_paused(&env)?;
+    |         ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:513:22
+    |
+513 |         env.events().publish(
+    |                      ^^^^^^^
+
+error[E0425]: cannot find function `require_not_paused` in this scope
+   --> contracts/raffle/src/instance/mod.rs:527:9
+    |
+527 |         require_not_paused(&env)?;
+    |         ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0599]: no variant or associated item named `Active` found for enum `RaffleStatus` in the current scope
+   --> contracts/raffle/src/instance/mod.rs:537:43
+    |
+ 38 | pub enum RaffleStatus {
+    | --------------------- variant or associated item `Active` not found for this enum
+...
+537 |         if raffle.status != RaffleStatus::Active {
+    |                                           ^^^^^^ variant or associated item not found in `RaffleStatus`
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:618:22
+    |
+618 |         env.events().publish(
+    |                      ^^^^^^^
+
+error[E0425]: cannot find function `build_internal_seed` in this scope
+   --> contracts/raffle/src/instance/mod.rs:740:25
+    |
+740 |         env.prng().seed(build_internal_seed(&env));
+    |                         ^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:749:26
+    |
+749 |             env.events().publish(
+    |                          ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/instance/mod.rs:977:26
+    |
+977 |             env.events().publish(
+    |                          ^^^^^^^
+
+error[E0425]: cannot find function `do_finalize_with_seed` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1055:9
+     |
+1055 |         do_finalize_with_seed(&env, random_seed)
+     |         ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/raffle/src/instance/mod.rs:1148:26
+     |
+1148 |             env.events().publish(
+     |                          ^^^^^^^
+
+error[E0425]: cannot find function `require_not_paused` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1213:9
+     |
+1213 |         require_not_paused(&env)?;
+     |         ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `require_not_paused` in this scope
+    --> contracts/raffle/src/instance/mod.rs:1257:9
+     |
+1257 |         require_not_paused(&env)?;
+     |         ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0369]: binary operation `!=` cannot be applied to type `soroban_sdk::crypto::Hash<32>`
+    --> contracts/raffle/src/instance/mod.rs:1284:24
+     |
+1284 |         if actual_hash != committed_hash {
+     |            ----------- ^^ -------------- soroban_sdk::BytesN<32>
+     |            |
+     |            soroban_sdk::crypto::Hash<32>
+     |
+note: `soroban_sdk::crypto::Hash<32>` does not implement `PartialEq<soroban_sdk::BytesN<32>>`
+    --> /home/oseh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-23.5.3/src/crypto.rs:25:1
+     |
+  25 | pub struct Hash<const N: usize>(BytesN<N>);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `soroban_sdk::crypto::Hash<32>` is defined in another crate
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/raffle/src/instance/mod.rs:1387:26
+     |
+1387 |             env.events().publish(
+     |                          ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/raffle/src/instance/mod.rs:1612:22
+     |
+1612 |         env.events().publish(
+     |                      ^^^^^^^
+
+error[E0599]: no variant or associated item named `Claimed` found for enum `RaffleStatus` in the current scope
+    --> contracts/raffle/src/instance/mod.rs:1981:87
+     |
+  38 | pub enum RaffleStatus {
+     | --------------------- variant or associated item `Claimed` not found for this enum
+...
+1981 |         if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
+     |                                                                                       ^^^^^^^ variant or associated item not found in `RaffleStatus`
+
+error[E0308]: mismatched types
+    --> contracts/raffle/src/instance/mod.rs:2093:47
+     |
+2093 |                 .remove(&DataKey::TicketCount(buyer));
+     |                          -------------------- ^^^^^ expected `Address`, found `Ticket`
+     |                          |
+     |                          arguments to this enum variant are incorrect
+     |
+note: tuple variant defined here
+    --> contracts/raffle/src/instance/mod.rs:160:5
+     |
+ 160 |     TicketCount(Address),
+     |     ^^^^^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/raffle/src/lib.rs:116:18
+    |
+116 |     env.events().publish(
+    |                  ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::deploy::DeployerWithAddress::deploy`: use deploy_v2
+   --> contracts/raffle/src/lib.rs:405:14
+    |
+405 |             .deploy(wasm_hash);
+    |              ^^^^^^
+
+error[E0507]: cannot move out of `self.raffle_id` which is behind a shared reference
+  --> contracts/raffle/src/instance/randomness.rs:35:21
+   |
+35 |         for byte in self.raffle_id.to_xdr(env).iter() {
+   |                     ^^^^^^^^^^^^^^ ----------- `self.raffle_id` moved due to this method call
+   |                     |
+   |                     move occurs because `self.raffle_id` has type `soroban_sdk::Address`, which does not implement the `Copy` trait
+   |
+note: `soroban_sdk::xdr::ToXdr::to_xdr` takes ownership of the receiver `self`, which moves `self.raffle_id`
+  --> /home/oseh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-23.5.3/src/xdr.rs:36:15
+   |
+36 |     fn to_xdr(self, env: &Env) -> Bytes;
+   |               ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+   |
+35 |         for byte in <soroban_sdk::Address as Clone>::clone(&self.raffle_id).to_xdr(env).iter() {
+   |                     ++++++++++++++++++++++++++++++++++++++++              +
+help: consider cloning the value if the performance cost is acceptable
+   |
+35 |         for byte in self.raffle_id.clone().to_xdr(env).iter() {
+   |                                   ++++++++
+
+Some errors have detailed explanations: E0308, E0369, E0422, E0425, E0433, E0507, E0599.
+For more information about an error, try `rustc --explain E0308`.
+warning: `hello-world` (lib) generated 15 warnings
+error: could not compile `hello-world` (lib) due to 25 previous errors; 15 warnings emitted

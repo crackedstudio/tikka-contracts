@@ -116,7 +116,7 @@ flowchart TD
 
 ### **Core Contracts**
 
-#### **`contracts/raffle/src/lib.rs`**
+#### **`contracts/raffle-factory/src/lib.rs`**
 
 ```rust
 pub fn init_factory(... ) -> Result<(), ContractError>;

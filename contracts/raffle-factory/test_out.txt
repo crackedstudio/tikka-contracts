@@ -1,0 +1,120 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/contracts/raffle/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/oseh/Applications/tikka-contracts/fuzz/Cargo.toml
+workspace: /home/oseh/Applications/tikka-contracts/Cargo.toml
+    Checking hello-world v0.0.0 (/home/oseh/Applications/tikka-contracts/contracts/raffle)
+error[E0425]: cannot find value `result` in this scope
+   --> contracts/raffle/src/instance/test.rs:240:13
+    |
+240 |     assert!(result.is_err());
+    |             ^^^^^^ not found in this scope
+
+error[E0063]: missing field `metadata_hash` in initializer of `instance::RaffleConfig`
+   --> contracts/raffle/src/lib.rs:833:22
+    |
+833 |         let config = instance::RaffleConfig {
+    |                      ^^^^^^^^^^^^^^^^^^^^^^ missing `metadata_hash`
+
+error[E0507]: cannot move out of `self.raffle_id` which is behind a shared reference
+  --> contracts/raffle/src/instance/randomness.rs:35:21
+   |
+35 |         for byte in self.raffle_id.to_xdr(env).iter() {
+   |                     ^^^^^^^^^^^^^^ ----------- `self.raffle_id` moved due to this method call
+   |                     |
+   |                     move occurs because `self.raffle_id` has type `soroban_sdk::Address`, which does not implement the `Copy` trait
+   |
+note: `soroban_sdk::xdr::ToXdr::to_xdr` takes ownership of the receiver `self`, which moves `self.raffle_id`
+  --> /home/oseh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-23.5.3/src/xdr.rs:36:15
+   |
+36 |     fn to_xdr(self, env: &Env) -> Bytes;
+   |               ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+   |
+35 |         for byte in <soroban_sdk::Address as Clone>::clone(&self.raffle_id).to_xdr(env).iter() {
+   |                     ++++++++++++++++++++++++++++++++++++++++              +
+help: consider cloning the value if the performance cost is acceptable
+   |
+35 |         for byte in self.raffle_id.clone().to_xdr(env).iter() {
+   |                                   ++++++++
+
+warning: unused variable: `old_status`
+   --> contracts/raffle/src/instance/mod.rs:585:17
+    |
+585 |             let old_status = raffle.status.clone();
+    |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_old_status`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `seed` is never read
+    --> contracts/raffle/src/instance/mod.rs:1341:29
+     |
+1341 |         let mut seed: u64 = 0;
+     |                             ^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `all_claimed` is assigned to, but never used
+    --> contracts/raffle/src/instance/mod.rs:1505:13
+     |
+1505 |         let mut all_claimed = true;
+     |             ^^^^^^^^^^^^^^^
+     |
+     = note: consider using `_all_claimed` instead
+
+warning: value assigned to `all_claimed` is never read
+    --> contracts/raffle/src/instance/mod.rs:1508:17
+     |
+1508 |                 all_claimed = false;
+     |                 ^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `client`
+   --> contracts/raffle/src/instance/test.rs:269:10
+    |
+269 |     let (client, _, buyer, _, _, _) = setup_raffle_env(
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_client`
+
+warning: unused variable: `admin_client`
+   --> contracts/raffle/src/instance/test.rs:734:30
+    |
+734 |     let (client, creator, _, admin_client, _, factory_admin) =
+    |                              ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin_client`
+
+warning: unused variable: `admin_client`
+   --> contracts/raffle/src/instance/test.rs:769:24
+    |
+769 |     let (client, _, _, admin_client, _, _) =
+    |                        ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin_client`
+
+warning: unused variable: `admin_client`
+    --> contracts/raffle/src/instance/test.rs:1194:28
+     |
+1194 |     let (client, _, buyer, admin_client, _, _) =
+     |                            ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin_client`
+
+warning: unused variable: `addr`
+    --> contracts/raffle/src/instance/test.rs:1950:9
+     |
+1950 |     let addr = client.address.clone();
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_addr`
+
+warning: unused variable: `creator`
+    --> contracts/raffle/src/instance/test.rs:2572:18
+     |
+2572 |     let (client, creator, buyer, admin_client, _, _) =
+     |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_creator`
+
+warning: unused variable: `token_client`
+    --> contracts/raffle/src/instance/test.rs:2574:9
+     |
+2574 |     let token_client = token::Client::new(&env, &admin_client.address);
+     |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_client`
+
+Some errors have detailed explanations: E0063, E0425, E0507.
+For more information about an error, try `rustc --explain E0063`.
+warning: `hello-world` (lib test) generated 11 warnings
+error: could not compile `hello-world` (lib test) due to 3 previous errors; 11 warnings emitted

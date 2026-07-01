@@ -106,7 +106,7 @@ The protocol fee (`protocol_fee_bp`) is charged **once**, at ticket purchase. Wi
 
 ## Factory Contract Errors
 
-The factory contract (`RaffleFactory`) manages raffle creation. All error codes are defined in the `ContractError` enum in [`contracts/raffle/src/lib.rs`](contracts/raffle/src/lib.rs).
+The factory contract (`RaffleFactory`) manages raffle creation. All error codes are defined in the `ContractError` enum in [`contracts/raffle-factory/src/lib.rs`](contracts/raffle-factory/src/lib.rs).
 
 ### General Errors (1-10)
 
@@ -294,8 +294,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errorCode }) => {
 All error codes should be tested in the contract test suite to ensure proper error propagation. Run tests with:
 
 ```bash
-cd contracts/raffle
-cargo test
+cargo test -p raffle-factory
 ```
 
 ---

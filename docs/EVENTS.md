@@ -1,6 +1,6 @@
 # Raffle Contract Events
 
-This document describes all events emitted by the Tikka raffle system, covering both the **Factory** contract (`contracts/raffle/src/events.rs`) and the **Raffle Instance** contract (`contracts/raffle-instance/src/events.rs`). Off-chain indexers, event listeners, and frontend developers use these events to reconstruct complete raffle state without querying contract storage.
+This document describes all events emitted by the Tikka raffle system, covering both the **Factory** contract (`contracts/raffle-factory/src/events.rs`) and the **Raffle Instance** contract (`contracts/raffle-instance/src/events.rs`). Off-chain indexers, event listeners, and frontend developers use these events to reconstruct complete raffle state without querying contract storage.
 
 ## Event Topic Scheme
 
