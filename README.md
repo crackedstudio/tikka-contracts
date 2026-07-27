@@ -1,10 +1,26 @@
 # Tikka - Decentralized Raffle Platform
 
+[![CI](https://github.com/crackedstudio/tikka-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/crackedstudio/tikka-contracts/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Soroban SDK](https://img.shields.io/badge/Soroban%20SDK-23-orange)](https://crates.io/crates/soroban-sdk) [![Rust MSRV](https://img.shields.io/badge/Rust-1.70-blue.svg)](https://www.rust-lang.org/)
+
 ![Tikka Logo](https://via.placeholder.com/200x100/4F46E5/FFFFFF?text=TIKKA)
 
 ## 🎯 What is Tikka?
 
 Tikka is a decentralized raffle platform built on Stellar using Soroban smart contracts. Users can create raffles, sell tickets priced in Stellar assets, and distribute prizes securely on-chain.
+
+## 📋 Table of Contents
+
+- [🎯 What is Tikka?](#what-is-tikka)
+- [🚀 Key Features](#key-features)
+- [🏗️ How Tikka Works](#how-tikka-works)
+- [🔧 Technical Architecture](#technical-architecture)
+- [🔒 Metadata Integrity (metadata_hash)](#metadata-integrity-metadata_hash)
+- [🚀 Getting Started](#getting-started)
+- [🛠️ Development](#development)
+- [🤝 Contributing](#contributing)
+- [📚 Documentation](#documentation)
+- [📄 License](#license)
+- [🆘 Support](#support)
 
 ## 🚀 Key Features
 
@@ -132,20 +148,30 @@ pub fn get_tickets(... ) -> Vec<Address>;
 
 ```rust
 pub struct Raffle {
-    pub id: u64,
     pub creator: Address,
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
     pub payment_token: Address,
     pub prize_amount: i128,
+    pub prizes: Vec<u32>,
     pub tickets_sold: u32,
-    pub is_active: bool,
+    pub status: RaffleStatus,
     pub prize_deposited: bool,
-    pub prize_claimed: bool,
-    pub winner: Option<Address>,
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>,
+    pub randomness_source: RandomnessSource,
+    pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub referral_fee_bp: u32,
+    pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub finalized_at: Option<u64>,
+    pub winner_ticket_id: Option<u32>,
 }
 ```
 
