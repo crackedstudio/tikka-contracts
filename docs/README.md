@@ -44,6 +44,11 @@ Complete documentation of all error codes used in Tikka contracts. Includes erro
 **Audience:** Contributors, Integrators  
 Explains the Tikka protocol fee model, including fee collection points at ticket purchase and prize claim. Provides formulas, examples, and effective total fee calculations. Useful for understanding protocol economics and revenue distribution.
 
+### [env/README.md](env/README.md)
+
+**Audience:** Contributors, Operators  
+Single source of truth for every environment variable read across the Tikka monorepo. Covers oracle service variables (required, optional, and integration-test-only), deployment script variables, and a cross-reference table showing which variables are shared between services. Start here when setting up a local environment.
+
 ### [FAQ.md](FAQ.md)
 
 **Audience:** Contributors  
@@ -57,6 +62,7 @@ Migration guide for PR #426, which changed the factory contract storage from a `
 ## Recommended Reading Order for New Contributors
 
 1. **Start here:** [ARCHITECTURE.md](ARCHITECTURE.md) — Understand the big picture and component relationships
+1. **Environment setup:** [env/README.md](env/README.md) — Configure required environment variables before running anything
 1. **Development setup:** [FAQ.md](FAQ.md) — Review common setup issues before you encounter them
 1. **Deployment:** [DEPLOYMENT.md](DEPLOYMENT.md) — Learn how to build and deploy contracts
 1. **Core protocol:** [RANDOMNESS.md](RANDOMNESS.md) — Understand winner selection security

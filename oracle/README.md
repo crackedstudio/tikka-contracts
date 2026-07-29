@@ -6,22 +6,23 @@ This directory contains the off-chain oracle service for the Tikka Contracts. Th
 
 The oracle requires a secure keypair to sign reveal transactions. The `KeyService` handles loading and securing this keypair at runtime.
 
-### Required environment variables
+### Environment variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ORACLE_SECRET_KEY` | Yes | Oracle secret key (`S...`), 32-byte hex, or base64 seed |
-| `STELLAR_RPC_URL` | Yes | Soroban RPC endpoint |
-| `FACTORY_CONTRACT_ID` | Yes | Contract id that the listener subscribes to at startup |
-| `STELLAR_NETWORK_PASSPHRASE` | No | Network passphrase for transaction signing |
-| `RAFFLE_CONTRACT_ADDRESS` | Integration tests | Deployed raffle instance contract |
-| `RANDOMNESS_REQUEST_ID` | Integration tests | Pending randomness request id |
-| `RANDOMNESS_SEED` | No | Seed value for integration tests |
-| `POLL_INTERVAL_MS` | No | Event poller interval (default: `5000`) |
-| `ORACLE_POLL_INTERVAL_MS` | No | Backward-compatible poll interval alias |
-| `LOG_LEVEL` | No | Log verbosity (`info` by default) |
-| `ORACLE_CHECKPOINT_PATH` | No | Ledger checkpoint file for restart recovery |
-| `ORACLE_ADDRESS` | Event listener | This oracle's public key (`G...`) |
+> **Complete reference:** [`../docs/env/README.md`](../docs/env/README.md) — full table with defaults and descriptions for all oracle and deployment-script variables.
+
+Copy the example env file and fill in your values:
+
+```sh
+cp oracle/.env.example oracle/.env
+```
+
+**Quick summary** — required variables:
+
+| Variable | Description |
+|----------|-------------|
+| `ORACLE_SECRET_KEY` | Oracle secret key (`S...`), 32-byte hex, or base64 seed |
+| `STELLAR_RPC_URL` | Soroban RPC endpoint |
+| `FACTORY_CONTRACT_ID` | Contract id that the listener subscribes to at startup |
 
 ### Local Development (Environment Variables)
 
