@@ -120,6 +120,18 @@ pub struct RandomnessReceived {
 #[derive(Clone)]
 #[contractevent]
 #[soroban_sdk::contracttype]
+pub struct OracleSeedDelivered {
+    pub oracle: Address,
+    pub seed: u64,
+    pub request_id: u64,
+    pub current_count: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+#[soroban_sdk::contracttype]
 pub struct RaffleFinalized {
     pub raffle_id: Address,
     pub winners: Vec<Address>,

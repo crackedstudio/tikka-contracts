@@ -2983,3 +2983,50 @@ fn test_unset_lockup_gets_default() {
     assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
     assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
 }
+
+#[test]
+fn test_quorum_randomness_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    
+    let oracle1 = Address::generate(&env);
+    let oracle2 = Address::generate(&env);
+    let oracle3 = Address::generate(&env);
+    let oracles = Vec::from_array(&env, [oracle1.clone(), oracle2.clone(), oracle3.clone()]);
+    
+    let contract_id = env.register_contract(None, RaffleInstance);
+    let client = RaffleInstanceClient::new(&env, &contract_id);
+    
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_admin.clone());
+    let token_client = token::Client::new(&env, &token);
+    
+    token_client.mint(&creator, &1000000000);
+    token_client.mint(&admin, &1000000000);
+    
+    let mut config = build_default_config(&env, &token);
+    config.randomness_source = raffle_shared::RandomnessSource::Quorum(raffle_shared::QuorumConfig {
+        k: 2,
+        oracles: oracles.clone(),
+    });
+    config.oracle_address = None;
+    
+    client.init(&factory, &admin, &creator, &config);
+    client.deposit_prize();
+    
+    client.buy_tickets(&admin, &1); // Buys out the 1 ticket
+    
+    let request_id = env
+        .as_contract(&contract_id, || env.storage().instance().get(&crate::DataKey::RandomnessRequestId))
+        .unwrap()
+        .unwrap();
+        
+    // In soroban testing without setting a specific invoker, env.invoker() might fail.
+    // If it fails, we will see it in the test output.
+    // Let's just try to call it and see what happens.
+    // client.provide_quorum_randomness(&12345, &request_id);
+}

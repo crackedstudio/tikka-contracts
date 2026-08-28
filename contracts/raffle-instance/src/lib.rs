@@ -38,7 +38,7 @@ use self::randomness::{
 
 use crate::events::{
     CancelScheduled, ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn,
-    FeesWithdrawn, MetadataHashUpdated, OracleAddressUpdated, PrizeClaimed, PrizeDeposited,
+    FeesWithdrawn, MetadataHashUpdated, OracleAddressUpdated, OracleSeedDelivered, PrizeClaimed, PrizeDeposited,
     PrizeRefunded, ProtocolFeeUpdated, RaffleCancelled, RaffleCreated, RaffleFailed,
     RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
     RandomnessRequested, StorageWiped, SwapDeadlineUpdated, TicketNftMinted, TicketPurchased,

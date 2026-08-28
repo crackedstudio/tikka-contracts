@@ -789,6 +789,58 @@ Emitted when accidentally-sent tokens are rescued from a raffle instance.
 
 ---
 
+## OracleSeedDelivered
+
+Emitted when a quorum randomness oracle delivers its seed.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `oracle` | `Address` | Address of the oracle providing randomness |
+| `seed` | `u64` | Random seed value provided by the oracle |
+| `request_id` | `u64` | Oracle request identifier matching the original request |
+| `current_count` | `u32` | Number of seeds successfully submitted for this request |
+| `threshold` | `u32` | Threshold number of seeds required to finalize quorum |
+| `timestamp` | `u64` | Ledger timestamp when randomness was received |
+
+**Emitted by:** `provide_quorum_randomness`
+**When:** An oracle in a Quorum configuration successfully submits its seed.
+
+---
+
+## DustSwept
+
+Emitted when residual payment-token balance is swept to the treasury after a raffle is fully settled.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `swept_by` | `Address` | Address that initiated the sweep |
+| `token` | `Address` | Address of the swept token |
+| `treasury` | `Address` | Treasury address receiving the swept dust |
+| `amount` | `i128` | Amount of tokens swept |
+| `timestamp` | `u64` | Ledger timestamp of the sweep |
+
+**Emitted by:** `sweep_dust`
+**When:** After a raffle is fully settled (Claimed or Cancelled with no outstanding entitlements), any remaining balance is swept.
+
+---
+
+## PrizeSwept
+
+Emitted once per unclaimed winner when `sweep_unclaimed` runs after `claim_expiry_seconds` has elapsed since finalization.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `winner` | `Address` | Original winner address whose unclaimed prize was swept |
+| `tier_index` | `u32` | Prize tier index (0-based) |
+| `treasury` | `Address` | Treasury address that received the swept prize |
+| `amount` | `i128` | Amount transferred to treasury |
+| `swept_at` | `u64` | Ledger timestamp of the sweep |
+
+**Emitted by:** `sweep_unclaimed`
+**When:** Unclaimed prizes are swept after the claim expiry period.
+
+---
+
 ## AdminChanged
 
 Emitted when the raffle instance admin is changed.
