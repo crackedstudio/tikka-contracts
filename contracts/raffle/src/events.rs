@@ -1,3 +1,14 @@
+//! Factory-level `#[contractevent]` definitions.
+//!
+//! Every state-changing factory function emits at least one primary event;
+//! indexers consume these to reconstruct the full protocol history without
+//! needing to query storage keys.  Events in this module are scoped to the
+//! FACTORY contract only; per-raffle events live in
+//! `contracts/raffle-instance/src/events.rs`.
+//!
+//! Publishing pattern: each event struct has a `publish(&Env)` method that
+//! calls `env.events().publish(...)` with the appropriate topics.
+
 use raffle_shared::AdminOp;
 use soroban_sdk::{contractevent, Address, BytesN};
 

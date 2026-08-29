@@ -1,3 +1,19 @@
+//! Instance-level `#[contractevent]` definitions.
+//!
+//! These events cover the full per-raffle lifecycle: `RaffleCreated`,
+//! `PrizeDeposited`, `TicketPurchased`, `DrawTriggered`, `RaffleFinalized`,
+//! `WinnerDrawn`, `RaffleCancelled`, `PrizeClaimed`, `TicketRefunded`,
+//! `RaffleStatusChanged`, fee withdrawal, oracle migration, admin hooks,
+//! emergency withdraw, and the external randomness flow
+//! (`RandomnessRequested` / `RandomnessReceived` /
+//! `RandomnessFallbackTriggered`).
+//!
+//! Indexers reconstruct off-chain state exclusively from these events.
+//! Every state-changing handler in [`crate::lib`] emits at least one
+//! primary event plus an optional `RaffleStatusChanged` when the FSM
+//! transitions.  Factory-scoped events live in
+//! `contracts/raffle/src/events.rs`.
+
 use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
 use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 

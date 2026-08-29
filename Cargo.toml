@@ -5,6 +5,16 @@ members = [
 ]
 default-members = ["contracts/*"]
 
+[workspace.package]
+# Mirrors rust-toolchain.toml.  cargo honors `rust-version` in workspace
+# metadata to reject MSRV-violating dependency resolutions at the resolver
+# level.  Must be updated atomically with rust-toolchain.toml +
+# docs/DEPLOYMENT.md.
+rust-version = "1.83.0"
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
 [workspace.dependencies]
 soroban-sdk = "23"
 

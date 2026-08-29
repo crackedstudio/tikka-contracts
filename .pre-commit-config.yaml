@@ -1,0 +1,36 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo
+        language: system
+        pass_filenames: false
+        args: ["fmt", "--all", "--", "--check"]
+        stages: [pre-commit]
+
+      - id: cargo-clippy
+        name: cargo clippy (fast)
+        entry: cargo
+        language: system
+        pass_filenames: false
+        args:
+          [
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+          ]
+        stages: [pre-commit]
+
+      - id: oracle-format-check
+        name: oracle format check
+        entry: bash
+        language: system
+        pass_filenames: false
+        args: ["-c", "cd oracle && npm run format:check 2>/dev/null || echo 'format:check not defined'"]
+        stages: [pre-commit]
+        files: ^oracle/

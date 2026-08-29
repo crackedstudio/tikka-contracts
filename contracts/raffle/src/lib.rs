@@ -1,4 +1,18 @@
 #![no_std]
+//! RaffleFactory contract — singleton factory that deploys and manages every
+//! raffle instance on the network.
+//!
+//! Responsibilities:
+//! - Owns protocol admin, timelocked config changes, and the default fee/treasury.
+//! - Deploys new `raffle-instance` contracts via `env.deployer().deploy_v2(...)`
+//!   on `create_raffle`, and tracks the registry of all deployed instances.
+//! - Provides paginated enumeration, aggregate statistics (volume, unique
+//!   participants), and periodic state checkpoints for auditability.
+//! - Syncs admin and pause state down into individual instances, and cleans
+//!   up (wipes storage for) fully resolved old raffles.
+//!
+//! All factory-scoped events live in [`events`].  Storage semantics are
+//! documented in `docs/STORAGE.md` § "RaffleFactory".
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env,

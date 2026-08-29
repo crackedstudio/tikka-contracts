@@ -1,4 +1,19 @@
 #![cfg(test)]
+//! Dedicated integration tests for the raffle-instance contract.
+//!
+//! Coverage:
+//! - `test_oracle_fallback_with_ledger_delays` – External randomness timeout
+//!   fallback path with simulated ledger advancement.
+//! - `test_admin_updates_oracle_address` – `update_oracle_address` admin
+//!   migration hook.
+//! - `test_admin_sets_protocol_fee_before_sales` – `set_protocol_fee_bp`
+//!   before any tickets are sold.
+//! - `test_admin_withdraws_accumulated_fees` – end-to-end claim flow that
+//!   exercises the fee accumulator + `withdraw_fees` payout.
+//!
+//! More inline tests live in `lib.rs` and `randomness.rs`; per CONTRIBUTING
+//! rules those inline blocks should be migrated into this directory over
+//! time as `src/tests/<topic>.rs` files.
 
 use super::*;
 use soroban_sdk::{

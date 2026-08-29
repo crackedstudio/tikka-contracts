@@ -1,4 +1,28 @@
 #![no_std]
+//! Per-raffle instance contract.
+//!
+//! Every raffle created by the factory is a **separate deployed copy** of
+//! this crate.  Each instance owns its own raffle state (creator, prize,
+//! ticket list, winners, status FSM), its own storage keys (Instance +
+//! Persistent tiers), and its own balance of escrowed prize/fee tokens.
+//! This per-raffle isolation means:
+//!
+//! -   A bug in one raffle cannot bleed into another.
+//! -   Creator can `deposit_prize`, buyers `buy_tickets`, after the draw
+//!     window closes the creator `finalize_raffle` (optionally requesting
+//!     external VRF randomness), and winners `claim_prize` after a
+//!     configurable lockup window.
+//! -   A cancellable / refundable path is offered (`cancel_raffle`,
+//!     `refund_prize`, `refund_ticket`, `emergency_withdraw`) for failure
+//!     scenarios (min tickets not met, oracle timeout, abandoned raffles).
+//!
+//! Module layout within the crate:
+//! -   [`events`] – all `#[contractevent]` structs for the raffle lifecycle.
+//! -   [`randomness`] – winner selection strategy (PRNG / VRF-seeded) and
+//!     the `build_internal_seed` helper.
+//!
+//! Storage semantics are documented in `docs/STORAGE.md` §
+//! "RaffleInstance".  Errors are in `docs/ERRORS.md`.
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},

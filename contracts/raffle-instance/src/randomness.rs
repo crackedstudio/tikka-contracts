@@ -1,3 +1,27 @@
+//! Winner selection strategies for finalizing a raffle.
+//!
+//! Two paths are supported:
+//!
+//! 1. **Internal PRNG** ([`PrngWinnerSelection`]) – hashes ledger
+//!    timestamp, sequence, network id, raffle id, and ticket count into a
+//!    32-byte seed, then feeds it into `env.prng()` to sample indices.
+//!    Deterministic and on-chain verifiable, but **low-stakes only** — a
+//!    validator or block producer can bias the timestamp/sequence to
+//!    influence the result.
+//!
+//! 2. **External VRF** ([`OracleSeedWinnerSelection`]) – takes a single
+//!    verified u64 seed delivered via `provide_randomness` (the oracle
+//!    proof is checked inside the handler), then performs
+//!    rejection-sampling modulo-bias elimination to pick `winner_count`
+//!    independent indices.  This is the preferred path for high-value
+//!    draws.
+//!
+//! Both strategies implement [`WinnerSelectionStrategy`] so
+//! `do_finalize_with_seed` in the crate root is strategy-agnostic.
+//!
+//! See the module comment at the top of this file for the full security
+//! rationale on `build_internal_seed`.
+
 use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 
 // ============================================================================

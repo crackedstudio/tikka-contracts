@@ -1,4 +1,15 @@
 #![no_std]
+//! Shared types, enums, structs, and constants consumed by both the
+//! `raffle-factory` and `raffle-instance` crates.
+//!
+//! This crate is the single source of truth for anything that must stay in
+//! sync across the two contracts: raffle lifecycle statuses, randomness
+//! source selection, the `RaffleConfig` builder, pagination types, oracle
+//! client traits, and the shared `constants` module with every tunable
+//! numeric bound.  Do NOT duplicate a type in the two contract crates — if
+//! both sides need it, promote it here.
+
+pub mod constants;
 
 use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
 

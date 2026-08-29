@@ -1,0 +1,12 @@
+[toolchain]
+# Deterministic Rust toolchain pin for reproducible WASM builds.
+# ANY change to the channel / components / targets below MUST be accompanied
+# by a PR that records:
+#   1. The BEFORE toolchain version and AFTER toolchain version
+#   2. WASM binary sizes before vs after (make size-check output)
+#   3. `scripts/verify.sh` pass against a testnet deployment compiled with
+#      the new toolchain
+# See docs/DEPLOYMENT.md § "Toolchain upgrades" for the full process.
+channel = "1.83.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32v1-none"]

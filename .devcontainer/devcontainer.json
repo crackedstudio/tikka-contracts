@@ -1,0 +1,28 @@
+{
+    "name": "tikka-contracts",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "serayuzgur.crates",
+                "timonwong.shellcheck",
+                "dbaeumer.vscode-eslint",
+                "esbenp.prettier-vscode"
+            ]
+        }
+    },
+    "features": {},
+    "remoteUser": "vscode",
+    // The pinned Rust toolchain lives in rust-toolchain.toml (see Dockerfile).
+    // Do NOT set RUSTUP_TOOLCHAIN or "rust: {...}" in features here.
+    "containerEnv": {
+        "RUSTUP_TOOLCHAIN": "",
+        "CARGO_INCREMENTAL": "0"
+    },
+    "postCreateCommand": "rustc --version && cargo --version && echo '--- Active toolchain from rust-toolchain.toml ---' && rustup show active-toolchain"
+}
