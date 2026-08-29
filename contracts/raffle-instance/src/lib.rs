@@ -1,5 +1,5 @@
 #![no_std]
-#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
@@ -194,6 +194,9 @@ pub enum Error {
     DrawingAlreadyInProgress = 59,
     InvalidStatusForDrawingTransition = 60, // Note: This seems to be a copy-paste error in the original code.
     DrawingAlreadyComplete = 61,
+    DrawingNotStarted = 67,
+    OracleNotRegistered = 68,
+    DuplicateOracleSubmission = 69,
     InvalidEndTime = 62,
     InvalidAdminAddress = 63,
     RandomnessTooEarly = 64,
@@ -452,110 +455,11 @@ if config.randomness_source == RandomnessSource::External {
     /// aggregated via `aggregate_quorum_seeds` and the raffle is finalized.
     pub fn provide_quorum_randomness(
         env: Env,
+        oracle: Address,
         random_seed: u64,
         request_id: u64,
     ) -> Result<(), Error> {
-        let drawing_lock: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::DrawingLock)
-            .unwrap_or(false);
-        if !drawing_lock {
-            return Err(Error::DrawingAlreadyComplete);
-        }
-
-        let caller = env
-            .invoker()
-            .expect("provide_quorum_randomness: invoker required");
-        caller.require_auth();
-
-        let raffle = read_raffle(&env)?;
-
-        // Verify random seed context: request_id
-        let stored: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RandomnessRequestId)
-            .ok_or(Error::NoRandomnessRequest)?;
-        if stored != request_id {
-            return Err(Error::InvalidParameters);
-        }
-
-        // Extract the oracle list from the Quorum config.
-        let (k, oracles) = match &raffle.randomness_source {
-            RandomnessSource::Quorum(QuorumConfig { k, oracles }) => (*k, oracles.clone()),
-            _ => return Err(Error::InvalidParameters),
-        };
-
-        // Verify caller is a registered oracle.
-        let mut is_registered = false;
-        for i in 0..oracles.len() {
-            if let Some(addr) = oracles.get(i) {
-                if addr == caller {
-                    is_registered = true;
-                    break;
-                }
-            }
-        }
-        if !is_registered {
-            return Err(Error::OracleNotRegistered);
-        }
-
-        // Dedup: reject if this oracle already submitted.
-        if env.storage().persistent().has(&DataKey::QuorumSeed(caller.clone())) {
-            return Err(Error::DuplicateOracleSubmission);
-        }
-
-        // Store the seed.
-        env.storage()
-            .persistent()
-            .set(&DataKey::QuorumSeed(caller.clone()), &random_seed);
-
-        // Track submission order.
-        let mut submitted: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::QuorumSubmittedOracles)
-            .unwrap_or_else(|| Vec::new(&env));
-        submitted.push_back(caller.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::QuorumSubmittedOracles, &submitted);
-
-        let count = submitted.len() as u32;
-
-        // Emit delivery event.
-        OracleSeedDelivered {
-            oracle: caller.clone(),
-            seed: random_seed,
-            request_id,
-            current_count: count,
-            threshold: k,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
-
-        // Check if quorum reached.
-        if count >= k {
-            // Build the seed list from storage.
-            let mut seeds = Vec::new(&env);
-            for i in 0..submitted.len() {
-                if let Some(addr) = submitted.get(i) {
-                    if let Some(s) = env
-                        .storage()
-                        .persistent()
-                        .get::<_, u64>(&DataKey::QuorumSeed(addr.clone()))
-                    {
-                        seeds.push_back((addr.clone(), s));
-                    }
-                }
-            }
-
-            let aggregate = randomness::aggregate_quorum_seeds(&env, &seeds);
-            helpers::do_finalize_with_seed(&env, raffle, aggregate, RandomnessType::Vrf)?;
-        }
-
-        Ok(())
+        draw::provide_quorum_randomness(env, oracle, random_seed, request_id)
     }
 
     pub fn trigger_randomness_fallback(
