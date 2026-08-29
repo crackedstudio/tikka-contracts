@@ -193,6 +193,11 @@ pub enum DataKey {
     /// blocks `create_raffle`, leaving all other admin operations, reads, and
     /// any raffles already in flight unaffected.
     CreationPaused,
+    /// Reverse index: raffle Address → bool. Set to `true` for every instance
+    /// deployed by [`RaffleFactory::create_raffle`]. Used to authorise
+    /// `record_volume`, `track_participant` and `record_leaderboard_entry`
+    /// so only factory-deployed raffles can write protocol-wide state (#795).
+    IsFactoryRaffle(Address),
 }
 
 /// A read-only snapshot of key factory metrics returned by
@@ -286,6 +291,10 @@ pub enum ContractError {
     /// `set_creation_paused` (#611). Distinct from `ContractPaused`, which
     /// blocks the whole factory. Code 24.
     CreationPaused = 24,
+    /// `record_volume`, `track_participant` or `record_leaderboard_entry` was
+    /// called by an address that is not a raffle deployed by this factory.
+    /// Code 25.
+    CallerNotRegisteredRaffle = 25,
 }
 
 pub const LEADERBOARD_CAP: u32 = 10;
@@ -299,6 +308,23 @@ raffle_shared::impl_require_not_paused!(
     ContractError::ContractPaused,
     require_factory_not_paused
 );
+
+/// Require that the caller of the current contract is a raffle instance that
+/// this factory deployed. Used to authorise `record_volume`,
+/// `track_participant` and `record_leaderboard_entry` so arbitrary addresses
+/// cannot write protocol-wide state (#795).
+fn require_factory_raffle(env: &Env) -> Result<(), ContractError> {
+    let caller = env.caller();
+    let is_factory_raffle: bool = env
+        .storage()
+        .persistent()
+        .get(&DataKey::IsFactoryRaffle(caller))
+        .unwrap_or(false);
+    if !is_factory_raffle {
+        return Err(ContractError::CallerNotRegisteredRaffle);
+    }
+    Ok(())
+}
 
 fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
     if raffle_count == 0 || !raffle_count.is_multiple_of(CHECKPOINT_INTERVAL) {
@@ -440,6 +466,11 @@ fn create_raffle_internal(
     env.storage()
         .persistent()
         .set(&DataKey::RaffleById(stable_id), &raffle_address);
+    // Reverse index so the factory can authorise bookkeeping calls from
+    // instances it deployed (#795).
+    env.storage()
+        .persistent()
+        .set(&DataKey::IsFactoryRaffle(raffle_address.clone()), &true);
     env.storage()
         .persistent()
         .set(&DataKey::NextRaffleId, &(stable_id.saturating_add(1)));
@@ -1289,6 +1320,7 @@ impl RaffleFactory {
     /// - [`ContractError::ArithmeticOverflow`] — adding `amount` to the
     ///   current total would exceed `i128::MAX`.
     pub fn record_volume(env: Env, asset: Address, amount: i128) -> Result<(), ContractError> {
+        require_factory_raffle(&env)?;
         let total_volume: i128 = env
             .storage()
             .persistent()
@@ -1631,6 +1663,7 @@ impl RaffleFactory {
     }
 
     pub fn track_participant(env: Env, participant: Address) -> Result<(), ContractError> {
+        require_factory_raffle(&env)?;
         participant.require_auth();
 
         let key = DataKey::UniqueParticipant(participant.clone());
@@ -1914,6 +1947,7 @@ impl RaffleFactory {
         prize_amount: i128,
         total_volume: i128,
     ) -> Result<(), ContractError> {
+        require_factory_raffle(&env)?;
         raffle_address.require_auth();
         Self::upsert_leaderboard(&env, &DataKey::TopByTickets, raffle_address.clone(), tickets_sold);
         Self::upsert_leaderboard(&env, &DataKey::TopByPrize, raffle_address.clone(), prize_amount);
