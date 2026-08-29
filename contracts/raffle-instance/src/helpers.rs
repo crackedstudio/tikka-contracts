@@ -403,6 +403,7 @@ pub(crate) fn do_finalize_with_seed(
     .publish(env);
 
     bump_raffle_ttl(env, total_tickets);
+    record_leaderboard(env, &raffle);
     Ok(())
 }
 
@@ -413,7 +414,19 @@ fn record_leaderboard(env: &Env, raffle: &Raffle) {
     };
     let raffle_id = env.current_contract_address();
     let tickets = raffle.tickets_sold as i128;
-    let volume = raffle.ticket_price.saturating_mul(tickets);
+    
+    let max_tickets = raffle.max_tickets as i128;
+    let early_bird_limit = max_tickets * (raffle.early_bird_ticket_percentage as i128) / 100;
+    let discount_price = raffle.ticket_price - (raffle.ticket_price * (raffle.early_bird_discount_bp as i128) / 10000);
+    
+    let volume = if tickets <= early_bird_limit {
+        discount_price.saturating_mul(tickets)
+    } else {
+        let early_volume = discount_price.saturating_mul(early_bird_limit);
+        let regular_tickets = tickets - early_bird_limit;
+        let regular_volume = raffle.ticket_price.saturating_mul(regular_tickets);
+        early_volume.saturating_add(regular_volume)
+    };
     let args: Vec<Val> = (
         raffle_id.clone(),
         tickets,
