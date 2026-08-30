@@ -2644,6 +2644,63 @@ fn init_accepts_max_prize_amount_and_rejects_above_it() {
 }
 
 #[test]
+fn init_accepts_max_internal_randomness_prize_and_rejects_above_it() {
+    let (env, contract_id, factory, admin, creator, payment_token) = init_bounds_env();
+    let client = ContractClient::new(&env, &contract_id);
+    let prizes = soroban_sdk::vec![&env, 10000u32];
+
+    let config = init_bounds_config(
+        &env,
+        &payment_token,
+        String::from_str(&env, "max internal randomness prize"),
+        5,
+        MIN_TICKET_PRICE,
+        MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT,
+        prizes.clone(),
+    );
+    client.init(&factory, &admin, &creator, &config);
+
+    let invalid = init_bounds_config(
+        &env,
+        &payment_token,
+        String::from_str(&env, "max internal randomness prize"),
+        5,
+        MIN_TICKET_PRICE,
+        MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT + 1,
+        prizes,
+    );
+    assert_eq!(
+        client.try_init(&factory, &admin, &creator, &invalid),
+        Err(Ok(Error::RandomnessSourceTooWeakForPrize))
+    );
+}
+
+#[test]
+fn max_prize_amount_still_allowed_for_non_internal_randomness_source() {
+    let (env, contract_id, factory, admin, creator, payment_token) = init_bounds_env();
+    let client = ContractClient::new(&env, &contract_id);
+    let prizes = soroban_sdk::vec![&env, 10000u32];
+    let oracle = Address::generate(&env);
+
+    // Same prize_amount that would be rejected under Internal must succeed
+    // under External, proving the cap is Internal-specific and not a
+    // regression of the general MAX_PRIZE_AMOUNT ceiling.
+    let mut config = init_bounds_config(
+        &env,
+        &payment_token,
+        String::from_str(&env, "external high prize"),
+        5,
+        MIN_TICKET_PRICE,
+        MAX_PRIZE_AMOUNT,
+        prizes,
+    );
+    config.randomness_source = RandomnessSource::External;
+    config.oracle_address = Some(oracle);
+
+    client.init(&factory, &admin, &creator, &config);
+}
+
+#[test]
 fn init_accepts_max_description_length_and_rejects_above_it() {
     let (env, contract_id, factory, admin, creator, payment_token) = init_bounds_env();
     let client = ContractClient::new(&env, &contract_id);

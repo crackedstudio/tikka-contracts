@@ -12,8 +12,8 @@ use soroban_sdk::testutils::Address as _;
 mod events;
 
 use raffle_shared::{
-    effective_limit, AdminOp, FairnessData, PageResultRaffles, PaginationParams, RaffleConfig,
-    RecurringRaffleConfig,
+    effective_limit, exceeds_internal_randomness_cap, AdminOp, FairnessData, PageResultRaffles,
+    PaginationParams, RaffleConfig, RecurringRaffleConfig,
 };
 
 use raffle_shared::constants::{
@@ -286,6 +286,10 @@ pub enum ContractError {
     /// `set_creation_paused` (#611). Distinct from `ContractPaused`, which
     /// blocks the whole factory. Code 24.
     CreationPaused = 24,
+    /// `create_raffle` was called with `RandomnessSource::Internal` and a
+    /// `prize_amount` above `MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`. Rejected
+    /// before the instance WASM is deployed. See docs/RANDOMNESS.md. (#773)
+    RandomnessSourceTooWeakForPrize = 25,
 }
 
 pub const LEADERBOARD_CAP: u32 = 10;
@@ -973,6 +977,10 @@ impl RaffleFactory {
         let mut final_config = config;
         final_config.protocol_fee_bp = protocol_fee_bp;
         final_config.treasury_address = Some(treasury);
+
+        if exceeds_internal_randomness_cap(&final_config.randomness_source, final_config.prize_amount) {
+            return Err(ContractError::RandomnessSourceTooWeakForPrize);
+        }
 
         create_raffle_internal(&env, creator, final_config)
     }
@@ -2161,6 +2169,7 @@ mod tests {
 
     use super::*;
     use raffle_shared::{RandomnessSource, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT};
+    use raffle_shared::constants::MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT;
     use soroban_sdk::{String, Vec as SdkVec, Val, IntoVal, Symbol};
 
     pub fn assert_event<T: IntoVal<Env, Val>>(
@@ -3351,6 +3360,45 @@ mod tests {
         // 3. Advance 1 more second (60 total) — the window has elapsed, succeeds.
         env.ledger().set_timestamp(1_000 + 60);
         client.create_raffle(&creator, &rate_limit_config(&env, &token, "d3"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal-randomness prize-cap tests (#773)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn create_raffle_rejects_internal_randomness_above_prize_cap() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _treasury) = setup_factory(&env);
+        let creator = Address::generate(&env);
+        let token = make_token(&env);
+
+        let mut config = rate_limit_config(&env, &token, "cap-over");
+        config.prize_amount = MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT + 1;
+
+        assert_eq!(
+            client.try_create_raffle(&creator, &config),
+            Err(Ok(ContractError::RandomnessSourceTooWeakForPrize))
+        );
+    }
+
+    #[test]
+    fn create_raffle_accepts_internal_randomness_at_prize_cap_boundary() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (client, _admin, _treasury) = setup_factory(&env);
+        let creator = Address::generate(&env);
+        let token = make_token(&env);
+
+        let mut config = rate_limit_config(&env, &token, "cap-boundary");
+        config.prize_amount = MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT;
+
+        client.create_raffle(&creator, &config);
     }
 
     // -----------------------------------------------------------------------
