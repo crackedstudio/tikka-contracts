@@ -392,6 +392,17 @@ pub fn effective_limit(requested: u32) -> u32 {
     }
 }
 
+/// Returns `true` when `randomness_source` is `Internal` and `prize_amount`
+/// exceeds [`constants::MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`]. Callers map a
+/// `true` result to their own dedicated error variant. (#773)
+pub fn exceeds_internal_randomness_cap(
+    randomness_source: &RandomnessSource,
+    prize_amount: i128,
+) -> bool {
+    *randomness_source == RandomnessSource::Internal
+        && prize_amount > constants::MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT
+}
+
 /// Oracle randomness request payload sent to an oracle contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -623,6 +634,38 @@ mod effective_limit_tests {
     #[test]
     fn u32_max_clamps_to_max() {
         assert_eq!(effective_limit(u32::MAX), MAX_PAGE_LIMIT);
+    }
+}
+
+#[cfg(test)]
+mod exceeds_internal_randomness_cap_tests {
+    use super::{
+        constants::MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT, exceeds_internal_randomness_cap,
+        RandomnessSource,
+    };
+
+    #[test]
+    fn internal_at_cap_boundary_is_allowed() {
+        assert!(!exceeds_internal_randomness_cap(
+            &RandomnessSource::Internal,
+            MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT
+        ));
+    }
+
+    #[test]
+    fn internal_above_cap_is_rejected() {
+        assert!(exceeds_internal_randomness_cap(
+            &RandomnessSource::Internal,
+            MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT + 1
+        ));
+    }
+
+    #[test]
+    fn external_above_cap_is_unaffected() {
+        assert!(!exceeds_internal_randomness_cap(
+            &RandomnessSource::External,
+            MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT + 1
+        ));
     }
 }
 

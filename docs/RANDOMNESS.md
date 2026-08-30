@@ -11,7 +11,7 @@ verified deployment feature.
 
 | Mode | Trust assumption | Who can influence outcome? | Extra cost / ops | Recommended prize scale |
 |---|---|---|---|---|
-| **Internal** | Honest-enough validators + unpredictable timing | Finalizer timing; validators biasing ledger timestamp/sequence | Lowest — single finalize tx | Low-stakes (README guide: **≲ ~500 XLM** prize) |
+| **Internal** | Honest-enough validators + unpredictable timing | Finalizer timing; validators biasing ledger timestamp/sequence | Lowest — single finalize tx | **Enforced ≤ `MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`** (5e9 stroops ≈ 500 XLM) — see §1 |
 | **External** | Honest oracle key + live oracle service | Oracle (bounded by Ed25519 proof over request); timeout fallback | Oracle hosting + callback tx; possible fallback tx | Medium / high-stakes |
 | **CommitReveal** | Enough buyers submit unpredictable commits | Buyers who commit; last-mover / withholding risks; zero-commit → Internal fallback | Per-ticket `submit_commit` txs | Medium-stakes when buyers are engaged |
 | **Quorum** | At least 1 honest oracle out of k-of-n delivered | Single oracle cannot bias outcome; requires k-of-n collusion to manipulate | Multi-oracle hosting + k callback txs | High-stakes / large treasuries |
@@ -56,6 +56,26 @@ One successful `finalize_raffle` (plus prior ticket txs). No oracle.
 
 Low-stakes community raffles, demos, and tests. **Do not** rely on Internal for large treasuries or adversarial settings.
 
+### Enforced prize cap (#773)
+
+`RaffleConfig.prize_amount` is rejected at both `raffle-instance::init` and
+`raffle-factory::create_raffle` when `randomness_source == Internal` and
+`prize_amount > MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`
+(`contracts/raffle-shared/src/constants.rs`, currently `5_000_000_000`
+stroops ≈ 500 XLM). This turns the previous "≲ ~500 XLM" policy guidance
+below into an on-chain enforced limit — instance `init` returns
+`Error::RandomnessSourceTooWeakForPrize`, and the factory returns
+`ContractError::RandomnessSourceTooWeakForPrize` *before* deploying the
+raffle instance WASM, saving the creator deployment cost. Choose `External`,
+`CommitReveal`, or `Quorum` for anything above this cap.
+
+**Note (CommitReveal gap):** `CommitReveal` silently falls back to the same
+predictable seed derivation as `Internal` when zero commits exist at
+finalize (see §3 below). This cap is scoped to `RandomnessSource::Internal`
+only and does **not** currently protect a high-value `CommitReveal` raffle
+that receives zero commits — that gap is tracked as a candidate follow-up
+issue, not addressed here.
+
 ---
 
 ## 2. External oracle (`RandomnessSource::External = 1`)
@@ -80,6 +100,14 @@ Low-stakes community raffles, demos, and tests. **Do not** rely on Internal for 
 ### Timeout / fallback (`ORACLE_TIMEOUT_LEDGERS = 200`)
 
 Defined in `raffle-shared::constants` and the instance crate (~**200 ledgers ≈ 17 minutes** at 5s/ledger).
+
+A **minimum** delay also applies before a submitted VRF response is
+accepted: `provide_randomness` rejects with `Error::RandomnessTooEarly` if
+called before `request_ledger + RANDOMNESS_MIN_DELAY_LEDGERS` (10 ledgers)
+has elapsed, using the same `RandomnessRequestLedger` value set when the
+request was made. This does not apply to `Quorum` submissions or to
+`Internal`, whose draw is atomic (transition-to-drawing and finalize happen
+in the same transaction, so there is no second phase to delay).
 
 After `request_ledger + 200`:
 
@@ -176,11 +204,14 @@ If fewer than $k$ oracles deliver valid seeds before `request_ledger + 200`:
 
 ## Guidance thresholds
 
-These are **policy recommendations** aligned with README / code comments — not on-chain enforced limits:
+These are **policy recommendations** aligned with README / code comments.
+The Internal row below is now also an **on-chain enforced limit**
+(`MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`); the other rows remain
+recommendations only:
 
 | Prize / risk profile | Suggested mode |
 |---|---|
-| Demo, tiny rewards, trusted community (≲ ~500 XLM) | **Internal** |
+| Demo, tiny rewards, trusted community (**enforced ≤ ~500 XLM for Internal**) | **Internal** |
 | Meaningful value, engaged ticket buyers | **CommitReveal** (+ document commit UX) |
 | Large prizes, public adversarial setting, institutional | **External** (+ monitored oracle, tested fallback) |
 
@@ -197,6 +228,7 @@ Also consider:
 | Mode | Primary failure mode | Protocol response |
 |---|---|---|
 | Internal | Biased finalize timing | None (inherent) |
+| Internal | `prize_amount` above `MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT` | Rejected at `init`/`create_raffle` (`RandomnessSourceTooWeakForPrize`) |
 | External | Oracle silent | After 200 ledgers: refund cancel **or** Internal fallback |
 | External | Wrong `request_id` / bad proof | Tx rejects (`InvalidParameters` / crypto fail) |
 | CommitReveal | No commits | Internal PRNG fallback |
@@ -211,6 +243,7 @@ Also consider:
 |---|---|
 | Enum | `contracts/raffle-shared/src/lib.rs` → `RandomnessSource` |
 | Timeout constant | `contracts/raffle-shared/src/constants.rs` → `ORACLE_TIMEOUT_LEDGERS` |
+| Internal prize cap | `contracts/raffle-shared/src/constants.rs` → `MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`; `contracts/raffle-shared/src/lib.rs` → `exceeds_internal_randomness_cap` |
 | Seed + strategies | `contracts/raffle-instance/src/randomness.rs` |
 | Finalize / oracle / fallback | `contracts/raffle-instance/src/draw.rs` |
 | Commits | `contracts/raffle-instance/src/tickets.rs` → `submit_commit` |

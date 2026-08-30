@@ -24,12 +24,12 @@ pub(crate) use helpers::do_finalize_with_seed;
 use raffle_shared::{
     constants::{
         DEFAULT_CLAIM_LOCKUP_SECONDS, DEFAULT_SWAP_DEADLINE_SECONDS, EMERGENCY_WITHDRAW_DELAY_SECONDS,
-        MAX_CLAIM_LOCKUP_SECONDS, MAX_DESCRIPTION_LENGTH, MAX_PRIZES, MAX_PRIZE_AMOUNT,
-        MAX_PROTOCOL_FEE_BP, MAX_SWAP_DEADLINE_SECONDS, MAX_TICKETS_LIMIT, MIN_TICKET_PRICE,
-        ORACLE_TIMEOUT_LEDGERS,
+        MAX_CLAIM_LOCKUP_SECONDS, MAX_DESCRIPTION_LENGTH, MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT,
+        MAX_PRIZES, MAX_PRIZE_AMOUNT, MAX_PROTOCOL_FEE_BP, MAX_SWAP_DEADLINE_SECONDS,
+        MAX_TICKETS_LIMIT, MIN_TICKET_PRICE, ORACLE_TIMEOUT_LEDGERS,
     },
-    CancelReason, FailureReason, FairnessData, QuorumConfig, RaffleConfig, RaffleStatus,
-    RandomnessSource, RandomnessType, Ticket, Winner,
+    exceeds_internal_randomness_cap, CancelReason, FailureReason, FairnessData, QuorumConfig,
+    RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType, Ticket, Winner,
 };
 
 use self::randomness::{
@@ -198,6 +198,11 @@ pub enum Error {
     RandomnessTooEarly = 64,
     CancelTimelockActive = 65,
     CancelNotScheduled = 66,
+    /// `init` was called with `RandomnessSource::Internal` and a
+    /// `prize_amount` above `MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT`. Internal
+    /// randomness is deterministic/predictable on-chain and unsafe for
+    /// high-value raffles. See docs/RANDOMNESS.md. (#773)
+    RandomnessSourceTooWeakForPrize = 67,
 }
 
 #[contractimpl]
@@ -249,6 +254,9 @@ impl Contract {
         }
         if config.prize_amount > MAX_PRIZE_AMOUNT {
             return Err(Error::InvalidParameters);
+        }
+        if exceeds_internal_randomness_cap(&config.randomness_source, config.prize_amount) {
+            return Err(Error::RandomnessSourceTooWeakForPrize);
         }
         if config.prizes.is_empty() {
             return Err(Error::InvalidParameters);
