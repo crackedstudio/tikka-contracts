@@ -317,21 +317,33 @@ pub(crate) fn do_finalize_with_seed(
     }
 
     let selector = OracleSeedWinnerSelection::new(seed);
-    let winning_ticket_ids =
+    // `winning_indices` holds zero-based indices into the ticket list, used
+    // internally for winner selection and stored verbatim in FairnessMetadata
+    // so off-chain verifiers can replay the draw.  Ticket IDs are 1-indexed,
+    // so every public-facing field (events, attestation) converts with `+ 1`.
+    let winning_indices =
         selector.select_winner_indices(env, total_tickets, raffle.prizes.len());
     let mut winners = Vec::new(env);
+    // 1-indexed ticket IDs emitted in events and stored in RaffleFinalized.
+    let mut winning_ticket_ids_1indexed: Vec<u32> = Vec::new(env);
 
-    for i in 0..winning_ticket_ids.len() {
-        let mut idx = winning_ticket_ids.get(i).ok_or(Error::InvalidIndex)?;
+    for i in 0..winning_indices.len() {
+        let mut idx = winning_indices.get(i).ok_or(Error::InvalidIndex)?;
         if raffle.unique_winners {
             idx = resolve_unique_winner(env, seed, i as u32, total_tickets, &winners, idx);
-            winning_ticket_ids.set(i, idx);
+            winning_indices.set(i, idx);
         }
-        let winner = get_ticket_owner(env, idx + 1).ok_or(Error::TicketNotFound)?;
+        // Tickets are 1-indexed: ticket_id = zero-based idx + 1.
+        let ticket_id = idx + 1;
+        let winner = get_ticket_owner(env, ticket_id).ok_or(Error::TicketNotFound)?;
         winners.push_back(winner.clone());
+        winning_ticket_ids_1indexed.push_back(ticket_id);
         WinnerDrawn {
             winner,
-            ticket_id: idx,
+            // Emit the 1-indexed ticket ID, matching the ID under which the
+            // ticket was issued and stored.  (Pre-fix this was `idx`, the
+            // zero-based index — off by one from the real ticket ID.)
+            ticket_id,
             tier_index: i,
             timestamp: env.ledger().timestamp(),
         }
@@ -348,18 +360,9 @@ pub(crate) fn do_finalize_with_seed(
         &FairnessMetadata {
             seed,
             randomness_source: raffle.randomness_source.clone(),
-            winning_ticket_indices: winning_ticket_ids.clone(),
-            draw_timestamp: env.ledger().timestamp(),
-            draw_sequence: env.ledger().sequence(),
-        },
-    );
-
-    env.storage().persistent().set(
-        &DataKey::RandomnessSeed,
-        &FairnessMetadata {
-            seed,
-            randomness_source: raffle.randomness_source.clone(),
-            winning_ticket_indices: winning_ticket_ids.clone(),
+            // FairnessMetadata intentionally stores zero-based indices so
+            // off-chain verifiers can replay winner selection deterministically.
+            winning_ticket_indices: winning_indices.clone(),
             draw_timestamp: env.ledger().timestamp(),
             draw_sequence: env.ledger().sequence(),
             unique_winners: raffle.unique_winners,
@@ -391,11 +394,14 @@ pub(crate) fn do_finalize_with_seed(
     RaffleFinalized {
         raffle_id: env.current_contract_address(),
         winners,
-        winning_ticket_ids,
+        // winning_ticket_ids carries 1-indexed ticket IDs, consistent with
+        // WinnerDrawn.ticket_id and the ticket issuance convention.
+        winning_ticket_ids: winning_ticket_ids_1indexed,
         total_tickets_sold: raffle.tickets_sold,
         randomness_source: raffle.randomness_source.clone(),
         randomness_type,
         finalized_at: env.ledger().timestamp(),
+        unique_winners: raffle.unique_winners,
     }
     .publish(env);
 
