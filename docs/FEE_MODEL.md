@@ -1,16 +1,15 @@
 # Tikka Protocol Fee Model
 
-## Fee Collection Point
+## Fee Collection & Accounting Model (Pull Model)
+
+Tikka smart contracts use a **Pull Model** for protocol fee collection:
+1. **Accrual at Collection Time:** Protocol fees collected during ticket purchases or prize claims are accumulated in instance storage under `DataKey::AccumulatedFees`. Fees are **not** immediately transferred to the treasury at purchase/claim time.
+2. **Pull Withdrawal:** The admin pulls accrued protocol fees to a designated recipient/treasury using `withdraw_fees` once the raffle is `Finalized` or `Claimed`.
 
 ### At Ticket Purchase
-- **Formula:** `(ticket_price × protocol_fee_bp + 9999) / 10000` per ticket (ceiling division)
-- **Recipient:** Treasury address
-- **Payer:** Ticket buyer (contract retains less of the total price)
-- **Rounding Rule:** Always round up in the protocol's favor. Any dust is absorbed by the payer.
-- **Example:** 2.5% fee on 100 XLM ticket = 2.5 XLM to treasury, 97.5 XLM to contract
-
-Prize claims do not currently charge a protocol fee. The `platform_fee` field
-in `PrizeClaimed` is therefore zero in the implemented claim path.
+- **Formula:** `(total_price × protocol_fee_bp) / 10000`
+- **Accounting:** Added to `AccumulatedFees` in contract storage.
+- **Payer:** Ticket buyer (fee is included in total ticket cost).
 
 ### Tier Prize Allocation
 - **Formula:** `prize_amount × tier_basis_points / 10000` for every tier except the final tier.
@@ -21,6 +20,7 @@ in `PrizeClaimed` is therefore zero in the implemented claim path.
 
 For a raffle with protocol_fee_bp = 250 (2.5%), ticket_price = 100 XLM, and 10 tickets:
 
-- Ticket fees: 10 × 2.5 XLM = 25 XLM
+- Ticket fees accrued: 10 × 2.5 XLM = 25 XLM (stored in `AccumulatedFees`)
 - Prize claim fee: 0 XLM
-- **Total protocol revenue: 25 XLM**
+- **Total protocol revenue available for `withdraw_fees`: 25 XLM**
+
