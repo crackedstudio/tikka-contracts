@@ -117,12 +117,27 @@ pub struct RandomnessReceived {
     pub timestamp: u64,
 }
 
+/// Emitted when the raffle is finalized with all winners selected.
+///
+/// ## Ticket-ID convention
+///
+/// `winning_ticket_ids` contains **1-indexed ticket IDs** — one per prize
+/// tier, in prize-tier order, parallel to `winners`.  These IDs match
+/// `TicketPurchased.ticket_ids` and `WinnerDrawn.ticket_id`, and can be used
+/// directly as `DataKey::Ticket(id)` storage keys for independent verification.
+///
+/// Internal draw machinery uses zero-based indices for winner selection (stored
+/// in `FairnessMetadata.winning_ticket_indices` for deterministic replay), but
+/// this public-facing event always presents 1-indexed IDs.
 #[derive(Clone)]
 #[contractevent]
 #[soroban_sdk::contracttype]
 pub struct RaffleFinalized {
     pub raffle_id: Address,
     pub winners: Vec<Address>,
+    /// 1-indexed ticket IDs for each winning tier, in prize-tier order,
+    /// parallel to `winners`.  Index 0 is the first-tier winner's ticket ID,
+    /// index 1 is the second-tier winner's ticket ID, and so on.
     pub winning_ticket_ids: Vec<u32>,
     pub total_tickets_sold: u32,
     pub randomness_source: RandomnessSource,
@@ -131,12 +146,31 @@ pub struct RaffleFinalized {
     pub unique_winners: bool,
 }
 
+/// Emitted for each winner drawn during finalization (one event per prize tier).
+///
+/// ## Ticket-ID convention
+///
+/// All numeric ticket fields in this event use **1-indexed ticket IDs**,
+/// matching the IDs under which tickets are stored and issued to buyers
+/// (see `tickets.rs`: "Tickets are numbered starting at 1").
+///
+/// `ticket_id` is **not** a zero-based array index — it is the exact ticket
+/// number that appears in `TicketPurchased.ticket_ids` for the winning buyer.
+/// The on-chain lookup that resolves this ticket to its owner also uses the
+/// 1-indexed ID (`DataKey::Ticket(ticket_id)`), so this value can be used
+/// directly as a storage key for independent verification.
 #[derive(Clone)]
 #[contractevent]
 #[soroban_sdk::contracttype]
 pub struct WinnerDrawn {
     pub winner: Address,
+    /// 1-indexed ticket ID of the winning ticket.
+    ///
+    /// This matches the IDs emitted in `TicketPurchased.ticket_ids` and
+    /// stored under `DataKey::Ticket(ticket_id)`.  It is **not** a
+    /// zero-based index.
     pub ticket_id: u32,
+    /// Prize tier index (0-based, matching the `prizes` array from `RaffleCreated`).
     pub tier_index: u32,
     pub timestamp: u64,
 }

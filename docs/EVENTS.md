@@ -17,6 +17,37 @@ Where:
 
 ---
 
+## Ticket ID vs. Ticket Index Convention
+
+Tickets in Tikka are **numbered starting at 1** (1-indexed). The first ticket
+sold is ticket ID `1`, the second is `2`, and so on up to `max_tickets`.
+
+This document uses the following naming convention throughout — and the same
+names are used in the contract source — to make the distinction unambiguous:
+
+| Term | Range | Where used |
+|------|-------|------------|
+| **ticket ID** | `1 … tickets_sold` | All public-facing events and storage keys |
+| **ticket index** | `0 … tickets_sold - 1` | Internal winner-selection algorithm only |
+
+Concretely:
+
+- `TicketPurchased.ticket_ids` — **1-indexed ticket IDs**.
+- `WinnerDrawn.ticket_id` — **1-indexed ticket ID** of the winning ticket.
+- `RaffleFinalized.winning_ticket_ids` — **1-indexed ticket IDs**, parallel to
+  `winners`.
+- `FairnessData.winning_ticket_indices` — **zero-based indices** used
+  internally by the winner-selection algorithm and stored in `FairnessMetadata`
+  for deterministic off-chain replay.  These are *not* ticket IDs; they are
+  offsets into the `[1 … tickets_sold]` range, i.e. `ticket_id = index + 1`.
+
+A `ticket_id` field always names a ticket that exists in storage under
+`DataKey::Ticket(ticket_id)` and appears in `TicketPurchased.ticket_ids`.  A
+`ticket_index` (or `winning_ticket_indices`) is an off-by-one offset that must
+be converted with `+1` before querying storage or comparing with event data.
+
+---
+
 # Factory Events
 
 ## FactoryInitialized
@@ -540,7 +571,7 @@ Emitted when the raffle is finalized with winners selected.
 |-------|------|-------------|
 | `raffle_id` | `Address` | Address of the raffle instance |
 | `winners` | `Vec<Address>` | Addresses of the winners, in order of prize tiers |
-| `winning_ticket_ids` | `Vec<u32>` | Ticket IDs selected for each prize tier (parallel to `winners`) |
+| `winning_ticket_ids` | `Vec<u32>` | **1-indexed ticket IDs** selected for each prize tier (parallel to `winners`). Use these IDs to look up tickets in storage or correlate with `TicketPurchased.ticket_ids`. These are ticket IDs, not zero-based indices — see [Ticket ID vs. Ticket Index Convention](#ticket-id-vs-ticket-index-convention). |
 | `total_tickets_sold` | `u32` | Total tickets sold in this raffle |
 | `randomness_source` | `RandomnessSource` | Randomness channel used: `Internal = 0`, `External = 1`, `CommitReveal = 2` |
 | `randomness_type` | `RandomnessType` | Exact draw method: `Prng = 0`, `Vrf = 1`, `Fallback = 2` |
@@ -558,7 +589,7 @@ Emitted for each winner drawn during finalization (one event per tier).
 | Field | Type | Description |
 |-------|------|-------------|
 | `winner` | `Address` | Address of the winning participant |
-| `ticket_id` | `u32` | ID of the winning ticket |
+| `ticket_id` | `u32` | **1-indexed ticket ID** of the winning ticket. Matches the IDs in `TicketPurchased.ticket_ids` and is the storage key `DataKey::Ticket(ticket_id)`. This is a ticket ID, not a zero-based index — see [Ticket ID vs. Ticket Index Convention](#ticket-id-vs-ticket-index-convention). |
 | `tier_index` | `u32` | Prize tier index (0-based, in order of the `prizes` array from `RaffleCreated`) |
 | `timestamp` | `u64` | Ledger timestamp of the draw |
 
@@ -815,6 +846,7 @@ Emitted when the raffle instance admin is changed.
 1. **Fee Calculation**: Platform fees are calculated as `(amount * fee_bp) / 10000`.
 1. **Randomness Flow**: External randomness requires `RandomnessRequested` → `RandomnessReceived`; on timeout, `RandomnessFallbackTriggered` is emitted instead.
 1. **Dead-Code Events**: Events marked as dead code (never emitted in the current implementation) may be activated in future versions — indexers should handle them gracefully.
+1. **Ticket IDs are 1-indexed**: All `ticket_id` / `ticket_ids` fields in events are 1-indexed. The internal draw algorithm uses zero-based indices stored in `FairnessData.winning_ticket_indices`; those require `+1` before use as storage keys or comparison with event data. See [Ticket ID vs. Ticket Index Convention](#ticket-id-vs-ticket-index-convention).
 
 ## Event Emission Guarantees
 

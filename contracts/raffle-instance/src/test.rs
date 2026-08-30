@@ -2416,6 +2416,7 @@ fn test_init_claim_lockup_seconds_mid_range_succeeds() {
             randomness_source: RandomnessSource::Internal,
             randomness_type: raffle_shared::RandomnessType::PseudoRandom,
             finalized_at: env.ledger().timestamp(),
+            unique_winners: false,
         },
     );
     let finalized = client.get_raffle();
@@ -2982,4 +2983,161 @@ fn test_unset_lockup_gets_default() {
     // None should be resolved to the defaults
     assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
     assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
+}
+
+/// Regression test for #769: `WinnerDrawn.ticket_id` must be 1-indexed.
+///
+/// Before the fix, `do_finalize_with_seed` emitted `idx` (zero-based) instead
+/// of `idx + 1` (the actual 1-indexed ticket ID).  This meant the event named
+/// ticket 0 (which never exists) when the first ticket won, and named ticket
+/// `N-1` when ticket `N` won.
+///
+/// The test:
+/// 1. Creates a single-winner raffle and sells exactly one ticket to `buyer`.
+/// 2. Finalizes the raffle (internal PRNG selects ticket 1, the only ticket).
+/// 3. Asserts that `WinnerDrawn.ticket_id == 1` — the 1-indexed ID under which
+///    the ticket was issued and stored.
+/// 4. Asserts that `RaffleFinalized.winning_ticket_ids` also contains `[1]`.
+/// 5. Resolves the stored ticket for ID 1 and confirms the owner is `buyer`,
+///    proving the emitted ID can be used directly as a `DataKey::Ticket` key.
+#[test]
+fn winner_drawn_ticket_id_is_one_indexed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let payment_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token = StellarAssetClient::new(&env, &payment_token);
+    token.mint(&creator, &1_000_000_000);
+    token.mint(&buyer, &1_000_000_000);
+
+    // Single-winner raffle with one ticket sold (internal randomness).
+    let prize_amount = MIN_TICKET_PRICE * 10;
+    let config = RaffleConfig {
+        description: String::from_str(&env, "issue-769 regression"),
+        end_time: 0,
+        no_deadline: true,
+        max_tickets: 1,
+        max_tickets_per_tx: 1,
+        max_tickets_per_address: 0,
+        min_tickets: 1,
+        allow_multiple: false,
+        ticket_price: MIN_TICKET_PRICE,
+        payment_token: payment_token.clone(),
+        prize_amount,
+        prizes: soroban_sdk::vec![&env, 10_000u32],
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        unique_winners: false,
+        metadata_hash: BytesN::from_array(&env, &[0x76u8; 32]),
+        claim_lockup_seconds: Some(0),
+        swap_deadline_seconds: Some(0),
+        early_bird_ticket_percentage: 0,
+        early_bird_discount_bp: 0,
+        category: None,
+        bundles: soroban_sdk::Vec::new(&env),
+        prize_token: None,
+        nft_contract: None,
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+
+    // Remove the factory cross-contract call path so buy_tickets proceeds.
+    env.as_contract(&contract_id, || {
+        env.storage().instance().remove(&DataKey::Factory);
+    });
+
+    client.deposit_prize();
+
+    // Buy the single available ticket.  The returned value is the ticket ID.
+    let issued_ticket_id = client.buy_tickets(&buyer, &1);
+    // The first ticket must always be 1-indexed.
+    assert_eq!(issued_ticket_id, 1, "first ticket should have ID 1 (1-indexed)");
+
+    // Finalize — the only ticket (#1) must win.
+    client.finalize_raffle();
+
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Finalized);
+    assert_eq!(raffle.winners.len(), 1);
+    let winner_address = raffle.winners.get(0).unwrap();
+    assert_eq!(winner_address, buyer, "buyer of ticket 1 must be the winner");
+
+    // --- Inspect the emitted events ---
+    //
+    // do_finalize_with_seed emits, in order:
+    //   [n-3] WinnerDrawn   (one per prize tier)
+    //   [n-2] RaffleStatusChanged  (Drawing → Finalized)
+    //   [n-1] RaffleFinalized
+    let all_events = env.events().all();
+    let n = all_events.len();
+    assert!(n >= 3, "expected at least 3 events from finalization");
+
+    // --- WinnerDrawn: ticket_id must be 1 (not 0) ---
+    let winner_drawn_event = all_events.get(n as u32 - 3).unwrap();
+    assert_eq!(
+        &winner_drawn_event.0, &client.address,
+        "WinnerDrawn emitted by wrong contract"
+    );
+    assert_eq!(
+        winner_drawn_event.1.get(1).unwrap(),
+        Symbol::new(&env, "winner_drawn").into_val(&env),
+        "topic must be 'winner_drawn'"
+    );
+    let winner_drawn_payload = events::WinnerDrawn {
+        winner: buyer.clone(),
+        ticket_id: 1, // Must be 1 (1-indexed), not 0 (zero-based index).
+        tier_index: 0,
+        timestamp: env.ledger().timestamp(),
+    };
+    assert_eq!(
+        winner_drawn_event.2,
+        winner_drawn_payload.into_val(&env),
+        "WinnerDrawn.ticket_id should be 1-indexed (1), not zero-based (0)"
+    );
+
+    // --- RaffleFinalized: winning_ticket_ids must contain [1] ---
+    assert_event(
+        &env,
+        &client.address,
+        "raffle_finalized",
+        events::RaffleFinalized {
+            raffle_id: client.address.clone(),
+            winners: soroban_sdk::vec![&env, buyer.clone()],
+            winning_ticket_ids: soroban_sdk::vec![&env, 1u32], // 1-indexed
+            total_tickets_sold: 1,
+            randomness_source: RandomnessSource::Internal,
+            randomness_type: raffle_shared::RandomnessType::PseudoRandom,
+            finalized_at: env.ledger().timestamp(),
+            unique_winners: false,
+        },
+    );
+
+    // --- Storage consistency: DataKey::Ticket(1) owner must be buyer ---
+    // This proves the emitted ticket_id can be used directly as a storage key.
+    let stored_ticket: Ticket = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Ticket(1))
+            .expect("ticket 1 must exist in storage")
+    });
+    assert_eq!(
+        stored_ticket.owner, buyer,
+        "ticket 1 (from WinnerDrawn.ticket_id) must resolve to the buyer's address"
+    );
 }
