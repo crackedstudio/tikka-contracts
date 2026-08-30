@@ -2983,3 +2983,87 @@ fn test_unset_lockup_gets_default() {
     assert_eq!(raffle.claim_lockup_seconds, DEFAULT_CLAIM_LOCKUP_SECONDS);
     assert_eq!(raffle.swap_deadline_seconds, DEFAULT_SWAP_DEADLINE_SECONDS);
 }
+
+#[test]
+fn test_withdraw_fees_pull_model_does_not_drain_prize_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory = env.register(MockFactory, ());
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, token_mint) = create_token(&env, &token_admin);
+    token_mint.mint(&creator, &1_000_000);
+    token_mint.mint(&buyer, &1_000_000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let prize_amount = 10_000i128;
+    let ticket_price = 1_000i128;
+    let max_tickets = 10u32;
+    let protocol_fee_bp = 500u32; // 5%
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Pull fee test"),
+        end_time: 0,
+        no_deadline: true,
+        max_tickets,
+        max_tickets_per_tx: max_tickets,
+        min_tickets: 1,
+        allow_multiple: true,
+        ticket_price,
+        payment_token: token_addr.clone(),
+        prize_amount,
+        prizes: vec![&env, 10000u32],
+        randomness_source: RandomnessSource::Internal,
+        oracle_address: None,
+        protocol_fee_bp,
+        treasury_address: Some(treasury.clone()),
+        swap_router: None,
+        tikka_token: None,
+        unique_winners: false,
+        metadata_hash: BytesN::from_array(&env, &[99u8; 32]),
+        claim_lockup_seconds: Some(0),
+        swap_deadline_seconds: Some(0),
+        early_bird_ticket_percentage: 0,
+        early_bird_discount_bp: 0,
+        category: None,
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+
+    // 1. Deposit prize
+    client.deposit_prize();
+
+    // 2. Buy 10 tickets (total price = 10,000, fee = 500)
+    client.buy_tickets(&buyer, &10);
+
+    // Pull model check: Treasury balance should still be 0 right after purchase
+    let token_client = token::Client::new(&env, &token_addr);
+    assert_eq!(token_client.balance(&treasury), 0);
+
+    // Accumulated fees should be 500
+    assert_eq!(client.get_accumulated_fees(), 500);
+
+    // 3. Finalize raffle
+    client.finalize_raffle();
+
+    // 4. Admin withdraws fees (500) to treasury
+    client.withdraw_fees(&treasury, &500);
+    assert_eq!(token_client.balance(&treasury), 500);
+    assert_eq!(client.get_accumulated_fees(), 0);
+
+    // Repeated withdraw_fees should fail as fees are depleted
+    let repeat = client.try_withdraw_fees(&treasury, &1);
+    assert!(repeat.is_err());
+
+    // 5. Winner claims prize in full (10,000)
+    let winner = client.get_raffle().winners.get(0).unwrap().address;
+    let claimed = client.claim_prize(&winner, &0);
+    assert_eq!(claimed, prize_amount);
+}

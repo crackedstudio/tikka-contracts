@@ -58,9 +58,6 @@ pub(crate) fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<
     }
     
     if protocol_fee > 0 {
-        if let Some(treasury) = &raffle.treasury_address {
-            tc.transfer(&env.current_contract_address(), treasury, &protocol_fee);
-        }
         let prev: i128 = env.storage().instance().get(&DataKey::AccumulatedFees).unwrap_or(0);
         env.storage().instance().set(&DataKey::AccumulatedFees, &(prev + protocol_fee));
     }
