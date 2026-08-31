@@ -66,3 +66,54 @@ describe('KeyService', () => {
     expect(() => service.sign(Buffer.from('x'))).toThrow('not initialized');
   });
 });
+
+import nock from 'nock';
+import { VaultSecretsAdapter } from './key.service';
+
+describe('VaultSecretsAdapter', () => {
+  const vaultAddr = 'http://localhost:8200';
+  const token = 's.mocktoken';
+
+  it('fetches a secret from vault KV store', async () => {
+    const adapter = new VaultSecretsAdapter(vaultAddr, token);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          data: {
+            value: 'SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+          },
+        },
+      }),
+    } as any);
+
+    const secret = await adapter.getSecret('secret/oracle');
+    expect(secret.toString()).toBe('SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `${vaultAddr}/v1/secret/oracle`,
+      expect.objectContaining({
+        headers: { 'X-Vault-Token': token },
+      })
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('throws when vault token is missing', async () => {
+    const adapter = new VaultSecretsAdapter(vaultAddr, '');
+    await expect(adapter.getSecret('secret/oracle')).rejects.toThrow('Vault token is required');
+  });
+
+  it('throws on non-200 responses', async () => {
+    const adapter = new VaultSecretsAdapter(vaultAddr, token);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+    } as any);
+
+    await expect(adapter.getSecret('secret/oracle')).rejects.toThrow('Failed to fetch secret from Vault');
+    fetchSpy.mockRestore();
+  });
+});
+

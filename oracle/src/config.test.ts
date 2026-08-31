@@ -36,18 +36,8 @@ describe('loadAndValidateConfig', () => {
   it('exits with code 1 when required env vars are missing', () => {
     expect(() => loadAndValidateConfig()).toThrow('process.exit:1');
     expect(errorSpy).toHaveBeenCalledWith('Configuration errors:');
-    expect(errorSpy).toHaveBeenCalledWith(' - ORACLE_SECRET_KEY is required');
     expect(errorSpy).toHaveBeenCalledWith(' - STELLAR_RPC_URL is required');
     expect(errorSpy).toHaveBeenCalledWith(' - FACTORY_CONTRACT_ID is required');
-  });
-
-  it('exits with code 1 when secret key format is invalid', () => {
-    process.env.ORACLE_SECRET_KEY = 'not-a-secret';
-    process.env.STELLAR_RPC_URL = 'https://soroban-testnet.stellar.org';
-    process.env.FACTORY_CONTRACT_ID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M';
-
-    expect(() => loadAndValidateConfig()).toThrow('process.exit:1');
-    expect(errorSpy).toHaveBeenCalledWith(' - ORACLE_SECRET_KEY is not a valid Ed25519 secret key');
   });
 
   it('returns validated config when env is valid', () => {

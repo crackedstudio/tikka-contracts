@@ -74,7 +74,10 @@ export class EventListenerService {
             {
               type: 'contract',
               contractIds,
-              topics: [[xdr.ScVal.scvSymbol('RandomnessRequested').toXDR('base64')]],
+              topics: [[
+                xdr.ScVal.scvSymbol('RandomnessRequested').toXDR('base64'),
+                xdr.ScVal.scvSymbol('OracleSeedDelivered').toXDR('base64')
+              ]],
             },
           ],
         });
@@ -90,6 +93,19 @@ export class EventListenerService {
       this.consecutiveRpcFailures = 0;
 
       for (const event of events.events) {
+        const topicName = event.topic[0]?.sym?.().toString();
+        if (topicName === 'OracleSeedDelivered') {
+          const parsedDelivered = this.parseOracleSeedDeliveredEvent(event);
+          if (parsedDelivered) {
+            console.log(
+              `OracleSeedDelivered event received: raffle=${parsedDelivered.raffleContract} ` +
+              `oracle=${parsedDelivered.oracle} request_id=${parsedDelivered.requestId} ` +
+              `count=${parsedDelivered.currentCount}/${parsedDelivered.threshold}`
+            );
+          }
+          continue;
+        }
+
         const parsed = this.parseRandomnessRequestedEvent(event);
         if (!parsed) {
           continue;
@@ -165,5 +181,44 @@ export class EventListenerService {
     }
 
     return { oracle, requestId, timestamp, raffleContract };
+  }
+
+  parseOracleSeedDeliveredEvent(
+    event: SorobanRpc.Api.EventResponse
+  ): { oracle: string; requestId: bigint; currentCount: number; threshold: number; raffleContract: string } | null {
+    const topicName = event.topic[0]?.sym?.().toString();
+    if (topicName !== 'OracleSeedDelivered') {
+      return null;
+    }
+
+    const raffleContract = event.contractId?.toString();
+    if (!raffleContract) {
+      return null;
+    }
+
+    if (event.value.switch() !== xdr.ScValType.scvMap()) {
+      return null;
+    }
+
+    let oracle = '';
+    let requestId = 0n;
+    let currentCount = 0;
+    let threshold = 0;
+
+    for (const entry of event.value.map() ?? []) {
+      const key = entry.key().sym().toString();
+      const val = entry.val();
+      if (key === 'oracle') {
+        oracle = Address.fromScAddress(val.address()).toString();
+      } else if (key === 'request_id') {
+        requestId = BigInt(val.u64().toString());
+      } else if (key === 'current_count') {
+        currentCount = Number(val.u32().toString());
+      } else if (key === 'threshold') {
+        threshold = Number(val.u32().toString());
+      }
+    }
+
+    return { oracle, requestId, currentCount, threshold, raffleContract };
   }
 }

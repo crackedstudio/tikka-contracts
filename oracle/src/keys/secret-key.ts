@@ -6,8 +6,8 @@ const BASE64_SECRET_RE = /^[A-Za-z0-9+/]{43}=$/;
 /**
  * Decodes an oracle secret from Stellar secret key, 32-byte hex, or base64.
  */
-export function decodeSecretKey(rawSecret: string): Buffer {
-  const trimmed = rawSecret.trim();
+export function decodeSecretKey(rawSecret: string | Buffer): Buffer {
+  const trimmed = typeof rawSecret === 'string' ? rawSecret.trim() : rawSecret.toString().trim();
 
   if (trimmed.startsWith('S')) {
     return Buffer.from(Keypair.fromSecret(trimmed).rawSecretKey());

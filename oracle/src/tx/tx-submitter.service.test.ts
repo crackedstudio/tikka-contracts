@@ -1,8 +1,25 @@
-import { Keypair } from '@stellar/stellar-sdk';
+import { Keypair, rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import { Alerter } from '../alert/alerter';
 import { TxSubmitterService } from './tx-submitter.service';
 import { KeyService } from '../keys/key.service';
 import { buildVrfProofMessage } from '../vrf/proof-message';
+
+jest.mock('@stellar/stellar-sdk', () => {
+  const original = jest.requireActual('@stellar/stellar-sdk');
+  const mock = Object.create(original);
+
+  const mockRpc = Object.create(original.rpc);
+  Object.defineProperty(mockRpc, 'assembleTransaction', {
+    value: jest.fn().mockImplementation((tx: any) => ({
+      build: () => tx,
+    })),
+    writable: true,
+    configurable: true,
+  });
+  mock.rpc = mockRpc;
+
+  return mock;
+});
 
 /**
  * Integration test — skipped unless STELLAR_INTEGRATION_TEST=1 and env vars are set.
@@ -51,7 +68,7 @@ describe('TxSubmitterService alerting', () => {
     fetchImpl?: jest.Mock;
   }) {
     const keyService = new KeyService({
-      getSecret: async () => Keypair.random().secret(),
+      getSecret: async () => Buffer.from(Keypair.random().secret()),
     });
     await keyService.initialize();
 
@@ -142,5 +159,38 @@ describe('TxSubmitterService alerting', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits provide_quorum_randomness successfully', async () => {
+    const { submitter } = await buildSubmitter({ failureThreshold: 1 });
+    const mockServer = {
+      getAccount: jest.fn().mockImplementation((pubKey) => Promise.resolve({
+        accountId: () => pubKey,
+        sequenceNumber: () => '1',
+      })),
+      simulateTransaction: jest.fn().mockResolvedValue({
+        transactionData: 'AAAAAgAAAABlM+QrJVf1z50IqnH57Ck35g==',
+        minResourceFee: '100000',
+      }),
+      sendTransaction: jest.fn().mockResolvedValue({
+        status: 'PENDING',
+        hash: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      }),
+      getTransaction: jest.fn().mockResolvedValue({
+        status: 'SUCCESS',
+      }),
+    };
+    (submitter as any).server = mockServer;
+
+    const hash = await submitter.submitProvideQuorumRandomness({
+      raffleContract: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+      randomSeed: 99n,
+      requestId: 42n,
+    });
+
+    expect(hash).toBe('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef');
+    expect(mockServer.getAccount).toHaveBeenCalled();
+    expect(mockServer.simulateTransaction).toHaveBeenCalled();
+    expect(mockServer.sendTransaction).toHaveBeenCalled();
   });
 });

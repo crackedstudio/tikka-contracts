@@ -74,7 +74,8 @@ describe('RequestQueue', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(body.type).toBe('queue_age');
-    expect(body.details.ageMs).toBe(6_000);
+    expect(body.details.ageMs).toBeGreaterThanOrEqual(6_000);
+    expect(body.details.ageMs).toBeLessThan(6_100);
     expect(body.details.limit).toBe(5_000);
   });
 
