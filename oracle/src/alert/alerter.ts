@@ -54,9 +54,17 @@ export class Alerter {
     if (now - lastSent < this.rateLimitMs) {
       return false;
     }
-    this.lastSentAt.set(alert.type, now);
 
     const payload: AlertPayload = { ...alert, timestamp: now };
+
+    try {
+      assertNoSecrets(payload);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
+    this.lastSentAt.set(alert.type, now);
 
     try {
       const response = await this.fetchImpl(this.webhookUrl, {
@@ -85,3 +93,35 @@ export class Alerter {
     return new Response(null, { status: 200 });
   }
 }
+
+function assertNoSecrets(value: unknown): void {
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === 'string') {
+    if (/S[A-Z2-7]{55}/.test(value)) {
+      throw new Error('Security assertion failed: Stellar secret key detected in alert payload');
+    }
+    if (/[0-9a-fA-F]{64}/.test(value)) {
+      throw new Error('Security assertion failed: Hex secret key detected in alert payload');
+    }
+    if (/[A-Za-z0-9+/]{43}=/.test(value)) {
+      throw new Error('Security assertion failed: Base64 secret key detected in alert payload');
+    }
+  } else if (typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    for (const key of keys) {
+      const lowerKey = key.toLowerCase();
+      if (
+        lowerKey.includes('secretkey') ||
+        lowerKey.includes('privatekey') ||
+        lowerKey === 'secret' ||
+        lowerKey.includes('oracle_secret')
+      ) {
+        throw new Error(`Security assertion failed: Secret key field "${key}" detected in alert payload`);
+      }
+      assertNoSecrets((value as Record<string, unknown>)[key]);
+    }
+  }
+}
+

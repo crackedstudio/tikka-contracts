@@ -38,6 +38,41 @@ describe('EventListenerService', () => {
     } as unknown as Parameters<EventListenerService['parseRandomnessRequestedEvent']>[0];
   }
 
+  function buildOracleSeedDeliveredEvent(overrides?: {
+    oracle?: string;
+    requestId?: bigint;
+    currentCount?: number;
+    threshold?: number;
+  }) {
+    const oracle = overrides?.oracle ?? oracleAddress;
+    const requestId = overrides?.requestId ?? 42n;
+    const currentCount = overrides?.currentCount ?? 1;
+    const threshold = overrides?.threshold ?? 2;
+
+    return {
+      contractId: { toString: () => raffleContract },
+      topic: [xdr.ScVal.scvSymbol('OracleSeedDelivered')],
+      value: xdr.ScVal.scvMap([
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('oracle'),
+          val: Address.fromString(oracle).toScVal(),
+        }),
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('request_id'),
+          val: xdr.ScVal.scvU64(xdr.Uint64.fromString(requestId.toString())),
+        }),
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('current_count'),
+          val: xdr.ScVal.scvU32(currentCount),
+        }),
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('threshold'),
+          val: xdr.ScVal.scvU32(threshold),
+        }),
+      ]),
+    } as unknown as Parameters<EventListenerService['parseOracleSeedDeliveredEvent']>[0];
+  }
+
   it('parses RandomnessRequested events', () => {
     const service = new EventListenerService(
       new RequestQueue(),
@@ -48,6 +83,23 @@ describe('EventListenerService', () => {
     const parsed = service.parseRandomnessRequestedEvent(buildRandomnessRequestedEvent());
     expect(parsed?.requestId).toBe(42n);
     expect(parsed?.oracle).toBe(oracleAddress);
+    expect(parsed?.raffleContract).toBe(raffleContract);
+  });
+
+  it('parses OracleSeedDelivered events', () => {
+    const service = new EventListenerService(
+      new RequestQueue(),
+      oracleAddress,
+      new MemoryLedgerCheckpointStore()
+    );
+
+    const parsed = service.parseOracleSeedDeliveredEvent(
+      buildOracleSeedDeliveredEvent({ currentCount: 2, threshold: 3 }),
+    );
+    expect(parsed?.requestId).toBe(42n);
+    expect(parsed?.oracle).toBe(oracleAddress);
+    expect(parsed?.currentCount).toBe(2);
+    expect(parsed?.threshold).toBe(3);
     expect(parsed?.raffleContract).toBe(raffleContract);
   });
 

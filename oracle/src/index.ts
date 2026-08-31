@@ -1,6 +1,6 @@
 import { Alerter } from './alert/alerter';
 import { loadAndValidateConfig } from './config';
-import { OraclePipeline } from './pipeline';
+import { createPipeline } from './pipeline';
 
 /**
  * Bootstrap entry point. Wires the full oracle pipeline:
@@ -32,9 +32,19 @@ async function main(): Promise<void> {
   }
 
   // Create and start the oracle pipeline
-  const pipeline = new OraclePipeline({
-    config,
+  const pipeline = createPipeline(config, {
     alerter,
+  });
+
+  // Register signal handlers
+  process.on('SIGINT', () => {
+    console.log('SIGINT received. Initiating graceful shutdown...');
+    void pipeline.shutdown();
+  });
+
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Initiating graceful shutdown...');
+    void pipeline.shutdown();
   });
 
   // Start listening for events from the factory contract

@@ -2,19 +2,24 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { decodeSecretKey, zeroizeBuffer } from './secret-key';
 
 export interface SecretsAdapter {
-  getSecret(key: string): Promise<string>;
+  getSecret(key: string): Promise<Buffer>;
 }
 
 /**
  * Adapter for loading secrets from environment variables.
  */
 export class EnvSecretsAdapter implements SecretsAdapter {
-  async getSecret(key: string): Promise<string> {
+  async getSecret(key: string): Promise<Buffer> {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Security violation: EnvSecretsAdapter is not allowed in production environment');
+    }
     const secret = process.env[key];
     if (!secret) {
       throw new Error('ORACLE_SECRET_KEY env var not set');
     }
-    return secret;
+    const buf = Buffer.from(secret);
+    delete process.env[key]; // clean up env var to avoid exposure
+    return buf;
   }
 }
 
@@ -41,16 +46,14 @@ export class KeyService {
       const rawSecret = await this.adapter.getSecret(this.secretKeyName);
       this.secretBytes = decodeSecretKey(rawSecret);
       this.keypair = Keypair.fromRawEd25519Seed(this.secretBytes);
+      if (Buffer.isBuffer(rawSecret)) {
+        zeroizeBuffer(rawSecret);
+      }
       this.initialized = true;
     } catch {
       console.error('Failed to initialize KeyService: Invalid or missing oracle secret key.');
       throw new Error('KeyService initialization failed.');
     }
-  }
-
-  getKeypair(): Keypair {
-    this.ensureInitialized();
-    return this.keypair;
   }
 
   getPublicKey(): string {
@@ -66,6 +69,14 @@ export class KeyService {
   sign(data: Buffer): Buffer {
     this.ensureInitialized();
     return this.keypair.sign(data);
+  }
+
+  /**
+   * Signs a Stellar Transaction directly without exposing the keypair.
+   */
+  signTransaction(tx: any): void {
+    this.ensureInitialized();
+    tx.sign(this.keypair);
   }
 
   /**
