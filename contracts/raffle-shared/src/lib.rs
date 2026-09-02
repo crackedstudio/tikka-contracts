@@ -44,6 +44,13 @@ pub enum CancelReason {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[contracttype]
+pub enum FailureReason {
+    ZeroTicketsSold = 0,
+    MinTicketsNotMet = 1,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[contracttype]
 pub enum RandomnessSource {
     Internal = 0,
     External = 1,
@@ -65,6 +72,8 @@ pub struct RaffleConfig {
     pub end_time: u64,
     pub no_deadline: bool,
     pub max_tickets: u32,
+    /// Maximum tickets a single address may purchase per transaction.
+    pub max_tickets_per_tx: u32,
     pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
@@ -81,6 +90,9 @@ pub struct RaffleConfig {
     /// Seconds after finalization before winners may claim.
     /// Must be in [0, 604800] (0 to 7 days). Defaults to 3600 if zero.
     pub claim_lockup_seconds: u64,
+    /// Swap deadline window in seconds (added to current timestamp for token swaps).
+    /// Defaults to 300 (5 minutes) if zero. Configurable to handle network congestion.
+    pub swap_deadline_seconds: u64,
 }
 
 #[derive(Clone)]

@@ -124,14 +124,12 @@ Tikka contracts use two of Soroban's three storage tiers:
 | `Admin` | **Instance** | Admin address synced from factory |
 | `Paused` | **Instance** | Instance-level pause flag |
 | `ReentrancyGuard` | **Instance** | Transient reentrancy lock |
-| `NextTicketId` | **Instance** | Auto-incrementing ticket ID counter |
 | `RandomnessRequested` | **Instance** | Whether oracle randomness has been requested |
 | `RandomnessRequestLedger` | **Instance** | Ledger sequence when randomness was requested |
 | `RandomnessSeed` | **Instance** | Fairness metadata after draw |
 | `Ticket(u32)` | **Persistent** | Individual ticket data (owner, purchase time) |
 | `TicketCount(Address)` | **Persistent** | Per-buyer ticket count |
 | `FinishTime` | **Instance** | Raffle finish timestamp |
-| `TotalTickets` | **Instance** | Total tickets counter |
 
 ### Data Expiry Risks
 

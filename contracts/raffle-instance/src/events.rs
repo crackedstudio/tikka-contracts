@@ -8,7 +8,7 @@
 //! - Factory-level events → `raffle/src/events.rs`.
 //! - Contract entrypoints or business logic → `lib.rs`.
 
-use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
+use raffle_shared::{CancelReason, FailureReason, RandomnessSource, RandomnessType};
 use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 
 #[derive(Clone)]
@@ -126,6 +126,15 @@ pub struct RaffleCancelled {
 
 #[derive(Clone)]
 #[contractevent]
+pub struct RaffleFailed {
+    pub creator: Address,
+    pub reason: FailureReason,
+    pub tickets_sold: u32,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
 pub struct TicketRefunded {
     pub buyer: Address,
     pub ticket_number: u32,
@@ -210,6 +219,15 @@ pub struct OracleAddressUpdated {
 pub struct ProtocolFeeUpdated {
     pub old_fee_bp: u32,
     pub new_fee_bp: u32,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct SwapDeadlineUpdated {
+    pub old_deadline_seconds: u64,
+    pub new_deadline_seconds: u64,
     pub updated_by: Address,
     pub timestamp: u64,
 }
