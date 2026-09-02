@@ -1,3 +1,16 @@
+//! Raffle factory contract — deploys and tracks individual raffle instances.
+//!
+//! ## Responsibilities
+//! - `init_factory`, `create_raffle`, `get_raffles`, and factory admin entrypoints.
+//! - Maintains the registry of deployed raffle instance addresses.
+//! - Delegates volume and participant tracking to internal helpers.
+//!
+//! ## What does NOT belong here
+//! - Per-raffle business logic → `raffle-instance`.
+//! - Shared types → `raffle-shared`.
+//! - Test code → inline `#[cfg(test)]` blocks in this file are acceptable for
+//!   factory-specific unit tests; move to `tests/` if the file exceeds 600 lines.
+
 #![no_std]
 
 use soroban_sdk::{

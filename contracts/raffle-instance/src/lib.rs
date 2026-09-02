@@ -1,3 +1,21 @@
+//! Raffle instance contract — single raffle lifecycle from prize deposit to winner claim.
+//!
+//! ## Responsibilities
+//! - Public entrypoints: `init`, `deposit_prize`, `buy_tickets`, `finalize_raffle`,
+//!   `provide_randomness`, `trigger_randomness_fallback`, `claim_prize`, `cancel_raffle`,
+//!   `refund_ticket`, and admin helpers.
+//! - Delegates randomness / winner selection to `randomness.rs`.
+//! - Emits all instance-level events (defined in `events.rs`).
+//!
+//! ## What does NOT belong here
+//! - Business logic longer than ~30 lines → extract to a focused module.
+//! - Test code → `test.rs`.
+//! - Seed construction / winner algorithms → `randomness.rs`.
+//! - Event struct definitions → `events.rs`.
+//!
+//! ## File-size rule
+//! This file must not exceed 600 lines. Extract cohesive groups before adding more code.
+
 #![no_std]
 
 use soroban_sdk::{

@@ -2,39 +2,40 @@ name: CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build_and_test:
-    name: Build, Test, and Lint
+  ci:
+    name: CI Pipeline (make ci)
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        targets: wasm32-unknown-unknown
-        components: clippy, rustfmt
+      # Toolchain version is driven entirely by rust-toolchain.toml in the repo root.
+      # No explicit toolchain version here — that would duplicate the pin and drift.
+      - name: Set up Rust (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: Rust Cache
-      uses: Swatinem/rust-cache@v2
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@v2
 
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
+      - name: Set up Node.js (for oracle lint)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: oracle/package-lock.json
 
-    - name: Build Contracts
-      run: cargo build --target wasm32-unknown-unknown --release
-      
-    - name: Run Linter (Clippy)
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
 
-    - name: Run Tests
-      run: cargo test
+      # The Makefile is the single source of truth for all checks.
+      # If this command passes locally (`make ci`) it will pass here.
+      - name: Run full CI pipeline
+        run: make ci

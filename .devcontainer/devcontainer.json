@@ -1,0 +1,30 @@
+{
+  "name": "tikka-contracts",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "serayuzgur.crates",
+        "tamasfe.even-better-toml",
+        "esbenp.prettier-vscode",
+        "timonwong.shellcheck"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "rust-analyzer.cargo.features": "all"
+      }
+    }
+  },
+  "postCreateCommand": "pre-commit install && cd oracle && npm ci",
+  "remoteUser": "vscode"
+}

@@ -1,0 +1,26 @@
+# =============================================================================
+# Pinned Rust toolchain for tikka-contracts
+#
+# This file is read by rustup and forces every developer and every CI run to
+# use exactly the same compiler version, components, and targets.
+#
+# WHY THIS MATTERS
+# ----------------
+# - WASM binary size can fluctuate between compiler releases (even patch
+#   versions). Pinning gives reproducible byte-identical builds.
+# - Clippy lint sets change between releases; an unpinned toolchain causes
+#   random CI failures when upstream adds or removes lints.
+# - The wasm32v1-none target (Soroban v23+) is only available from 1.85.0+.
+#
+# UPGRADING
+# ---------
+# 1. Change `channel` below to the new version.
+# 2. Run `rustup update` to pull the new toolchain locally.
+# 3. Run `make ci` and confirm no new Clippy warnings.
+# 4. Record the upgrade in docs/DEPLOYMENT.md under "Toolchain history".
+# =============================================================================
+
+[toolchain]
+channel    = "1.85.0"
+components = ["clippy", "rustfmt"]
+targets    = ["wasm32v1-none"]

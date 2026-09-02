@@ -5,20 +5,30 @@ members = [
 ]
 default-members = ["contracts/*"]
 
+# ---------------------------------------------------------------------------
+# Workspace-wide package metadata
+# rust-version here is the MSRV Cargo enforces when you run `cargo check` or
+# `cargo build`. It must match (or be lower than) the channel in
+# rust-toolchain.toml so the two sources of truth agree.
+# ---------------------------------------------------------------------------
+[workspace.package]
+rust-version = "1.85.0"
+
 [workspace.dependencies]
 soroban-sdk = "23"
 
 [profile.release]
-opt-level = "z"
+opt-level       = "z"
 overflow-checks = true
-debug = 0
-strip = "symbols"
+debug           = 0
+strip           = "symbols"
 debug-assertions = false
-panic = "abort"
-codegen-units = 1
-lto = "fat"
+panic           = "abort"
+codegen-units   = 1
+lto             = "fat"
 
-# For more information about this profile see https://soroban.stellar.org/docs/basic-tutorials/logging#cargotoml-profile
+# Keep debug assertions enabled for log-level testing.
+# https://soroban.stellar.org/docs/basic-tutorials/logging#cargotoml-profile
 [profile.release-with-logs]
-inherits = "release"
+inherits         = "release"
 debug-assertions = true

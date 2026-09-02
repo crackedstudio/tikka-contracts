@@ -1,0 +1,73 @@
+# =============================================================================
+# Pre-commit hooks for tikka-contracts
+#
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# Fast checks only — full CI pipeline runs via `make ci` before push.
+# =============================================================================
+
+repos:
+  # ---------------------------------------------------------------------------
+  # Built-in file hygiene checks
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^.*\\.md$"
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # ---------------------------------------------------------------------------
+  # Rust: formatting (fast, local)
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --
+        types: [rust]
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------------
+  # Rust: fast type-check (catches compile errors before CI)
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: cargo check
+        language: system
+        entry: cargo check --workspace --all-targets
+        types: [rust]
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------------
+  # TypeScript / Oracle: use pinned local Prettier via npm run format:check
+  # Requires oracle/package.json to define a "format:check" script.
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: oracle-prettier
+        name: oracle prettier check
+        language: system
+        entry: bash -c 'cd oracle && npm run format:check'
+        files: "^oracle/.*\\.(ts|js|json)$"
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------------
+  # Shell scripts: shellcheck
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        language: system
+        entry: shellcheck
+        types: [shell]
+        files: "^scripts/.*\\.sh$"

@@ -1,3 +1,14 @@
+//! Integration and unit tests for the raffle instance contract.
+//!
+//! ## Responsibilities
+//! - All `#[test]` functions for `raffle-instance`.
+//! - Bug-condition exploration tests (expected to fail on unfixed code).
+//! - Preservation tests verifying no regressions on existing flows.
+//!
+//! ## What does NOT belong here
+//! - Production contract code → `lib.rs`.
+//! - Test helpers shared across crates → `raffle-shared` or a `tests/` module.
+
 #![cfg(test)]
 
 use super::*;

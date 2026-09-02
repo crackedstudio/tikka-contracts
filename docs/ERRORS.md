@@ -12,7 +12,7 @@ This document describes all error codes used in the Tikka Raffle contracts. Fron
 
 ## Instance Contract Errors
 
-The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle/src/instance/mod.rs`](contracts/raffle/src/instance/mod.rs).
+The instance contract (`Raffle`) handles individual raffle operations. All error codes are defined in the `Error` enum in [`contracts/raffle-instance/src/lib.rs`](../contracts/raffle-instance/src/lib.rs).
 
 ### General Errors (1-10)
 
@@ -53,20 +53,39 @@ The instance contract (`Raffle`) handles individual raffle operations. All error
 | 33   | `NoTicketsSold`             | No tickets have been purchased      | "No tickets have been sold yet"                |
 | 34   | `TicketNotFound`            | The requested ticket was not found  | "Ticket not found"                             |
 
-### System Errors (41-50)
+### System Errors (41-60)
 
-| Code | Error                | Description                       | Frontend Message               |
-| ---- | -------------------- | --------------------------------- | ------------------------------ |
-| 41   | `ArithmeticOverflow` | Arithmetic operation overflow     | "Calculation error occurred"   |
-| 42   | `AlreadyInitialized` | Contract is already initialized   | "Contract already initialized" |
-| 43   | `NotInitialized`     | Contract has not been initialized | "Contract not initialized"     |
-| 44   | `Reentrancy`         | Reentrant call detected           | "Please try again later"       |
+| Code | Error                          | Description                                          | Frontend Message                              |
+| ---- | ------------------------------ | ---------------------------------------------------- | --------------------------------------------- |
+| 41   | `ArithmeticOverflow`           | Arithmetic operation overflow                        | "Calculation error occurred"                  |
+| 42   | `AlreadyInitialized`           | Contract is already initialized                      | "Contract already initialized"                |
+| 43   | `NotInitialized`               | Contract has not been initialized                    | "Contract not initialized"                    |
+| 44   | `Reentrancy`                   | Reentrant call detected                              | "Please try again later"                      |
+| 45   | `TokenTransferFailed`          | Token transfer call failed                           | "Payment failed — check your balance"         |
+| 46   | `NoActiveTickets`              | All tickets were refunded before the draw            | "No active tickets remain"                    |
+| 47   | `DeadlinePassed`               | Swap deadline has passed                             | "Transaction deadline expired"                |
+| 48   | `SlippageExceeded`             | Swap output below minimum                            | "Price slippage too high — try again"         |
+| 49   | `InvalidIndex`                 | Array index out of bounds                            | "Internal error — invalid index"              |
+| 50   | `MorePrizesThanTickets`        | Prize tier count exceeds tickets sold                | "Cannot finalize — more prizes than tickets"  |
+| 51   | `ZeroPrize`                    | Calculated prize amount is zero                      | "Prize amount is zero"                        |
+| 52   | `InvalidTokenAddress`          | Payment token is not a valid token contract          | "Invalid payment token"                       |
+| 53   | `TooManyPrizes`                | Prize tier count exceeds the maximum (100)           | "Too many prize tiers"                        |
+| 54   | `EmergencyTooEarly`            | Emergency withdraw time-lock has not elapsed         | "Emergency withdrawal not yet available"      |
+| 55   | `InvalidTicketRange`           | `max_tickets` < `min_tickets`                        | "Invalid ticket range configuration"          |
+| 56   | `InsufficientAccumulatedFees`  | Withdrawal amount exceeds accumulated fees           | "Not enough fees accumulated"                 |
+| 57   | `PrizeConfigurationLocked`     | Prize config cannot be changed after sales begin     | "Prize configuration is locked"               |
+| 58   | `OracleRequestAlreadyPending`  | Oracle request already dispatched for this raffle    | "Randomness request already in progress"      |
+| 59   | `InvalidStatusForOperation`    | Current status does not allow this operation         | "Operation not allowed in current state"      |
+| 60   | `FinalizationAlreadyComplete`  | Raffle has already been finalized                    | "This raffle has already been finalized"      |
+
+> **Note:** Error codes are append-only. Existing codes 1–57 must never be renumbered — on-chain
+> storage and off-chain indexers rely on the stable numeric mapping.
 
 ---
 
 ## Factory Contract Errors
 
-The factory contract (`RaffleFactory`) manages raffle creation. All error codes are defined in the `ContractError` enum in [`contracts/raffle/src/lib.rs`](contracts/raffle/src/lib.rs).
+The factory contract (`RaffleFactory`) manages raffle creation. All error codes are defined in the `ContractError` enum in [`contracts/raffle/src/lib.rs`](../contracts/raffle/src/lib.rs).
 
 ### General Errors (1-10)
 
@@ -120,6 +139,22 @@ const errorMessages: Record<number, string> = {
   42: "Contract already initialized",
   43: "Contract not initialized",
   44: "Please try again later",
+  45: "Payment failed — check your balance",
+  46: "No active tickets remain",
+  47: "Transaction deadline expired",
+  48: "Price slippage too high — try again",
+  49: "Internal error — invalid index",
+  50: "Cannot finalize — more prizes than tickets",
+  51: "Prize amount is zero",
+  52: "Invalid payment token",
+  53: "Too many prize tiers",
+  54: "Emergency withdrawal not yet available",
+  55: "Invalid ticket range configuration",
+  56: "Not enough fees accumulated",
+  57: "Prize configuration is locked",
+  58: "Randomness request already in progress",
+  59: "Operation not allowed in current state",
+  60: "This raffle has already been finalized",
 
   // Factory errors
   101: "Factory already initialized",

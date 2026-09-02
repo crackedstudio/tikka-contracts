@@ -1,3 +1,13 @@
+//! All events emitted by the raffle instance contract.
+//!
+//! ## Responsibilities
+//! - Define every `#[contractevent]` struct for a raffle instance.
+//! - Implement `publish(&self, env: &Env)` on each struct.
+//!
+//! ## What does NOT belong here
+//! - Factory-level events → `raffle/src/events.rs`.
+//! - Contract entrypoints or business logic → `lib.rs`.
+
 use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
 use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 

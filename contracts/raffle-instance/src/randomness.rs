@@ -1,3 +1,15 @@
+//! Seed construction and winner-selection strategies for raffle draws.
+//!
+//! ## Responsibilities
+//! - `build_internal_seed` — multi-source deterministic PRNG seed for low-stakes draws.
+//! - `PrngWinnerSelection` — internal `env.prng()`-based winner selection.
+//! - `OracleSeedWinnerSelection` — oracle VRF seed-based winner selection.
+//! - `WinnerSelectionStrategy` — common trait used by `do_finalize_with_seed`.
+//!
+//! ## What does NOT belong here
+//! - Contract entrypoints → `lib.rs`.
+//! - Oracle cross-contract calls → `lib.rs` (`provide_randomness`).
+
 use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 
 // ============================================================================

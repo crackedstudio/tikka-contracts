@@ -1,3 +1,17 @@
+//! Shared types, traits, and constants used by both the factory and instance contracts,
+//! and by the off-chain oracle service.
+//!
+//! ## Responsibilities
+//! - `RaffleStatus`, `RaffleConfig`, `Ticket`, `FairnessData` and all cross-contract structs.
+//! - `RandomnessSource`, `RandomnessType`, `CancelReason` enumerations.
+//! - `RandomnessOracleTrait` and `RandomnessReceiverTrait` cross-contract interfaces.
+//! - Shared constants (`DEFAULT_PAGE_LIMIT`, etc.).
+//!
+//! ## What does NOT belong here
+//! - Contract entrypoints → `raffle` or `raffle-instance`.
+//! - Storage keys → `DataKey` enum in each contract's `lib.rs`.
+//! - Error codes → `Error` enum in each contract's `lib.rs`.
+
 #![no_std]
 
 use soroban_sdk::{contracttype, Address, BytesN, String, Vec};

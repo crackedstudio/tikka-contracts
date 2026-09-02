@@ -1,304 +1,149 @@
-# Tikka - Decentralized Raffle Platform
+# Tikka — Decentralized Raffle Platform
 
-![Tikka Logo](https://via.placeholder.com/200x100/4F46E5/FFFFFF?text=TIKKA)
+> ⚠️ **Pre-audit — not production-ready.**
+> This codebase has not been independently audited. Do not deploy to mainnet or
+> handle real funds until a full security review is complete.
+> See the [status table](#feature-status) for what is and is not shipped.
 
-## 🎯 What is Tikka?
-
-Tikka is a decentralized raffle platform built on Stellar using Soroban smart contracts. Users can create raffles, sell tickets priced in Stellar assets, and distribute prizes securely on-chain.
-
-## 🚀 Key Features
-
-### **🎲 On-Chain Winner Selection**
-
--   Internal draws use Soroban `env.prng()` with a multi-source seed:
-    `timestamp + sequence + raffle_id + tickets_sold`
--   Deterministic replay for identical raffle and ledger inputs
--   Intended for low-stakes raffles; high-stakes draws should use oracle randomness
-
-### **💰 Token-Based Tickets and Prizes**
-
--   **Ticket Purchases**: Any Stellar asset contract
--   **Prizes**: Same asset used for ticket purchases
--   **Flexible Pricing**: Set ticket prices and prize amount per raffle
-
-### **🔒 Escrowed Prizes**
-
--   Prizes are held in the smart contract until finalization
--   Winners claim prizes after the raffle ends
-
-### **📊 Basic Raffle Analytics**
-
--   Total tickets sold per raffle
--   Winner tracking and claim status
-
-## 🏗️ How Tikka Works
-
-### **1. Raffle Creation**
-
-```
-Creator → Create Raffle → Set Parameters
-```
-
--   Raffle creators specify:
-    -   Description and end time
-    -   Maximum ticket count
-    -   Ticket price and payment asset
-    -   Whether multiple tickets per person are allowed
-    -   Prize amount (in the same payment asset)
-
-### **2. Prize Escrow**
-
-```
-Creator → Deposit Prize → Contract Escrow
-```
-
--   Prizes are transferred to the smart contract
--   Contract holds the prize until raffle finalization
-
-### **3. Ticket Sales**
-
-```
-Participants → Buy Tickets → Contract Validation → Ticket Issuance
-```
-
--   Users purchase tickets with the raffle asset
--   Contract validates payment and issues tickets
--   One ticket equals one entry in the raffle
-
-### **4. Winner Selection**
-
-```
-Raffle Ends → Finalize → Select Winner
-```
-
--   Winner is selected from sold tickets
--   Internal mode uses Soroban PRNG seeded with multiple ledger and raffle fields
--   External/oracle mode remains available for stronger trust assumptions
-
-### **5. Prize Distribution**
-
-```
-Winner Selected → Claim Prize
-```
-
--   Winners claim their prizes
-
-### **Raffle Flow Diagram**
-
-```mermaid
-flowchart TD
-    Creator[Creator]
-    Buyer[TicketBuyer]
-    Token[StellarAssetContract]
-    Raffle[RaffleContract]
-
-    Creator -->|"create_raffle()"| Raffle
-    Creator -->|"deposit_prize()"| Token
-    Token -->|"transfer(prize)"| Raffle
-
-    Buyer -->|"buy_tickets()"| Token
-    Token -->|"transfer(ticket_price)"| Raffle
-
-    Raffle -->|"finalize_raffle()"| Raffle
-    Raffle -->|"select_winner(prng_seeded_entropy)"| Raffle
-
-    Buyer -->|"claim_prize()"| Raffle
-    Raffle -->|"transfer(prize)"| Token
-    Token -->|"transfer(prize)"| Buyer
-```
-
-## 🔧 Technical Architecture
-
-### **Smart Contract Stack**
-
--   **Soroban (Rust)**: Smart contract implementation
--   **Stellar**: Network and asset contracts
-
-### **Core Contracts**
-
-#### **`contracts/raffle/src/lib.rs`**
-
-```rust
-pub fn init_factory(... ) -> Result<(), ContractError>;
-pub fn create_raffle(... ) -> Result<Address, ContractError>;
-pub fn get_raffles(... ) -> PageResultRaffles;
-```
-
-#### **`contracts/raffle-instance/src/lib.rs`**
-
-```rust
-pub fn init(... ) -> Result<(), Error>;
-pub fn deposit_prize(... ) -> Result<(), Error>;
-pub fn buy_tickets(... ) -> Result<u32, Error>;
-pub fn finalize_raffle(... ) -> Result<(), Error>;
-pub fn provide_randomness(... ) -> Result<(), Error>;
-pub fn claim_prize(... ) -> Result<i128, Error>;
-pub fn cancel_raffle(... ) -> Result<(), Error>;
-pub fn refund_ticket(... ) -> Result<i128, Error>;
-pub fn get_raffle(... ) -> Result<Raffle, Error>;
-```
-
-### **Data Structures**
-
-```rust
-pub struct Raffle {
-    pub creator: Address,
-    pub payment_token: Address,
-    pub treasury_address: Option<Address>,
-    pub description: String,
-    pub end_time: u64,
-    pub max_tickets: u32,
-    pub min_tickets: u32,
-    pub allow_multiple: bool,
-    pub ticket_price: i128,
-    pub prize_amount: i128,
-    pub prizes: Vec<u32>,
-    pub tickets_sold: u32,
-    pub status: RaffleStatus,
-    pub prize_deposited: bool,
-    pub winners: Vec<Address>,
-    pub claimed_winners: Vec<bool>,
-    pub randomness_source: RandomnessSource,
-    pub oracle_address: Option<Address>,
-    pub protocol_fee_bp: u32,
-    pub treasury_address: Option<Address>,
-    pub swap_router: Option<Address>,
-    pub tikka_token: Option<Address>,
-    pub finalized_at: Option<u64>,
-    pub winner_ticket_id: Option<u32>,
-    pub claim_lockup_seconds: u64,
-}
-```
-
-### **Contract Constraints (Demo)**
-
--   Only one winner per raffle
--   Prize and ticket payments use the same Stellar asset
--   Internal PRNG is suitable for low-stakes raffles (e.g., sub-500 XLM prizes)
--   For high-stakes raffles, prefer the external oracle/VRF randomness path
-
-## 🔒 Metadata Integrity (metadata_hash)
-
-Every raffle requires a `metadata_hash: BytesN<32>` — a SHA-256 hash of the off-chain metadata JSON stored on IPFS. This hash is committed on-chain at creation and is immutable, so organizers cannot alter the description, image, or rules after tickets are sold.
-
-### Metadata JSON format
-
-```json
-{
-  "name": "My Raffle",
-  "description": "Full rules and description here",
-  "image": "ipfs://Qm...",
-  "rules": "..."
-}
-```
-
-### Generating the hash
-
-**Linux / macOS**
-
-```bash
-# 1. Create your metadata file
-cat > metadata.json << 'EOF'
-{"name":"My Raffle","description":"...","image":"ipfs://Qm...","rules":"..."}
-EOF
-
-# 2. Hash it (outputs hex)
-sha256sum metadata.json
-# or on macOS:
-shasum -a 256 metadata.json
-```
-
-**Node.js**
-
-```js
-const crypto = require("crypto");
-const fs = require("fs");
-const hash = crypto
-  .createHash("sha256")
-  .update(fs.readFileSync("metadata.json"))
-  .digest("hex");
-console.log(hash); // 64-char hex string → 32 bytes
-```
-
-**Python**
-
-```python
-import hashlib, json
-
-meta = {"name": "My Raffle", "description": "...", "image": "ipfs://Qm...", "rules": "..."}
-# Use compact, sorted JSON for reproducibility
-raw = json.dumps(meta, separators=(',', ':'), sort_keys=True).encode()
-print(hashlib.sha256(raw).hexdigest())
-```
-
-### Converting hex → `BytesN<32>` for the contract call
-
-```bash
-# Stellar CLI example — pass as a hex-encoded bytes argument
-stellar contract invoke ... -- \
-  --metadata_hash "$(sha256sum metadata.json | cut -d' ' -f1)"
-```
-
-> **Important:** Use a canonical JSON serialization (compact, keys sorted) so the hash is reproducible by anyone who downloads the metadata from IPFS.
+Tikka is a decentralized raffle platform built on Stellar using Soroban smart contracts.
+Creators deposit a prize, sell tickets priced in any Stellar asset, and distribute prizes
+on-chain using either an internal PRNG draw (low-stakes) or an external VRF oracle (high-stakes).
 
 ---
 
+## Feature status
 
+| Feature | Status | Notes |
+|---|---|---|
+| Raffle creation via factory | ✅ Shipped | |
+| Prize deposit and escrow | ✅ Shipped | |
+| Ticket purchase (`buy_tickets`) | ✅ Shipped | |
+| Internal PRNG draw (`finalize_raffle`) | ✅ Shipped | Low-stakes only — see randomness note |
+| Multiple prize tiers | ✅ Shipped | Basis-point splits |
+| Configurable claim lockup | ✅ Shipped | Default 1 hour, max 7 days |
+| Protocol fee collection | ✅ Shipped | Basis-point fee to treasury |
+| Raffle cancellation + ticket refunds | ✅ Shipped | |
+| Emergency withdraw (admin/creator) | ✅ Shipped | 90-day time-lock |
+| Oracle VRF randomness (`provide_randomness`) | 🚧 In progress | Interface exists; oracle service wiring incomplete |
+| Oracle race-condition fix | 🚧 In progress | `OracleRequestPending` guard — see spec |
+| Commit-reveal randomness | 📋 Planned | `RandomnessSource::CommitReveal` stub only |
+| Periodic state snapshots | 📋 Planned | Spec drafted |
+| Paginated query system | 📋 Planned | Spec drafted |
+| Ticket refund system (partial sales) | 📋 Planned | Spec drafted |
+| Time-locked admin operations | 📋 Planned | Spec drafted |
+| Emergency pause migration | 📋 Planned | Spec drafted |
+| Independent security audit | 📋 Planned | Required before mainnet |
 
-### **Stellar Testnet**
+**Legend:** ✅ Shipped · 🚧 In progress · 📋 Planned
 
--   **Contract Address**: `CCTCPMI66REXIJQPVOPNTNUZBCMSRM7TZLMIPQROZIID44XNP2P2MKFZ`
-
-## 🚀 Getting Started
-
-### **Prerequisites**
-
--   Rust toolchain
--   Stellar CLI (optional for deployment)
-
-### **Run Tests**
-
-```bash
-cargo test -p raffle-factory
-cargo test -p raffle-instance
-```
-
-### **Build the Contract**
-
-```bash
-cargo build -p raffle-instance
-cargo build -p raffle-factory
-cargo build -p raffle-instance
-```
-
-## 🛠️ Development
-
-For local setup, build, and test workflows, see `DEVELOPMENT.md`.
-
-## 🤝 Contributing
-
-See `CONTRIBUTING.md` for contribution guidelines and PR expectations.
-
-## 📚 Documentation
-
--   **Stellar Soroban**: https://developers.stellar.org/docs/build/smart-contracts/overview
--   **Soroban Examples**: https://github.com/stellar/soroban-examples
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
--   **Documentation**: Check our guides
--   **Issues**: Report bugs and feature requests
--   **Community**: Join our Discord for discussions
-
-
-// protocol_fee_bp: Basis points (1 bp = 0.01%). 
-// Must be <= 10_000 (100%). 
-// Example: 250 = 2.5%
+> The current development priority is the items marked 🚧 In progress.
+> See [`TODO.md`](TODO.md) for the active fix list.
 
 ---
 
-**Built with ❤️ on Stellar**
+## How it works
+
+### Raffle lifecycle
+
+```
+PendingPrize ──deposit_prize()──► Active
+Active ──buy_tickets() fills max──► Drawing
+Active ──cancel_raffle()──────────► Cancelled
+Drawing ──finalize_raffle()───────► Finalized   (Internal PRNG)
+Drawing ──provide_randomness()────► Finalized   (External VRF oracle)
+Drawing ──fallback after timeout──► Finalized   (PRNG fallback)
+Finalized ──all prizes claimed────► Claimed
+```
+
+### Randomness
+
+| Source | Use case | Trust model |
+|---|---|---|
+| `Internal` (PRNG) | Low-stakes (< ~500 XLM) | Deterministic; ledger timestamp and sequence are influenceable by validators |
+| `External` (VRF oracle) | High-stakes | Off-chain VRF proof; not yet fully wired |
+
+### Contracts
+
+| Crate | Responsibility |
+|---|---|
+| `raffle` | Factory — deploys and tracks raffle instances |
+| `raffle-instance` | Per-raffle logic — tickets, draws, claims |
+| `raffle-shared` | Shared types and traits |
+
+Full module map: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+---
+
+## Getting started
+
+### Prerequisites
+
+- Rust (pinned via `rust-toolchain.toml` — `rustup` handles this automatically)
+- Stellar CLI (optional, for deployment)
+- Node.js 20+ (for oracle service)
+
+### Build
+
+```bash
+make build
+```
+
+### Test
+
+```bash
+make test
+```
+
+### Full CI pipeline (run before every push)
+
+```bash
+make ci
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full development workflow.
+
+---
+
+## Testnet deployment
+
+| Network | Contract address |
+|---|---|
+| Stellar Testnet | `CCTCPMI66REXIJQPVOPNTNUZBCMSRM7TZLMIPQROZIID44XNP2P2MKFZ` |
+
+---
+
+## Metadata integrity (`metadata_hash`)
+
+Every raffle commits a `metadata_hash: BytesN<32>` — a SHA-256 hash of the off-chain metadata
+JSON stored on IPFS. This hash is immutable after creation, preventing organizers from changing
+the description, rules, or prize after tickets are sold.
+
+```bash
+# Generate the hash (Linux/macOS)
+sha256sum metadata.json | cut -d' ' -f1
+```
+
+Use compact, sorted JSON (`sort_keys=True`, no extra spaces) for reproducibility.
+
+---
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Crate map, module layout, where code belongs |
+| [`docs/ERRORS.md`](docs/ERRORS.md) | All error codes with frontend messages |
+| [`docs/EVENTS.md`](docs/EVENTS.md) | All on-chain events |
+| [`DEVELOPMENT.md`](DEVELOPMENT.md) | Local setup, build, deploy, TTL management |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | PR workflow, code placement rules, `make ci` |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Deployment receipts and toolchain history |
+
+---
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Run `make ci` before opening a PR.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
