@@ -1,0 +1,12 @@
+# Acceptable-risk exceptions for `cargo audit`.
+# Both advisories are informational ("unmaintained") notices only. The crates
+# are build-time dependencies of arkworks (ark-bls12-381/ark-ff/ark-ec), which
+# soroban-env-host 23.x pulls in; they cannot be removed without a soroban-sdk
+# major upgrade. Re-evaluate alongside the next SDK upgrade.
+# See SECURITY.md -> "Existing findings" for the active-usage justification and
+# review date.
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0388", # derivative: unmaintained (proc-macro, via ark-ec)
+  "RUSTSEC-2024-0436", # paste: unmaintained (proc-macro, via ark-ff)
+]

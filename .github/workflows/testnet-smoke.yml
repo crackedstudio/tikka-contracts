@@ -5,35 +5,47 @@ on:
     - cron: '0 6 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  # Must match STELLAR_CLI_VERSION in scripts/common.sh (issues #841, #843).
+  STELLAR_CLI_VERSION: "23.4.1"
 
 jobs:
   smoke:
     name: Deploy and Smoke Test on Testnet
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
       with:
         targets: wasm32-unknown-unknown
 
     - name: Install Stellar CLI
+      timeout-minutes: 5
       run: |
-        curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-linux-amd64.tar.gz | tar -xz
-        sudo mv stellar-cli /usr/local/bin/stellar
+        curl -sSL --retry 3 --retry-delay 5 \
+          "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+          | tar -xz
+        sudo mv stellar /usr/local/bin/stellar
         stellar --version
 
     - name: Rust Cache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
     - name: Build Contracts
       run: cargo build --target wasm32-unknown-unknown --release
 
+    # Deploys a fresh factory through the same helpers as deploy-testnet.sh,
+    # then creates and runs a raffle against it (issue #842).
     - name: Deploy and Smoke Test
+      timeout-minutes: 15
       env:
         TESTNET_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
       run: ./scripts/smoke-test.sh

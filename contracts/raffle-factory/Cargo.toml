@@ -14,6 +14,9 @@ categories = ["cryptography::cryptocurrencies", "no-std"]
 crate-type = ["cdylib", "rlib"]
 doctest = false
 
+[features]
+testutils = ["raffle-shared/testutils"]
+
 [dependencies]
 soroban-sdk = { workspace = true }
 raffle-shared = { path = "../raffle-shared" }

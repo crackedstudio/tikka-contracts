@@ -6,32 +6,71 @@
 # Owners can be GitHub usernames (@username) or teams (@org/team-name)
 #
 # Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# NOTE: This file previously used the `@maintainers` team, which is not a valid
+# owner (the org has no team by that name), so ownership was never assigned.
+# To add more maintainers, append their GitHub usernames to each pattern
+# (or create a real `maintainers` team in the org and use `@maintainers` again).
+
+# NOTE: Previously used @maintainers (invalid reference). Replaced with top contributor.
+# Maintainers: adjust owner list to match your team/org structure.
 
 # Global fallback - all files
-* @maintainers
+* @Otaiki1
 
 # Smart contracts (Rust)
-contracts/** @maintainers
+contracts/** @Otaiki1 @king-aj-the-first
 
 # Oracle service (TypeScript/Node.js)
-oracle/** @maintainers
+oracle/** @Otaiki1 @king-aj-the-first
 
 # GitHub configuration (workflows, templates, etc.)
-.github/** @maintainers
+.github/** @Otaiki1
 
 # Documentation
-docs/** @maintainers
-*.md @maintainers
+docs/** @Otaiki1 @king-aj-the-first
+*.md @Otaiki1
 
 # Deployment scripts
-scripts/** @maintainers
+scripts/** @Otaiki1
 
 # CI/CD configuration
-.github/workflows/** @maintainers
+.github/workflows/** @Otaiki1
 
 # Root configuration files
-Cargo.toml @maintainers
-Cargo.lock @maintainers
-package.json @maintainers
-package-lock.json @maintainers
-.env.example @maintainers
+Cargo.toml @Otaiki1
+Cargo.lock @Otaiki1
+package.json @Otaiki1
+package-lock.json @Otaiki1
+.env.example @Otaiki1
+* @crackedstudio/maintainers
+
+# Smart contracts (Rust)
+contracts/** @crackedstudio/maintainers
+
+# Oracle service (TypeScript/Node.js)
+oracle/** @crackedstudio/maintainers
+
+# GitHub configuration (workflows, templates, etc.)
+.github/** @crackedstudio/maintainers
+
+# Documentation
+docs/** @crackedstudio/maintainers
+*.md @crackedstudio/maintainers
+
+# Deployment scripts
+scripts/** @crackedstudio/maintainers
+
+# CI/CD configuration
+.github/workflows/** @crackedstudio/maintainers
+
+# Root configuration files
+Cargo.toml @crackedstudio/maintainers
+Cargo.lock @crackedstudio/maintainers
+package.json @crackedstudio/maintainers
+package-lock.json @crackedstudio/maintainers
+.env.example @crackedstudio/maintainers
+
+# Dependency manifests — individual review for supply-chain changes
+deny.toml @crackedstudio/maintainers
+oracle/Dockerfile @crackedstudio/maintainers

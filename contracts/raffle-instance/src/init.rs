@@ -27,7 +27,9 @@
 
 use soroban_sdk::{token, Address, BytesN, Env, String};
 
-use raffle_shared::constants::MAX_CATEGORY_LENGTH;
+use raffle_shared::constants::{
+    DEFAULT_CLAIM_EXPIRY_SECONDS, MAX_CATEGORY_LENGTH, MIN_CLAIM_EXPIRY_SECONDS,
+};
 use raffle_shared::{RaffleConfig, RandomnessSource};
 
 use crate::events::{PrizeDeposited, RaffleCreated};
@@ -53,7 +55,7 @@ use crate::{
 /// | `end_time` | Must be in the future unless `no_deadline = true`; `no_deadline` requires `end_time == 0` |
 /// | `max_tickets` | `1 ≤ max_tickets ≤ MAX_TICKETS_LIMIT` (100 000) |
 /// | `max_tickets_per_tx` | `1 ≤ max_tickets_per_tx ≤ max_tickets` |
-/// | `max_tickets_per_address` | Not currently validated or enforced |
+/// | `max_tickets_per_address` | `≤ max_tickets`; `0` = unlimited. Enforced per-address at purchase time (both `buy_tickets` and `buy_tickets_for`) via `Error::ExceedsMaxTicketsPerAddress` |
 /// | `min_tickets` | `min_tickets ≤ max_tickets` |
 /// | `ticket_price` | `≥ MIN_TICKET_PRICE` (10 000 stroops) |
 /// | `prize_amount` | `ticket_price ≤ prize_amount ≤ MAX_PRIZE_AMOUNT` |
@@ -64,6 +66,7 @@ use crate::{
 /// | `category` | See [`validate_category`] |
 /// | `payment_token` | Must be a valid SAC (queried via `try_decimals`) |
 /// | `claim_lockup_seconds` | `≤ MAX_CLAIM_LOCKUP_SECONDS` (7 days) after `resolve_defaults` |
+/// | `claim_expiry_seconds` | `≥ MIN_CLAIM_EXPIRY_SECONDS` and greater than the claim lockup after `resolve_defaults` |
 /// | `swap_deadline_seconds` | `≤ MAX_SWAP_DEADLINE_SECONDS` (3 600 s) after `resolve_defaults` |
 ///
 /// # Parameters
@@ -96,7 +99,7 @@ pub(crate) fn init(
     factory: Address,
     admin: Address,
     creator: Address,
-    config: RaffleConfig,
+    mut config: RaffleConfig,
 ) -> Result<(), Error> {
     if env.storage().instance().has(&DataKey::Raffle) {
         return Err(Error::AlreadyInitialized);
@@ -125,8 +128,39 @@ pub(crate) fn init(
     if config.max_tickets_per_tx == 0 || config.max_tickets_per_tx > config.max_tickets {
         return Err(Error::InvalidParameters);
     }
+    if config.max_tickets_per_address == 0 && !config.allow_multiple {
+        config.max_tickets_per_address = 1;
+    }
+    if config.max_tickets_per_address > config.max_tickets {
+        return Err(Error::InvalidParameters);
+    }
     if config.ticket_price < MIN_TICKET_PRICE {
         return Err(Error::InvalidParameters);
+    }
+    // --- Ticket bundles (#783) ---
+    const MAX_BUNDLES: u32 = 16;
+    if config.bundles.len() > MAX_BUNDLES {
+        return Err(Error::InvalidParameters);
+    }
+    let mut prev_qty: u32 = 0;
+    for i in 0..config.bundles.len() {
+        let b = config.bundles.get(i).unwrap();
+    if b.quantity == 0 {
+            return Err(Error::InvalidParameters);
+        }
+        if b.price_per_ticket < MIN_TICKET_PRICE {
+            return Err(Error::InvalidParameters);
+        }
+    if i > 0 && b.quantity <= prev_qty {
+            return Err(Error::InvalidParameters);
+        }
+    if i > 0 {
+            let prev = config.bundles.get(i - 1).unwrap();
+    if b.price_per_ticket > prev.price_per_ticket {
+                return Err(Error::InvalidParameters);
+            }
+        }
+        prev_qty = b.quantity;
     }
     if config.prize_amount < config.ticket_price {
         return Err(Error::InvalidParameters);
@@ -174,6 +208,14 @@ pub(crate) fn init(
     if config.claim_lockup_seconds.unwrap() > MAX_CLAIM_LOCKUP_SECONDS {
         return Err(Error::InvalidParameters);
     }
+    let claim_expiry = config
+        .claim_expiry_seconds
+        .unwrap_or(DEFAULT_CLAIM_EXPIRY_SECONDS);
+    if claim_expiry < MIN_CLAIM_EXPIRY_SECONDS
+        || claim_expiry <= config.claim_lockup_seconds.unwrap()
+    {
+        return Err(Error::InvalidParameters);
+    }
     if config.swap_deadline_seconds.unwrap() > MAX_SWAP_DEADLINE_SECONDS {
         return Err(Error::InvalidParameters);
     }
@@ -185,8 +227,10 @@ pub(crate) fn init(
         no_deadline: config.no_deadline,
         max_tickets: config.max_tickets,
         max_tickets_per_tx: config.max_tickets_per_tx,
+        max_tickets_per_address: config.max_tickets_per_address,
         min_tickets: config.min_tickets,
         allow_multiple: config.allow_multiple,
+        max_tickets_per_address: config.max_tickets_per_address,
         ticket_price: config.ticket_price,
         payment_token: config.payment_token.clone(),
         prize_token: config.payment_token.clone(),
@@ -196,7 +240,7 @@ pub(crate) fn init(
         status: RaffleStatus::PendingPrize,
         prize_deposited: false,
         winners: soroban_sdk::Vec::new(&env),
-        claimed_winners: soroban_sdk::Vec::new(&env),
+        claim_expiry_seconds: claim_expiry,
         randomness_source: config.randomness_source.clone(),
         oracle_address: config.oracle_address,
         protocol_fee_bp: config.protocol_fee_bp,
@@ -209,6 +253,9 @@ pub(crate) fn init(
         ticket_sales_paused: false,
         early_bird_ticket_percentage: config.early_bird_ticket_percentage,
         early_bird_discount_bp: config.early_bird_discount_bp,
+        metadata_hash: config.metadata_hash.clone(),
+        unique_winners: config.unique_winners,
+        nft_contract: config.nft_contract,
     };
     write_raffle(&env, &raffle);
     env.storage().instance().set(&DataKey::Factory, &factory);
@@ -226,6 +273,8 @@ pub(crate) fn init(
         description: config.description,
         randomness_source: config.randomness_source,
         metadata_hash: config.metadata_hash,
+        unique_winners: config.unique_winners,
+        claim_expiry_seconds: claim_expiry,
     }.publish(&env);
 
     Ok(())

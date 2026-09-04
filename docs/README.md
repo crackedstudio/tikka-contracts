@@ -76,6 +76,11 @@ How to run and extend unit, integration, and fuzz tests across contracts (`cargo
 **Audience:** Contributors, Operators, Auditors  
 Migration guide for PR #426, which changed the factory contract storage from a `Vec`-based layout to a stable-index map. Documents the complexity improvements, stable ID system, new public entry points, and provides testnet migration steps. Historical reference for understanding storage evolution.
 
+### [VIEWS.md](VIEWS.md)
+
+**Audience:** Integrators, Frontend Developers  
+Documents the read-only query surface extracted into `contracts/raffle-factory/src/views.rs`. Covers all 14 view functions, pagination conventions (`effective_limit`, `PageResultRaffles`), and provides a table of the complete query surface for integrators.
+
 ## Recommended Reading Order for New Contributors
 
 1. **Start here:** [ARCHITECTURE.md](ARCHITECTURE.md) — Understand the big picture and component relationships

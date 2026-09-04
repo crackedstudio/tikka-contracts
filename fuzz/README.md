@@ -140,4 +140,5 @@ Commit this directory to seed future runs and prevent regression.
 - [x] Fuzz target for `winner_selection` (issue #86)
 - [x] Fuzz target for `refund_cancel` (issue #466)
 - [x] Fuzz target for `commit_reveal` (issue #632)
+- [x] Nightly CI job runs all targets with corpus caching (see `.github/workflows/fuzz.yml`)
 - [ ] Fuzzer runs for at least 30 minutes without discovery of panics *(run in CI or locally)*
