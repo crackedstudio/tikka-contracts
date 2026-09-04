@@ -51,7 +51,7 @@ jobs:
 
       - name: Open issue on new findings
         if: steps.audit.outputs.findings == 'true' && github.event_name == 'schedule'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9.0.0
         with:
           script: |
             const fs = require('fs');
