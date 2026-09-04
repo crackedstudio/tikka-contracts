@@ -1,60 +1,56 @@
 #!/usr/bin/env bash
+# Deploy a fully initialised raffle factory to mainnet.
+#
+# Identical to deploy-testnet.sh apart from the network and an explicit
+# confirmation prompt (issues #842, #843).
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
+# shellcheck source=scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+NETWORK="mainnet"
 
-require_env() {
-  local name="$1"
-  if [[ -z "${!name:-}" ]]; then
-    echo "Error: ${name} is required to deploy" >&2
-    exit 1
-  fi
-}
+load_env
+require_env DEPLOYER_SECRET_KEY "the account that signs the deployment"
+require_env ADMIN_ADDRESS "factory admin, passed to init_factory"
 
-require_env DEPLOYER_SECRET_KEY
+TREASURY_ADDRESS="${TREASURY_ADDRESS:-${ADMIN_ADDRESS}}"
+PROTOCOL_FEE_BP="${PROTOCOL_FEE_BP:-0}"
 
-echo "Building WASM..."
-stellar contract build
+warn_on_cli_mismatch
+require_no_existing_deployment "${NETWORK}"
 
-WASM_FILE="target/wasm32v1-none/release/raffle-factory.wasm"
-
-if [[ ! -f "${WASM_FILE}" ]]; then
-    echo "Error: WASM file not found at ${WASM_FILE}" >&2
-    exit 1
-fi
-
-echo "Deploying to Mainnet..."
-echo "WARNING: You are deploying to MAINNET. Proceed? (y/N)"
+echo "WARNING: You are deploying to MAINNET."
+echo "  admin:           ${ADMIN_ADDRESS}"
+echo "  treasury:        ${TREASURY_ADDRESS}"
+echo "  protocol fee bp: ${PROTOCOL_FEE_BP}"
+echo "Proceed? (y/N)"
 read -r response
-if [[ ! "${response}" =~ ^([yY][eE][sS]|[yY])+$ ]]; then
+if [[ ! "${response}" =~ ^([yY][eE][sS]|[yY])$ ]]; then
     echo "Deployment aborted."
     exit 1
 fi
 
-CONTRACT_ID=$(stellar contract deploy \
-  --wasm "${WASM_FILE}" \
-  --source "${DEPLOYER_SECRET_KEY}" \
-  --network mainnet)
+build_contracts
 
-echo "Deployment successful!"
-echo "Contract ID: ${CONTRACT_ID}"
+deploy_and_init_factory \
+  "${NETWORK}" \
+  "${DEPLOYER_SECRET_KEY}" \
+  "${ADMIN_ADDRESS}" \
+  "${TREASURY_ADDRESS}" \
+  "${PROTOCOL_FEE_BP}"
 
-mkdir -p deployments
-cat <<EOF > deployments/mainnet.json
-{
-  "network": "mainnet",
-  "contractId": "${CONTRACT_ID}",
-  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-}
-EOF
+verify_deployed_bytecode "${NETWORK}" "${FACTORY_CONTRACT_ID}"
 
-echo "Saved deployment info to deployments/mainnet.json"
+write_deployment_manifest \
+  "${NETWORK}" \
+  "${ADMIN_ADDRESS}" \
+  "${TREASURY_ADDRESS}" \
+  "${PROTOCOL_FEE_BP}"
+
+echo ""
+echo "Deployment successful."
+echo "Factory contract ID: ${FACTORY_CONTRACT_ID}"
+echo "Instance WASM hash:  ${INSTANCE_WASM_HASH}"

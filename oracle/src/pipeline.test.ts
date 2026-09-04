@@ -12,7 +12,6 @@ describe('OraclePipeline', () => {
 
   beforeEach(() => {
     mockConfig = {
-      secretKey: 'SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
       rpcUrl: 'http://localhost:8000',
       factoryContractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
       logLevel: 'info',
@@ -30,7 +29,7 @@ describe('OraclePipeline', () => {
     mockDedup = new DeduplicationStore(':memory:');
 
     // Set required env var for KeyService
-    process.env.ORACLE_SECRET_KEY = mockConfig.secretKey;
+    process.env.ORACLE_SECRET_KEY = 'SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
   });
 
   afterEach(() => {

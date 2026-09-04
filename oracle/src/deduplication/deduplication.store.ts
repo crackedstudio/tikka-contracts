@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from '../logging/logger';
 
 export class DeduplicationStore {
   private seen: Set<string> = new Set();
@@ -22,7 +23,7 @@ export class DeduplicationStore {
         this.seen = new Set(data.seen || []);
       }
     } catch (error) {
-      console.warn('Failed to load deduplication store, starting fresh:', error);
+      logger.warn('Failed to load deduplication store, starting fresh:', error);
       // Ensure directory exists
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
@@ -43,7 +44,7 @@ export class DeduplicationStore {
       }
       fs.writeFileSync(this.filePath, JSON.stringify({ seen: Array.from(this.seen) }));
     } catch (error) {
-      console.error('Failed to save deduplication store:', error);
+      logger.error('Failed to save deduplication store:', error);
     }
   }
 

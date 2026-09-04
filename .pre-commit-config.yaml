@@ -23,6 +23,6 @@ repos:
         pass_filenames: false
       - id: eslint-oracle
         name: eslint oracle
-        entry: bash -lc 'cd oracle && npx eslint src --max-warnings 0'
+        entry: bash -lc 'cd oracle && npm run lint'
         language: system
         pass_filenames: false

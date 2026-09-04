@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 std = []
-testutils = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils", "raffle-shared/testutils"]
 
 [dependencies]
 soroban-sdk = { workspace = true }

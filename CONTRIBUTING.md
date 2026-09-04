@@ -64,13 +64,69 @@ cargo test -p raffle-instance
 
 ## Error Documentation Sync
 
-If you modify or add any variants to the `Error` enum in `contracts/raffle-instance/src/lib.rs`, regenerate `docs/ERRORS.md` before committing:
+If you modify or add any variants to the `Error` enum in `contracts/raffle-instance/src/lib.rs`
+or the `ContractError` enum in `contracts/raffle-factory/src/lib.rs`, regenerate
+`docs/ERRORS.md` before committing:
 
 ```bash
-python scripts/generate_error_docs.py
+python3 scripts/generate_error_docs.py
 ```
 
-CI will fail if `docs/ERRORS.md` is out of sync with the Rust `Error` enum.
+CI will fail if `docs/ERRORS.md` is out of sync with either enum. Every variant must
+have a `///` doc comment; duplicate discriminants and undeclared-but-used variants
+also fail the generator.
+
+## Continuous Integration
+
+All CI jobs must pass before a pull request can merge. A red build blocks merge —
+there are no exceptions for individual jobs. Required checks on `master` are:
+
+- `Build, Test, and Lint` (includes `cargo check`, formatting, clippy, and tests)
+- `Oracle Service CI`
+- `Shell Script Checks`
+
+Repository admins must enable branch protection on `master` so these checks are
+required and branches must be up to date before merging. Workflow changes land in
+PRs first; enforcement is enabled once the pipeline is green.
+
+## Events Documentation Sync
+
+If you modify or add any `#[contractevent]` struct in
+`contracts/raffle-shared/src/events.rs`, `contracts/raffle-factory/src/events.rs`,
+or `contracts/raffle-instance/src/events.rs`, regenerate `docs/EVENTS.md` before
+committing:
+
+```bash
+python scripts/generate_event_docs.py
+```
+
+Every event struct **and** every field must carry a `///` doc comment, and
+numeric fields must state whether they are 0-based **indices** or 1-based
+**IDs** (see the "Index-vs-ID convention" section of `docs/EVENTS.md`).
+
+CI will fail if `docs/EVENTS.md` is out of sync with the event structs.
+
+## Code Coverage
+
+Coverage is collected in CI for both the Rust workspace (`cargo llvm-cov`) and
+the oracle service (Jest with `--coverage`):
+
+- Rust and oracle `lcov` artifacts are uploaded as build artifacts.
+- Rust line coverage is enforced via a **ratchet**:
+  `scripts/check_coverage_ratchet.py` compares the current `lcov` output with
+  the committed baseline in `coverage/coverage-ratchet.json`. Coverage must
+  never **decrease** relative to that baseline; increases are automatically
+  adopted.
+
+To arm an updated ratchet after a big behavior change, regenerate the baseline
+and commit it in the same PR:
+
+```bash
+python scripts/check_coverage_ratchet.py \
+  --lcov coverage/lcov.info \
+  --baseline coverage/coverage-ratchet.json \
+  --update
+```
 
 ## Markdown
 
@@ -82,12 +138,74 @@ npx markdownlint-cli2 "**/*.md"
 
 The configuration lives in `.markdownlint.jsonc`. Auto-fixable issues can be resolved with `npx markdownlint-cli2 --fix "**/*.md"`.
 
+## Error Code Policy
+
+Error codes are defined in `#[contracterror]` enums and are part of the on-chain ABI.
+Once a code is assigned it is **never reused or reassigned**, even if the variant is
+later deprecated.  New errors must follow the reserved ranges:
+
+| Range     | Owner            | Purpose                                      |
+| --------- | ---------------- | -------------------------------------------- |
+| 1 – 99    | Shared           | Conditions used by both instance and factory  |
+| 100 – 199 | Instance-only    | New instance-specific errors                 |
+| 200 – 299 | Factory-only     | New factory-specific errors                  |
+
+If a new shared condition is needed, add it to `ProtocolError` in
+`contracts/raffle-shared/src/errors.rs` with a code in the 1–99 range, then update
+both `raffle-instance/src/lib.rs` and `raffle-factory/src/lib.rs` to use it.
+
+Run `python scripts/check_error_codes.py` before submitting a PR to verify no
+duplicate discriminants exist.
+
 ## Pull Requests
 
 - Provide a concise summary of what changed and why.
 - Link any relevant issues.
 - Note any follow-up work or limitations.
 - Use the PR template at `.github/PULL_REQUEST_TEMPLATE.md` to ensure all required information is included.
+
+## Dependency updates
+
+Dependabot opens weekly PRs for **GitHub Actions**, **Cargo**, **npm** (`oracle/`), and
+**Docker** (`oracle/Dockerfile`). Review policy:
+
+| Ecosystem | Grouping | Review expectations |
+|-----------|----------|---------------------|
+| **Cargo — production** | Individual PRs for `soroban-sdk`, `ed25519-dalek`, `sha2`, and other runtime/crypto deps | Rebuild WASM (`cargo build --target wasm32-unknown-unknown --release`), run the full test suite, and verify host behaviour before merge. Soroban SDK minors can change contract semantics. |
+| **Cargo — dev tooling** | Grouped (`proptest`, test helpers, fuzz crates, etc.) | Run `cargo test --workspace` and `cargo clippy`. |
+| **npm — production** | Individual PRs for `@stellar/stellar-sdk`, `dotenv` | Confirm SDK major matches the Soroban protocol (see `oracle/README.md`), run `npm test` and `npm run build`. |
+| **npm — dev tooling** | Grouped (Jest, TypeScript, Prettier, types) | Run `npm test` and `npm run format:check`. |
+| **Docker** | Individual PRs for base image bumps | Rebuild the oracle image and smoke-test `/health`. |
+| **GitHub Actions** | Individual PRs per action bump | Ensure SHA pins include a version comment; `actionlint` must pass. |
+
+All dependency PRs route to `@crackedstudio/maintainers` via CODEOWNERS. Do not merge
+supply-chain bumps without maintainer approval.
+
+## Supply-chain policy (`cargo-deny`)
+
+CI runs [`cargo-deny`](https://embarkstudios.github.io/cargo-deny/) on every PR using
+the root [`deny.toml`](deny.toml). The policy enforces allowed licenses, warns on
+duplicate crate versions, and denies known advisories. Advisories are also refreshed
+on a weekly schedule.
+
+### Adding an exception
+
+If `cargo-deny` reports a finding that cannot be resolved immediately:
+
+1. Prefer fixing the dependency (upgrade, replace, or remove) over allowlisting.
+2. If an allowlist entry is unavoidable, add it to the relevant section in `deny.toml`
+   with an inline `reason` (or `ignore` entry for advisories) explaining the risk
+   accepted and the planned remediation.
+3. Obtain approval from a `@crackedstudio/maintainers` reviewer — exceptions require
+   explicit maintainer sign-off in the PR.
+4. Link any related RUSTSEC advisory ID in the PR description.
+
+Run locally before opening a PR:
+
+```bash
+cargo install cargo-deny --locked
+cargo deny check
+```
 
 ## Stale issues and PRs
 

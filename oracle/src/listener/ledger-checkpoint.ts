@@ -6,6 +6,10 @@ export interface LedgerCheckpointStore {
   save(ledger: number): Promise<void>;
 }
 
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
+}
+
 export class FileLedgerCheckpointStore implements LedgerCheckpointStore {
   constructor(private readonly filePath: string) {}
 
@@ -14,8 +18,8 @@ export class FileLedgerCheckpointStore implements LedgerCheckpointStore {
       const raw = await fs.readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as { lastLedger?: number };
       return typeof parsed.lastLedger === 'number' ? parsed.lastLedger : undefined;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    } catch (error: unknown) {
+      if (isErrnoException(error) && error.code === 'ENOENT') {
         return undefined;
       }
       throw error;
@@ -29,7 +33,7 @@ export class FileLedgerCheckpointStore implements LedgerCheckpointStore {
 }
 
 export class MemoryLedgerCheckpointStore implements LedgerCheckpointStore {
-  private lastLedger?: number;
+  private lastLedger: number | undefined;
 
   async load(): Promise<number | undefined> {
     return this.lastLedger;
