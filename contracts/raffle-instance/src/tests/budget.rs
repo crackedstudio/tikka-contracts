@@ -5,7 +5,7 @@
 
 use raffle_shared::constants::{MAX_PRIZES, MAX_TICKETS_LIMIT};
 use soroban_sdk::{
-    testutils::Budget,
+    testutils::budget::Budget,
     token::StellarAssetClient,
     Address, BytesN, Env, String, Vec,
 };

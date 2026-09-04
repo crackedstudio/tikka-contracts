@@ -27,7 +27,9 @@
 
 use soroban_sdk::{token, Address, BytesN, Env, String};
 
-use raffle_shared::constants::MAX_CATEGORY_LENGTH;
+use raffle_shared::constants::{
+    DEFAULT_CLAIM_EXPIRY_SECONDS, MAX_CATEGORY_LENGTH, MIN_CLAIM_EXPIRY_SECONDS,
+};
 use raffle_shared::{RaffleConfig, RandomnessSource};
 
 use crate::events::{PrizeDeposited, RaffleCreated};
@@ -64,6 +66,7 @@ use crate::{
 /// | `category` | See [`validate_category`] |
 /// | `payment_token` | Must be a valid SAC (queried via `try_decimals`) |
 /// | `claim_lockup_seconds` | `≤ MAX_CLAIM_LOCKUP_SECONDS` (7 days) after `resolve_defaults` |
+/// | `claim_expiry_seconds` | `≥ MIN_CLAIM_EXPIRY_SECONDS` and greater than the claim lockup after `resolve_defaults` |
 /// | `swap_deadline_seconds` | `≤ MAX_SWAP_DEADLINE_SECONDS` (3 600 s) after `resolve_defaults` |
 ///
 /// # Parameters
@@ -205,6 +208,14 @@ pub(crate) fn init(
     if config.claim_lockup_seconds.unwrap() > MAX_CLAIM_LOCKUP_SECONDS {
         return Err(Error::InvalidParameters);
     }
+    let claim_expiry = config
+        .claim_expiry_seconds
+        .unwrap_or(DEFAULT_CLAIM_EXPIRY_SECONDS);
+    if claim_expiry < MIN_CLAIM_EXPIRY_SECONDS
+        || claim_expiry <= config.claim_lockup_seconds.unwrap()
+    {
+        return Err(Error::InvalidParameters);
+    }
     if config.swap_deadline_seconds.unwrap() > MAX_SWAP_DEADLINE_SECONDS {
         return Err(Error::InvalidParameters);
     }
@@ -216,6 +227,7 @@ pub(crate) fn init(
         no_deadline: config.no_deadline,
         max_tickets: config.max_tickets,
         max_tickets_per_tx: config.max_tickets_per_tx,
+        max_tickets_per_address: config.max_tickets_per_address,
         min_tickets: config.min_tickets,
         allow_multiple: config.allow_multiple,
         max_tickets_per_address: config.max_tickets_per_address,
@@ -228,7 +240,7 @@ pub(crate) fn init(
         status: RaffleStatus::PendingPrize,
         prize_deposited: false,
         winners: soroban_sdk::Vec::new(&env),
-        claimed_winners: soroban_sdk::Vec::new(&env),
+        claim_expiry_seconds: claim_expiry,
         randomness_source: config.randomness_source.clone(),
         oracle_address: config.oracle_address,
         protocol_fee_bp: config.protocol_fee_bp,
@@ -241,6 +253,9 @@ pub(crate) fn init(
         ticket_sales_paused: false,
         early_bird_ticket_percentage: config.early_bird_ticket_percentage,
         early_bird_discount_bp: config.early_bird_discount_bp,
+        metadata_hash: config.metadata_hash.clone(),
+        unique_winners: config.unique_winners,
+        nft_contract: config.nft_contract,
     };
     write_raffle(&env, &raffle);
     env.storage().instance().set(&DataKey::Factory, &factory);
@@ -258,6 +273,8 @@ pub(crate) fn init(
         description: config.description,
         randomness_source: config.randomness_source,
         metadata_hash: config.metadata_hash,
+        unique_winners: config.unique_winners,
+        claim_expiry_seconds: claim_expiry,
     }.publish(&env);
 
     Ok(())

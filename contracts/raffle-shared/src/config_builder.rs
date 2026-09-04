@@ -26,6 +26,7 @@ pub struct RaffleConfigBuilder<'a> {
     no_deadline: bool,
     max_tickets: u32,
     max_tickets_per_tx: Option<u32>,
+    max_tickets_per_address: u32,
     min_tickets: u32,
     allow_multiple: bool,
     ticket_price: i128,
@@ -39,6 +40,7 @@ pub struct RaffleConfigBuilder<'a> {
     tikka_token: Option<Address>,
     metadata_hash: BytesN<32>,
     claim_lockup_seconds: u64,
+    claim_expiry_seconds: Option<u64>,
     swap_deadline_seconds: u64,
     early_bird_ticket_percentage: u32,
     early_bird_discount_bp: u32,
@@ -59,6 +61,7 @@ impl<'a> RaffleConfigBuilder<'a> {
             no_deadline: true,
             max_tickets: 100,
             max_tickets_per_tx: None,
+            max_tickets_per_address: 0,
             min_tickets: 1,
             allow_multiple: true,
             ticket_price: 10_000,
@@ -72,6 +75,7 @@ impl<'a> RaffleConfigBuilder<'a> {
             tikka_token: None,
             metadata_hash: BytesN::from_array(env, &[1u8; 32]),
             claim_lockup_seconds: 0,
+            claim_expiry_seconds: None,
             swap_deadline_seconds: 0,
             early_bird_ticket_percentage: 0,
             early_bird_discount_bp: 0,
@@ -184,6 +188,11 @@ impl<'a> RaffleConfigBuilder<'a> {
         self
     }
 
+    pub fn claim_expiry_seconds(mut self, claim_expiry_seconds: u64) -> Self {
+        self.claim_expiry_seconds = Some(claim_expiry_seconds);
+        self
+    }
+
     pub fn category(mut self, category: Option<String>) -> Self {
         self.category = category;
         self
@@ -207,6 +216,7 @@ impl<'a> RaffleConfigBuilder<'a> {
             no_deadline: self.no_deadline,
             max_tickets: self.max_tickets,
             max_tickets_per_tx,
+            max_tickets_per_address: self.max_tickets_per_address,
             min_tickets: self.min_tickets,
             allow_multiple: self.allow_multiple,
             ticket_price: self.ticket_price,
@@ -220,7 +230,8 @@ impl<'a> RaffleConfigBuilder<'a> {
             swap_router: self.swap_router,
             tikka_token: self.tikka_token,
             metadata_hash: self.metadata_hash,
-            claim_lockup_seconds: self.claim_lockup_seconds,
+            claim_lockup_seconds: Some(self.claim_lockup_seconds),
+            claim_expiry_seconds: self.claim_expiry_seconds,
             swap_deadline_seconds: self.swap_deadline_seconds,
             early_bird_ticket_percentage: self.early_bird_ticket_percentage,
             early_bird_discount_bp: self.early_bird_discount_bp,

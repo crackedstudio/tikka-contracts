@@ -60,7 +60,7 @@ fn non_winner_cannot_claim() {
 
     let raffle = client.get_raffle();
     assert_eq!(raffle.winners.len(), 1);
-    assert!(raffle.winners.get(0).unwrap() != attacker);
+    assert!(raffle.winners.get(0).unwrap().address != attacker);
 
     env.ledger()
         .set_timestamp(2_000 + DEFAULT_CLAIM_LOCKUP_SECONDS + 1);
@@ -198,7 +198,7 @@ fn test_claim_prize_deducts_protocol_fee() {
 
     env.ledger()
         .set_timestamp(1_000 + DEFAULT_CLAIM_LOCKUP_SECONDS + 1);
-    let winner = client.get_raffle().winners.get(0).unwrap();
+    let winner = client.get_raffle().winners.get(0).unwrap().address;
     let balance_before = soroban_sdk::token::Client::new(&env, &payment_token).balance(&winner);
 
     let claimed = client.claim_prize(&winner, &0);

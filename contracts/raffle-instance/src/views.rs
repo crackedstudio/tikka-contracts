@@ -16,7 +16,7 @@
 
 use soroban_sdk::{Address, Env, Vec};
 
-use raffle_shared::{BuyQuote, FairnessData};
+use raffle_shared::{BuyQuote, FairnessData, RaffleStats};
 
 use crate::helpers::calculate_buy_quote;
 use crate::{read_raffle, DataKey, Error, FairnessMetadata};

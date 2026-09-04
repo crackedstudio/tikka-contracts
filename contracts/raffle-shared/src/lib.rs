@@ -252,6 +252,28 @@ pub struct RaffleConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
+pub struct BuyQuote {
+    pub gross: i128,
+    pub discount: i128,
+    pub fee: i128,
+    pub net_to_pay: i128,
+    pub effective_ticket_price: i128,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct RaffleStats {
+    pub tickets_sold: u32,
+    pub unique_buyers: u32,
+    pub gross_revenue: i128,
+    pub fees_accrued: i128,
+    pub prize_funded: bool,
+    pub status: RaffleStatus,
+    pub time_remaining: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
 pub struct TicketBundle {
     pub quantity: u32,
     pub price_per_ticket: i128,

@@ -10,7 +10,8 @@ use crate::events::{
 };
 use crate::{
     calculate_tier_prize, read_raffle, require_admin, write_raffle, DataKey, Error, RaffleStatus,
-    EMERGENCY_WITHDRAW_DELAY_SECONDS, MAX_PROTOCOL_FEE_BP, MAX_SWAP_DEADLINE_SECONDS,
+    transition_status, EMERGENCY_WITHDRAW_DELAY_SECONDS, MAX_PROTOCOL_FEE_BP,
+    MAX_SWAP_DEADLINE_SECONDS,
 };
 
 fn outstanding_ticket_refunds(env: &Env, raffle: &crate::Raffle) -> Result<i128, Error> {
@@ -35,7 +36,12 @@ fn outstanding_prize(env: &Env, raffle: &crate::Raffle) -> Result<i128, Error> {
 
     let mut outstanding = 0i128;
     for tier_index in 0..raffle.winners.len() {
-        if !raffle.claimed_winners.get(tier_index).unwrap_or(false) {
+        if !raffle
+            .winners
+            .get(tier_index)
+            .map(|winner| winner.claimed)
+            .unwrap_or(false)
+        {
             outstanding = outstanding
                 .checked_add(calculate_tier_prize(raffle, tier_index)?)
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -470,6 +476,7 @@ pub(crate) fn sweep_dust(env: Env) -> Result<(), Error> {
 
     let treasury = raffle
         .treasury_address
+        .clone()
         .ok_or(Error::InvalidParameters)?;
 
     let token_client = token::Client::new(&env, &raffle.payment_token);

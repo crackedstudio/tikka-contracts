@@ -107,6 +107,7 @@ pub(crate) fn get_draw_attestation(env: &Env) -> Result<DrawAttestation, Error> 
         winning_ticket_indices: fairness_meta.winning_ticket_indices.clone(),
         draw_timestamp: fairness_meta.draw_timestamp,
         draw_sequence: fairness_meta.draw_sequence,
+        unique_winners: fairness_meta.unique_winners,
     };
 
     // Resolve winning ticket IDs from indices
@@ -123,10 +124,15 @@ pub(crate) fn get_draw_attestation(env: &Env) -> Result<DrawAttestation, Error> 
     // Retrieve metadata hash from the raffle configuration
     let metadata_hash = raffle.metadata_hash.clone();
 
+    let mut winner_addresses = Vec::new(env);
+    for winner in raffle.winners.iter() {
+        winner_addresses.push_back(winner.address);
+    }
+
     Ok(DrawAttestation {
         fairness_data,
         metadata_hash,
-        winner_addresses: raffle.winners.clone(),
+        winner_addresses,
         winning_ticket_ids,
         randomness_source: raffle.randomness_source,
         config_hash,
@@ -150,10 +156,10 @@ fn compute_config_hash(env: &Env, raffle: &crate::Raffle) -> BytesN<32> {
         raffle.max_tickets,
         raffle.ticket_price,
         raffle.prize_amount,
-        raffle.prizes.to_xdr(env),
-        raffle.randomness_source.to_xdr(env),
-        raffle.payment_token.to_xdr(env),
-        raffle.creator.to_xdr(env),
+        raffle.prizes.clone().to_xdr(env),
+        raffle.randomness_source.clone().to_xdr(env),
+        raffle.payment_token.clone().to_xdr(env),
+        raffle.creator.clone().to_xdr(env),
     )
         .to_xdr(env);
 

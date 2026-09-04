@@ -481,7 +481,7 @@ fn test_adversarial_ceiling_rounding() {
     assert_eq!(client.get_accumulated_fees(), expected_ticket_fee);
     
     client.finalize_raffle();
-    let winner = client.get_raffle().winners.get(0).unwrap();
+    let winner = client.get_raffle().winners.get(0).unwrap().address;
     let balance_before = token_client.balance(&winner);
     
     let claimed = client.claim_prize(&winner, &0);

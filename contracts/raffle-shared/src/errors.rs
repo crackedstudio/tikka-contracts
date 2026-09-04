@@ -82,7 +82,7 @@ pub enum ProtocolError {
     DrawingAlreadyComplete = 60,
     InvalidEndTime = 61,
     InvalidAdminAddress = 62,
-    InvalidStatusForDrawingTransition = 63,
+    InvalidDrawingTransition = 63,
     RandomnessTooEarly = 64,
 
     // ------------------------------------------------------------------ --

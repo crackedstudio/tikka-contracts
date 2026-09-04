@@ -4,7 +4,7 @@ use soroban_sdk::{token, Address, Env};
 use crate::events::{PrizeClaimed, PrizeRefunded, PrizeSwept, TicketRefunded};
 use crate::{
     calculate_tier_prize, read_raffle, transition_status, write_raffle, DataKey, Error, Guard,
-    RaffleStatus,
+    RaffleStatus, Winner,
 };
 
 pub(crate) fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<i128, Error> {
@@ -25,10 +25,10 @@ pub(crate) fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<
     }
 
     let entry = raffle.winners.get(tier_index).ok_or(Error::InvalidIndex)?;
-    if entry != winner {
+    if entry.address != winner {
         return Err(Error::NotWinner);
     }
-    if raffle.claimed_winners.get(tier_index).unwrap_or(true) {
+    if entry.claimed {
         return Err(Error::PrizeAlreadyClaimed);
     }
 
@@ -53,11 +53,15 @@ pub(crate) fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<
         return Err(Error::InsufficientFunds);
     }
 
-    raffle.claimed_winners.set(tier_index, true);
+    raffle.winners.set(
+        tier_index,
+        Winner {
+            claimed: true,
+            ..entry
+        },
+    );
 
-    let all_claimed = (0..raffle.claimed_winners.len()).all(|i| {
-        raffle.claimed_winners.get(i as u32).unwrap_or(false)
-    });
+    let all_claimed = raffle.winners.iter().all(|entry| entry.claimed);
     if all_claimed {
         transition_status(
             &env,
@@ -143,10 +147,10 @@ pub(crate) fn sweep_unclaimed(
     let end_index = start_index.saturating_add(max_items).min(len);
 
     for i in start_index..end_index {
-        if raffle.claimed_winners.get(i).unwrap_or(false) {
+        let entry = raffle.winners.get(i).ok_or(Error::InvalidIndex)?;
+        if entry.claimed {
             continue;
         }
-        let entry = raffle.winners.get(i).ok_or(Error::InvalidIndex)?;
         let amount = calculate_tier_prize(&raffle, i)?;
         if amount <= 0 {
             continue;
@@ -154,9 +158,15 @@ pub(crate) fn sweep_unclaimed(
         let _ = tc
             .try_transfer(&env.current_contract_address(), &treasury, &amount)
             .map_err(|_| Error::TokenTransferFailed)?;
-        raffle.claimed_winners.set(i, true);
+        raffle.winners.set(
+            i,
+            Winner {
+                claimed: true,
+                ..entry.clone()
+            },
+        );
         PrizeSwept {
-            winner: entry,
+            winner: entry.address,
             tier_index: i,
             treasury: treasury.clone(),
             amount,
@@ -166,9 +176,7 @@ pub(crate) fn sweep_unclaimed(
         swept += 1;
     }
 
-    let all_claimed = (0..raffle.claimed_winners.len()).all(|i| {
-        raffle.claimed_winners.get(i as u32).unwrap_or(false)
-    });
+    let all_claimed = raffle.winners.iter().all(|entry| entry.claimed);
     if all_claimed {
         transition_status(&env, &mut raffle, RaffleStatus::Claimed, now)?;
     }

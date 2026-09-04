@@ -559,10 +559,10 @@ fn unique_winners_limits_one_tier_per_address() {
     let mut count_b = 0u32;
     for i in 0..raffle.winners.len() {
         let w = raffle.winners.get(i).unwrap();
-        if w == buyer_a {
+        if w.address == buyer_a {
             count_a += 1;
         }
-        if w == buyer_b {
+        if w.address == buyer_b {
             count_b += 1;
         }
     }

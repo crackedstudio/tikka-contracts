@@ -3,6 +3,9 @@
 #![warn(clippy::arithmetic_side_effects)]
 #![deny(unused)]
 
+#[cfg(test)]
+extern crate std;
+
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contracterror, contractimpl, contracttype, token,
@@ -45,8 +48,8 @@ use raffle_shared::{
         MAX_SWAP_DEADLINE_SECONDS, MAX_TICKETS_LIMIT, MIN_CLAIM_EXPIRY_SECONDS, MIN_TICKET_PRICE,
         ORACLE_TIMEOUT_LEDGERS,
     },
-    CancelReason, FailureReason, FairnessData, QuorumConfig, RaffleConfig, RaffleStatus,
-    RandomnessSource, RandomnessType, Ticket,
+    BuyQuote, CancelReason, FailureReason, FairnessData, QuorumConfig, RaffleConfig,
+    RaffleStats, RaffleStatus, RandomnessSource, RandomnessType, Ticket,
 };
 
 use self::randomness::build_vrf_proof_message;
@@ -98,10 +101,8 @@ pub struct Raffle {
     pub tickets_sold: u32,
     pub status: RaffleStatus,
     pub prize_deposited: bool,
-    /// Winner addresses, indexed by prize tier.
-    pub winners: Vec<Address>,
-    /// Per-tier claim flag, parallel to `winners`.
-    pub claimed_winners: Vec<bool>,
+    /// Winners, indexed by prize tier. Claim state lives on each winner.
+    pub winners: Vec<Winner>,
     pub randomness_source: RandomnessSource,
     pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
@@ -122,6 +123,13 @@ pub struct Raffle {
     /// Tiered bundle pricing from config (validated at init).
     pub bundles: soroban_sdk::Vec<raffle_shared::TicketBundle>,
     pub nft_contract: Option<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Winner {
+    pub address: Address,
+    pub claimed: bool,
 }
 
 #[contracttype]
@@ -173,8 +181,6 @@ pub struct CommitRevealEntry {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
-    /// Raffle storage entry is missing. Code 1.
-    RaffleNotFound = 1,
     /// Raffle is not in an active state for ticket sales. Code 2.
     RaffleInactive = 2,
     /// All tickets have been sold. Code 3.
@@ -213,16 +219,12 @@ pub enum Error {
     InvalidStateTransition = 25,
     /// Raffle end time has passed. Code 26.
     RaffleExpired = 26,
-    /// Minimum ticket threshold was not met. Code 31.
-    InsufficientTickets = 31,
     /// Address already holds a ticket when multiples are disallowed. Code 32.
     MultipleTicketsNotAllowed = 32,
     /// No tickets were sold. Code 33.
     NoTicketsSold = 33,
     /// Ticket record was not found. Code 34.
     TicketNotFound = 34,
-    /// Raffle has already ended. Code 35.
-    RaffleEnded = 35,
     /// Integer overflow in a contract calculation. Code 41.
     ArithmeticOverflow = 41,
     /// Contract initialization was already performed. Code 42.
@@ -255,13 +257,9 @@ pub enum Error {
     InvalidTicketRange = 55,
     /// Accumulated fees are below the requested withdrawal. Code 56.
     InsufficientAccumulatedFees = 56,
-    /// Prize configuration is locked after deposits or sales. Code 57.
-    PrizeConfigurationLocked = 57,
     /// Ticket purchase exceeds per-transaction cap. Code 58.
     ExceedsMaxTicketsPerTx = 58,
     DrawingAlreadyInProgress = 59,
-    /// Invalid status for entering the drawing phase. Code 60.
-    InvalidStatusForDrawingTransition = 60,
     /// Draw has already completed. Code 61.
     DrawingAlreadyComplete = 61,
     /// End time is in the past or otherwise invalid. Code 62.
@@ -506,7 +504,6 @@ if config.randomness_source == RandomnessSource::External {
             status: RaffleStatus::PendingPrize,
             prize_deposited: false,
             winners: Vec::new(&env),
-            claimed_winners: Vec::new(&env),
             randomness_source: config.randomness_source.clone(),
             oracle_address: config.oracle_address,
             protocol_fee_bp: config.protocol_fee_bp,

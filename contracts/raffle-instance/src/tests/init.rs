@@ -219,7 +219,7 @@ fn test_init_claim_lockup_seconds_mid_range_succeeds() {
         "raffle_finalized",
         events::RaffleFinalized {
             raffle_id: client.address.clone(),
-            winners: soroban_sdk::vec![&env, client.get_raffle().winners.get(0).unwrap()],
+            winners: soroban_sdk::vec![&env, client.get_raffle().winners.get(0).unwrap().address],
             winning_ticket_ids: soroban_sdk::vec![&env, 1], // buyer_a is first ticket
             total_tickets_sold: 3,
             randomness_source: RandomnessSource::Internal,

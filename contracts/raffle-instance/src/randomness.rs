@@ -473,8 +473,8 @@ pub fn aggregate_quorum_seeds(env: &Env, seeds: &Vec<(Address, u64)>) -> u64 {
         while j > 0 {
             let (addr_j, seed_j) = sorted.get(j).unwrap();
             let (addr_prev, seed_prev) = sorted.get(j - 1).unwrap();
-            let bytes_j: Bytes = addr_j.to_xdr(env);
-            let bytes_prev: Bytes = addr_prev.to_xdr(env);
+            let bytes_j: Bytes = addr_j.clone().to_xdr(env);
+            let bytes_prev: Bytes = addr_prev.clone().to_xdr(env);
             if bytes_j < bytes_prev {
                 sorted.set(j, (addr_prev.clone(), seed_prev));
                 sorted.set(j - 1, (addr_j.clone(), seed_j));

@@ -264,6 +264,7 @@ pub(crate) fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32
         let ticket = Ticket {
             id: ticket_id,
             owner: buyer.clone(),
+            payer: buyer.clone(),
             purchase_time: timestamp,
             ticket_number: ticket_id,
             price_paid: raffle.ticket_price,

@@ -19,7 +19,6 @@ use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 /// configuration.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RaffleCreated {
     /// Instance contract address of the new raffle.
     pub raffle_id: Address,
@@ -68,7 +67,6 @@ pub struct MetadataHashUpdated {
 /// Emitted when the prize pool is deposited into the raffle.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct PrizeDeposited {
     /// Address that deposited the prize (usually the creator).
     pub creator: Address,
@@ -83,7 +81,6 @@ pub struct PrizeDeposited {
 /// Emitted when the prize pool is refunded back to the creator.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct PrizeRefunded {
     /// Address that received the refund (usually the creator).
     pub creator: Address,
@@ -98,7 +95,6 @@ pub struct PrizeRefunded {
 /// Emitted when a ticket purchase succeeds and tickets are minted.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketPurchased {
     /// Address whose account(s) paid for the tickets.
     pub buyer: Address,
@@ -150,7 +146,6 @@ pub struct TicketGifted {
 #[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketTransferred {
     /// 1-based ticket ID transferred.
     pub ticket_id: u32,
@@ -165,7 +160,6 @@ pub struct TicketTransferred {
 /// Emitted when the draw is triggered (usually by the last ticket purchase).
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct DrawTriggered {
     /// Address that triggered the draw (usually the last buyer).
     pub caller: Address,
@@ -178,7 +172,6 @@ pub struct DrawTriggered {
 /// Emitted when a randomness request is sent to the configured oracle.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RandomnessRequested {
     /// Oracle address the request was sent to.
     pub oracle: Address,
@@ -191,7 +184,6 @@ pub struct RandomnessRequested {
 /// Emitted when the oracle delivers a seed for the draw.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RandomnessReceived {
     /// Oracle address that delivered the seed.
     pub oracle: Address,
@@ -206,7 +198,6 @@ pub struct RandomnessReceived {
 /// Emitted each time an oracle in the quorum submits its random seed.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct OracleSeedDelivered {
     /// Oracle address that submitted its random seed for quorum aggregation.
     pub oracle: Address,
@@ -222,22 +213,8 @@ pub struct OracleSeedDelivered {
     pub timestamp: u64,
 }
 
-/// Emitted when the raffle draw completes and winners are recorded.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
-pub struct OracleSeedDelivered {
-    pub oracle: Address,
-    pub seed: u64,
-    pub request_id: u64,
-    pub current_count: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-}
-
-#[derive(Clone)]
-#[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RaffleFinalized {
     /// Instance contract address of the finalized raffle.
     pub raffle_id: Address,
@@ -262,7 +239,6 @@ pub struct RaffleFinalized {
 /// Emitted once per winner selected during the draw.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct WinnerDrawn {
     /// Winner address for this prize tier.
     pub winner: Address,
@@ -277,7 +253,6 @@ pub struct WinnerDrawn {
 /// Emitted when a raffle is cancelled and (if applicable) prizes refunded.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RaffleCancelled {
     /// Address that created the raffle.
     pub creator: Address,
@@ -297,7 +272,6 @@ pub struct RaffleCancelled {
 /// as this event is emitted (#406).
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct CancelScheduled {
     /// Address that created the raffle.
     pub creator: Address,
@@ -314,7 +288,6 @@ pub struct CancelScheduled {
 /// Emitted when the raffle fails during its lifecycle and is wound down.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RaffleFailed {
     /// Address that created the raffle.
     pub creator: Address,
@@ -330,7 +303,6 @@ pub struct RaffleFailed {
 /// states).
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketRefunded {
     /// Address that was refunded (the ticket owner at refund time).
     pub buyer: Address,
@@ -345,7 +317,6 @@ pub struct TicketRefunded {
 /// Emitted when a winner claims their prize.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct PrizeClaimed {
     /// Winner address claiming the prize.
     pub winner: Address,
@@ -366,7 +337,6 @@ pub struct PrizeClaimed {
 /// Emitted when accumulated protocol fees are withdrawn to the treasury.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct FeesWithdrawn {
     /// Address the accumulated fees were sent to.
     pub recipient: Address,
@@ -381,7 +351,6 @@ pub struct FeesWithdrawn {
 /// Emitted when the randomness fallback path is used to finalize a draw.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RandomnessFallbackTriggered {
     /// Address that triggered the fallback.
     pub triggered_by: Address,
@@ -398,7 +367,6 @@ pub struct RandomnessFallbackTriggered {
 /// Emitted on every raffle status transition.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct RaffleStatusChanged {
     /// Status before the transition.
     pub old_status: raffle_shared::RaffleStatus,
@@ -411,7 +379,6 @@ pub struct RaffleStatusChanged {
 /// Emitted when ticket sales are paused for the raffle.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketSalesPaused {
     /// Address that paused sales.
     pub paused_by: Address,
@@ -422,7 +389,6 @@ pub struct TicketSalesPaused {
 /// Emitted when ticket sales are resumed for the raffle.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketSalesResumed {
     /// Address that resumed sales.
     pub resumed_by: Address,
@@ -433,7 +399,6 @@ pub struct TicketSalesResumed {
 /// Emitted when tokens are rescued out of the raffle contract.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TokensRescued {
     /// Address that rescued the tokens.
     pub rescued_by: Address,
@@ -466,7 +431,6 @@ pub struct DustSwept {
 /// Emitted when all contract storage for the raffle is wiped.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct StorageWiped {
     /// Address that wiped the storage.
     pub wiped_by: Address,
@@ -491,7 +455,6 @@ pub struct OracleAddressUpdated {
 /// Emitted when the protocol fee (basis points) is updated.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct ProtocolFeeUpdated {
     /// Protocol fee (basis points) before the update.
     pub old_fee_bp: u32,
@@ -506,7 +469,6 @@ pub struct ProtocolFeeUpdated {
 /// Emitted when the swap deadline (seconds) is updated.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct SwapDeadlineUpdated {
     /// Swap deadline (seconds) before the update.
     pub old_deadline_seconds: u64,
@@ -521,7 +483,6 @@ pub struct SwapDeadlineUpdated {
 /// Emitted when the raffle end time is extended.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct EndTimeExtended {
     /// End time before the extension.
     pub old_end_time: u64,
@@ -536,7 +497,6 @@ pub struct EndTimeExtended {
 /// Emitted when an emergency withdrawal is executed after the delay elapses.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct EmergencyWithdrawn {
     /// Address that issued the emergency withdrawal.
     pub withdrawn_by: Address,
@@ -555,7 +515,6 @@ pub struct EmergencyWithdrawn {
 #[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct AdminChanged {
     /// Admin before the change.
     pub old_admin: Address,
@@ -572,7 +531,6 @@ pub struct AdminChanged {
 /// by the configured `nft_contract`.
 #[derive(Clone)]
 #[contractevent]
-#[soroban_sdk::contracttype]
 pub struct TicketNftMinted {
     /// The address that received the NFT (the ticket buyer).
     pub recipient: Address,
