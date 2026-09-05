@@ -1048,4 +1048,3 @@ Topic: `tikka:contract_unpaused`
 **Emitted by:** `unpause`, `unpause_factory`
 
 ---
-

@@ -56,12 +56,11 @@ use self::randomness::build_vrf_proof_message;
 
 use crate::events::{
     CancelScheduled, ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn,
-    FeesWithdrawn, MetadataHashUpdated, OracleAddressUpdated, PrizeClaimed, PrizeDeposited,
-    OracleSeedDelivered, PrizeRefunded, ProtocolFeeUpdated, RaffleCancelled, RaffleCreated,
-    RaffleFailed, RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered,
-    RandomnessReceived, RandomnessRequested, StorageWiped, SwapDeadlineUpdated, TicketNftMinted,
-    TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued,
-    WinnerDrawn,
+    FeesWithdrawn, MetadataHashUpdated, OracleAddressUpdated, OracleSeedDelivered, PrizeClaimed, PrizeDeposited,
+    PrizeRefunded, ProtocolFeeUpdated, RaffleCancelled, RaffleCreated, RaffleFailed,
+    RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived,
+    RandomnessRequested, StorageWiped, SwapDeadlineUpdated, TicketNftMinted, TicketPurchased,
+    TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued, WinnerDrawn,
 };
 
 const RANDOMNESS_MIN_DELAY_LEDGERS: u32 = 10;
