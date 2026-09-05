@@ -1,6 +1,9 @@
-use super::*;
 use proptest::prelude::*;
-use soroban_sdk::{Address, BytesN, Env, String, Vec};
+use crate::{
+    assert_solvent, calculate_tier_prize, DataKey, Raffle, RaffleStatus, Ticket, MAX_PRIZE_AMOUNT,
+    MIN_TICKET_PRICE,
+};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec};
 
 fn valid_prize_weights() -> impl Strategy<Value = std::vec::Vec<u32>> {
     prop::collection::vec(0u32..=10_000, 0..=99)
@@ -39,6 +42,7 @@ fn test_raffle(env: &Env, weights: &[u32], prize_amount: i128) -> Raffle {
         status: RaffleStatus::PendingPrize,
         prize_deposited: false,
         winners: Vec::new(env),
+        claimed_winners: Vec::new(env),
         randomness_source: raffle_shared::RandomnessSource::Internal,
         oracle_address: None,
         protocol_fee_bp: 0,
@@ -47,6 +51,7 @@ fn test_raffle(env: &Env, weights: &[u32], prize_amount: i128) -> Raffle {
         tikka_token: None,
         finalized_at: None,
         claim_lockup_seconds: 0,
+        claim_expiry_seconds: 1,
         swap_deadline_seconds: 0,
         ticket_sales_paused: false,
         early_bird_ticket_percentage: 0,
@@ -93,5 +98,46 @@ fn one_tier_receives_the_entire_prize() {
 
 #[test]
 fn final_tier_absorbs_maximum_rounding_dust() {
-    assert_tier_sum(&[101; 99].iter().copied().chain([1]).collect::<std::vec::Vec<_>>(), 10_000);
+    assert_tier_sum(
+        &[101; 99].iter().copied().chain([1]).collect::<std::vec::Vec<_>>(),
+        10_000,
+    );
+}
+
+/// Refund solvency invariant (#827).
+///
+/// After any refund operation the contract must hold at least as much as it
+/// still owes to ticket holders (`per_ticket_refund` for each not-yet-refunded
+/// ticket id) plus any un-refunded prize escrowed on behalf of the creator.
+///
+/// Called by the refund-path lifecycle tests (`tests/claim.rs`) after every
+/// refund/prize-recovery operation, and asserted inline by the fuzz harness
+/// (`fuzz/fuzz_targets/real_harness.rs::refund_cancel`).
+pub fn assert_refund_solvency(
+    env: &Env,
+    contract_id: &Address,
+    payment_token: &Address,
+    prize_token: &Address,
+    ticket_ids_owing: &[u32],
+    per_ticket_refund: i128,
+    prize_owing: i128,
+) {
+    let payment_balance = soroban_sdk::token::Client::new(env, payment_token).balance(contract_id);
+    // When prize and payment tokens are the same address (the current wiring)
+    // the prize pot is part of the payment balance and must not be counted twice.
+    let prize_balance = if payment_token == prize_token {
+        0
+    } else {
+        soroban_sdk::token::Client::new(env, prize_token).balance(contract_id)
+    };
+    let held = payment_balance + prize_balance;
+    let outstanding = ticket_ids_owing.len() as i128 * per_ticket_refund + prize_owing;
+    assert!(
+        held >= outstanding,
+        "refund solvency violated: contract holds {held} but owes {outstanding} \
+         ({} tickets outstanding, prize owing {prize_owing}, payment {}, prize {})",
+        ticket_ids_owing.len(),
+        payment_balance,
+        prize_balance,
+    );
 }

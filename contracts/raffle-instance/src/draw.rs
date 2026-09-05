@@ -5,14 +5,14 @@ use raffle_shared::{
 };
 
 use crate::events::{
-    DrawTriggered, RaffleCancelled, RaffleFailed, RandomnessFallbackTriggered, RandomnessReceived,
+    DrawTriggered, OracleSeedDelivered, RaffleCancelled, RaffleFailed, RandomnessFallbackTriggered, RandomnessReceived,
     RandomnessRequested,
 };
 use crate::helpers::{
-    build_internal_seed_u64, do_finalize_with_seed, read_raffle, request_randomness,
+    do_finalize_with_seed, read_raffle, request_randomness,
     revert_status, transition_status, transition_to_drawing, write_raffle,
 };
-use crate::randomness::build_vrf_proof_message;
+use crate::randomness::{build_vrf_proof_message, derive_random_seed_from_proof};
 use crate::{CommitRevealEntry, DataKey, Error, RaffleStatus, ORACLE_TIMEOUT_LEDGERS};
 
 pub(crate) fn finalize_raffle(env: Env) -> Result<(), Error> {
@@ -32,6 +32,11 @@ pub(crate) fn finalize_raffle(env: Env) -> Result<(), Error> {
     }
 
     let now = env.ledger().timestamp();
+    // end_time is an exclusive boundary: sales/finalization are gated on
+    // now < end_time, so the deadline is reached starting at now == end_time.
+    // Must stay in sync with the RaffleExpired checks in tickets.rs
+    // (buy_tickets, buy_tickets_for) and time_remaining in
+    // views.rs::get_stats. See docs/GLOSSARY.md § "End Time".
     let time_ended = !raffle.no_deadline && now >= raffle.end_time;
     let tickets_full = raffle.tickets_sold >= raffle.max_tickets;
 
@@ -85,7 +90,7 @@ pub(crate) fn finalize_raffle(env: Env) -> Result<(), Error> {
 
                 // Initialise empty quorum submission tracker
                 env.storage()
-                    .instance()
+                    .persistent()
                     .set(&DataKey::QuorumSubmittedOracles, &Vec::<Address>::new(&env));
 
                 return Ok(());
@@ -157,12 +162,12 @@ pub(crate) fn finalize_raffle(env: Env) -> Result<(), Error> {
             let mut seed_bytes = [0u8; 8];
             seed_bytes.copy_from_slice(&arr[..8]);
             let seed = u64::from_be_bytes(seed_bytes);
-            return do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng);
+            return do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng, None);
         }
     }
 
     let seed = build_internal_seed_u64(&env);
-    do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng)
+    do_finalize_with_seed(&env, raffle, seed, RandomnessType::Prng, None)
 }
 
 /// Handle a single-oracle VRF randomness submission (existing External mode).
@@ -218,7 +223,12 @@ pub(crate) fn provide_randomness(
         return Err(Error::InvalidParameters);
     }
 
-    let message = build_vrf_proof_message(&env, request_id, random_seed);
+    let derived_seed = derive_random_seed_from_proof(&env, &proof);
+    if derived_seed != random_seed {
+        return Err(Error::InvalidParameters);
+    }
+
+    let message = build_vrf_proof_message(&env, request_id);
     env.crypto().ed25519_verify(&public_key, &message, &proof);
 
     RandomnessReceived {
@@ -228,7 +238,7 @@ pub(crate) fn provide_randomness(
         timestamp: env.ledger().timestamp(),
     }
     .publish(&env);
-    do_finalize_with_seed(&env, raffle, random_seed, RandomnessType::Vrf)?;
+    do_finalize_with_seed(&env, raffle, random_seed, RandomnessType::Vrf, None)?;
     Ok(env.current_contract_address())
 }
 
@@ -317,6 +327,111 @@ pub(crate) fn trigger_randomness_fallback(
     }
     .publish(&env);
 
-    do_finalize_with_seed(&env, raffle, seed, RandomnessType::Fallback)
+    do_finalize_with_seed(&env, raffle, seed, RandomnessType::Fallback, None)
 }
 
+pub(crate) fn provide_quorum_randomness(
+    env: Env,
+    oracle: Address,
+    random_seed: u64,
+    request_id: u64,
+) -> Result<(), Error> {
+    let drawing_lock: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::DrawingLock)
+        .unwrap_or(false);
+    if !drawing_lock {
+        return Err(Error::DrawingNotStarted);
+    }
+
+    oracle.require_auth();
+
+    let raffle = read_raffle(&env)?;
+
+    // Verify random seed context: request_id
+    let stored: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::RandomnessRequestId)
+        .ok_or(Error::NoRandomnessRequest)?;
+    if stored != request_id {
+        return Err(Error::InvalidParameters);
+    }
+
+    // Extract the oracle list from the Quorum config.
+    let (k, oracles) = match &raffle.randomness_source {
+        RandomnessSource::Quorum(QuorumConfig { k, oracles }) => (*k, oracles.clone()),
+        _ => return Err(Error::InvalidParameters),
+    };
+
+    // Verify oracle is a registered oracle.
+    let mut is_registered = false;
+    for i in 0..oracles.len() {
+        if let Some(addr) = oracles.get(i) {
+            if addr == oracle {
+                is_registered = true;
+                break;
+            }
+        }
+    }
+    if !is_registered {
+        return Err(Error::OracleNotRegistered);
+    }
+
+    // Dedup: reject if this oracle already submitted.
+    if env.storage().persistent().has(&DataKey::QuorumSeed(oracle.clone())) {
+        return Err(Error::DuplicateOracleSubmission);
+    }
+
+    // Store the seed.
+    env.storage()
+        .persistent()
+        .set(&DataKey::QuorumSeed(oracle.clone()), &random_seed);
+
+    // Track submission order.
+    let mut submitted: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::QuorumSubmittedOracles)
+        .unwrap_or_else(|| Vec::new(&env));
+    submitted.push_back(oracle.clone());
+    env.storage()
+        .persistent()
+        .set(&DataKey::QuorumSubmittedOracles, &submitted);
+
+    let count = submitted.len() as u32;
+
+    // Emit delivery event.
+    OracleSeedDelivered {
+        oracle: oracle.clone(),
+        seed: random_seed,
+        request_id,
+        current_count: count,
+        threshold: k,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(&env);
+
+    // Check if quorum reached.
+    if count >= k {
+        // Build the seed list from storage.
+        let mut seeds = Vec::new(&env);
+        for i in 0..submitted.len() {
+            if let Some(addr) = submitted.get(i) {
+                if let Some(s) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, u64>(&DataKey::QuorumSeed(addr.clone()))
+                {
+                    seeds.push_back((addr.clone(), s));
+                }
+            }
+        }
+
+        let aggregate = randomness::aggregate_quorum_seeds(&env, &seeds);
+        crate::helpers::do_finalize_with_seed(&env, raffle, aggregate, RandomnessType::Quorum, Some(seeds))?;
+    }
+
+    Ok(())
+}

@@ -1,646 +1,295 @@
-/**
- * Oracle Pipeline Integration Test
- *
- * Tests the full pipeline: event listener → queue → VRF signing → transaction submission
- * Mocks Soroban RPC/Horizon using nock to verify pipeline correctness offline in CI.
- *
- * Covers:
- * - Happy path: RandomnessRequested event processed to provide_randomness submission
- * - RPC errors with retry logic
- * - Duplicate event deduplication
- * - Checkpoint recovery on restart
- */
-
-import nock from 'nock';
-import { Keypair, xdr, Address, rpc as SorobanRpc } from '@stellar/stellar-sdk';
-import { EventListenerService } from './listener/event-listener.service';
-import { RequestQueue } from './queue/request-queue';
+import { Keypair, rpc as SorobanRpc, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
+import { createPipeline } from './pipeline';
+import { Alerter } from './alert/alerter';
 import { MemoryLedgerCheckpointStore } from './listener/ledger-checkpoint';
-import { KeyService } from './keys/key.service';
-import { VrfService } from './vrf/vrf.service';
-import { TxSubmitterService } from './tx/tx-submitter.service';
 import { DeduplicationStore } from './deduplication/deduplication.store';
 
-// Skipped due to XDR mocking complexity - requires proper Stellar SDK event structure mocking
-// TODO: Fix XDR mocking to properly simulate Stellar SDK event structures
-describe.skip('Oracle Pipeline Integration', () => {
+jest.mock('@stellar/stellar-sdk', () => {
+  const original = jest.requireActual('@stellar/stellar-sdk');
+  const mock = Object.create(original);
+  
+  Object.defineProperty(mock, 'scValToNative', {
+    value: jest.fn(),
+    writable: true,
+    configurable: true,
+  });
+  
+  const mockRpc = Object.create(original.rpc);
+  Object.defineProperty(mockRpc, 'assembleTransaction', {
+    value: jest.fn().mockImplementation((tx: any) => ({
+      build: () => tx,
+    })),
+    writable: true,
+    configurable: true,
+  });
+  mock.rpc = mockRpc;
+
+  return mock;
+});
+
+describe('Oracle Pipeline Integration - Happy Paths', () => {
   const rpcUrl = 'http://localhost:8000';
   const testOracleKeypair = Keypair.random();
   const testOracleAddress = testOracleKeypair.publicKey();
   const raffleContract = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
   const requestId = 42n;
-  const timestamp = 1700000000n;
 
-  let queue: RequestQueue;
-  let checkpoint: MemoryLedgerCheckpointStore;
-  let keyService: KeyService;
-  let dedup: DeduplicationStore;
+  let mockAlerter: Alerter;
+  let mockCheckpoint: MemoryLedgerCheckpointStore;
+  let mockDedup: DeduplicationStore;
 
-  beforeEach(async () => {
-    // Set up test oracle key
+  const originalGetLatestLedger = SorobanRpc.Server.prototype.getLatestLedger;
+  const originalGetEvents = SorobanRpc.Server.prototype.getEvents;
+  const originalGetAccount = SorobanRpc.Server.prototype.getAccount;
+  const originalSimulateTransaction = SorobanRpc.Server.prototype.simulateTransaction;
+  const originalSendTransaction = SorobanRpc.Server.prototype.sendTransaction;
+  const originalGetTransaction = SorobanRpc.Server.prototype.getTransaction;
+  const originalExit = process.exit;
+
+  beforeEach(() => {
     process.env.ORACLE_SECRET_KEY = testOracleKeypair.secret();
-
-    queue = new RequestQueue();
-    checkpoint = new MemoryLedgerCheckpointStore();
-    dedup = new DeduplicationStore(':memory:'); // Use in-memory store for tests
-
-    // Initialize KeyService with test key
-    keyService = new KeyService();
-    await keyService.initialize();
-
-    // Clear any active nock scopes
-    nock.cleanAll();
-    nock.disableNetConnect();
+    mockAlerter = new Alerter({ webhookUrl: '', rateLimitMs: 60000 });
+    mockCheckpoint = new MemoryLedgerCheckpointStore();
+    mockDedup = new DeduplicationStore(':memory:');
+    process.exit = jest.fn() as any;
   });
 
   afterEach(() => {
-    keyService.shutdown();
     delete process.env.ORACLE_SECRET_KEY;
-    nock.enableNetConnect();
-    nock.cleanAll();
+    SorobanRpc.Server.prototype.getLatestLedger = originalGetLatestLedger;
+    SorobanRpc.Server.prototype.getEvents = originalGetEvents;
+    SorobanRpc.Server.prototype.getAccount = originalGetAccount;
+    SorobanRpc.Server.prototype.simulateTransaction = originalSimulateTransaction;
+    SorobanRpc.Server.prototype.sendTransaction = originalSendTransaction;
+    SorobanRpc.Server.prototype.getTransaction = originalGetTransaction;
+    process.exit = originalExit;
   });
 
-  function buildRandomnessRequestedEvent(overrides?: {
-    oracle?: string;
-    requestId?: bigint;
-    raffleContract?: string;
-    timestamp?: bigint;
-  }) {
-    const oracle = overrides?.oracle ?? testOracleAddress;
-    const req = overrides?.requestId ?? requestId;
-    const contract = overrides?.raffleContract ?? raffleContract;
-    const ts = overrides?.timestamp ?? timestamp;
+  it('processes RandomnessRequested event and submits single-oracle provide_randomness', async () => {
+    let getLatestLedgerCalled = false;
+    let ledgerSeq = 100;
+    SorobanRpc.Server.prototype.getLatestLedger = async () => {
+      getLatestLedgerCalled = true;
+      const seq = ledgerSeq;
+      ledgerSeq++;
+      return { sequence: seq } as any;
+    };
 
-    return {
-      contractId: { toString: () => contract },
-      topic: [xdr.ScVal.scvSymbol('RandomnessRequested')],
-      value: xdr.ScVal.scvMap([
-        new xdr.ScMapEntry({
-          key: xdr.ScVal.scvSymbol('oracle'),
-          val: Address.fromString(oracle).toScVal(),
-        }),
-        new xdr.ScMapEntry({
-          key: xdr.ScVal.scvSymbol('request_id'),
-          val: xdr.ScVal.scvU64(xdr.Uint64.fromString(req.toString())),
-        }),
-        new xdr.ScMapEntry({
-          key: xdr.ScVal.scvSymbol('timestamp'),
-          val: xdr.ScVal.scvU64(xdr.Uint64.fromString(ts.toString())),
-        }),
-      ]),
-    } as unknown as Parameters<EventListenerService['parseRandomnessRequestedEvent']>[0];
-  }
+    let eventsReturned = false;
+    let getEventsCalled = false;
+    SorobanRpc.Server.prototype.getEvents = async () => {
+      getEventsCalled = true;
+      if (eventsReturned) {
+        return { latestLedger: 102, events: [] } as any;
+      }
+      eventsReturned = true;
+      return {
+        latestLedger: 101,
+        events: [
+          {
+            contractId: { toString: () => raffleContract },
+            topic: [xdr.ScVal.scvSymbol('RandomnessRequested')],
+            value: xdr.ScVal.scvMap([
+              new xdr.ScMapEntry({
+                key: xdr.ScVal.scvSymbol('oracle'),
+                val: Address.fromString(testOracleAddress).toScVal(),
+              }),
+              new xdr.ScMapEntry({
+                key: xdr.ScVal.scvSymbol('request_id'),
+                val: xdr.ScVal.scvU64(xdr.Uint64.fromString(requestId.toString())),
+              }),
+              new xdr.ScMapEntry({
+                key: xdr.ScVal.scvSymbol('timestamp'),
+                val: xdr.ScVal.scvU64(xdr.Uint64.fromString('1700000000')),
+              }),
+            ]),
+          } as any,
+        ],
+      } as any;
+    };
 
-  describe('happy path', () => {
-    it('processes RandomnessRequested event and submits provide_randomness', async () => {
-      const listener = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
+    let getAccountCalled = false;
+    SorobanRpc.Server.prototype.getAccount = async () => {
+      getAccountCalled = true;
+      return {
+        accountId: () => testOracleAddress,
+        sequenceNumber: () => '1',
+      } as any;
+    };
+
+    let simulationCount = 0;
+    SorobanRpc.Server.prototype.simulateTransaction = async () => {
+      simulationCount++;
+      return {
+        result: {
+          retval: {} as any,
         },
-      });
+      } as any;
+    };
 
-      // Mock: get latest ledger (initialization)
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
-
-      // Mock: getEvents returns RandomnessRequested event
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 101,
-            events: [buildRandomnessRequestedEvent()],
-          },
-        });
-
-      await listener.initialize();
-      await listener.startListening([raffleContract]);
-
-      // Verify event was enqueued
-      const jobs = queue.drain();
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0].requestId).toBe(requestId);
-      expect(jobs[0].raffleContract).toBe(raffleContract);
-
-      // Verify checkpoint was saved
-      const savedLedger = await checkpoint.load();
-      expect(savedLedger).toBe(101);
-
-      // ===== Process queued job: VRF signing =====
-      const vrf = new VrfService(keyService);
-      const randomSeed = 123456789n;
-      const proof = vrf.signRandomnessProof(raffleContract, requestId, randomSeed);
-
-      expect(proof.proof).toHaveLength(64); // Ed25519 signature length
-      expect(proof.publicKey).toEqual(keyService.getPublicKeyBytes());
-      expect(proof.requestId).toBe(requestId);
-      expect(proof.randomSeed).toBe(randomSeed);
-
-      // ===== Submit transaction =====
-      const submitter = new TxSubmitterService(keyService, rpcUrl);
-
-      // Mock: getAccount for tx sequence
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 3,
-          result: {
-            id: testOracleKeypair.publicKey(),
-            sequenceNumber: '1',
-            balances: [{ balance: '1000', assetType: 'native' }],
-          },
-        });
-
-      // Mock: simulateTransaction success
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 4,
-          result: {
-            transactionData:
-              'AAAAAgAAAABlM+QrJVf1z50IqnH57Ck35g==',
-            minResourceFee: '100000',
-            events: [],
-            latestLedger: 102,
-            error: undefined,
-          },
-        });
-
-      // Mock: sendTransaction success
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 5,
-          result: {
-            hash: 'abc1234567890def1234567890def1234567890def1234567890def123456789',
-            status: 'PENDING',
-          },
-        });
-
-      // Mock: getTransaction polls with eventual success
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 6,
-          result: {
-            status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
-            latestLedger: 103,
-            hash: 'abc1234567890def1234567890def1234567890def1234567890def123456789',
-          },
-        });
-
-      const txHash = await submitter.submitProvideRandomness({
-        raffleContract,
-        randomSeed,
-        publicKey: proof.publicKey,
-        proof: proof.proof,
-        requestId,
-      });
-
-      expect(txHash).toMatch(/^[a-f0-9]{64}$/);
+    const mockScValToNative = scValToNative as jest.Mock;
+    mockScValToNative.mockImplementation(() => {
+      if (simulationCount === 1) {
+        return { randomness_source: 'External' };
+      }
+      return {};
     });
+
+    let sendTransactionCalled = false;
+    SorobanRpc.Server.prototype.sendTransaction = async () => {
+      sendTransactionCalled = true;
+      return {
+        status: 'PENDING',
+        hash: 'abc1234567890def1234567890def1234567890def1234567890def123456789',
+      } as any;
+    };
+
+    let getTransactionCalled = false;
+    SorobanRpc.Server.prototype.getTransaction = async () => {
+      getTransactionCalled = true;
+      return {
+        status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      } as any;
+    };
+
+    const config = {
+      rpcUrl,
+      factoryContractId: 'CFACTORY1',
+      logLevel: 'info',
+      pollIntervalMs: 1,
+      alertWebhookUrl: '',
+      alertFailureThreshold: 3,
+      alertRateLimitMs: 60000,
+      alertQueueDepthLimit: 10,
+      alertQueueAgeLimitMs: 300000,
+      alertRpcUnreachableThreshold: 3,
+    };
+
+    const pipeline = createPipeline(config, {
+      alerter: mockAlerter,
+      checkpointStore: mockCheckpoint,
+      dedupStore: mockDedup,
+    });
+
+    await pipeline.start([raffleContract]);
+    
+    // Wait for the pipeline loop to process the event
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pipeline.shutdown();
+
+    expect(getLatestLedgerCalled).toBe(true);
+    expect(getEventsCalled).toBe(true);
+    expect(getAccountCalled).toBe(true);
+    expect(simulationCount).toBeGreaterThanOrEqual(2);
+    expect(sendTransactionCalled).toBe(true);
+    expect(getTransactionCalled).toBe(true);
   });
 
-  describe('RPC error handling', () => {
-    it('retries on transient RPC errors', async () => {
-      const submitter = new TxSubmitterService(keyService, rpcUrl);
+  it('runs 3 simulated oracles with k=2 and verifies quorum seed submissions', async () => {
+    // Generate 3 oracle keypairs
+    const keypairA = Keypair.random();
+    const keypairB = Keypair.random();
+    const keypairC = Keypair.random();
 
-      // Mock: first two attempts fail with temporary error
-      nock(rpcUrl).post('/').reply(503); // Service unavailable
-      nock(rpcUrl).post('/').reply(500); // Server error
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 3,
-          result: {
-            id: testOracleKeypair.publicKey(),
-            sequenceNumber: '1',
-            balances: [{ balance: '1000', assetType: 'native' }],
-          },
-        });
+    const addressA = keypairA.publicKey();
+    const addressB = keypairB.publicKey();
+    const addressC = keypairC.publicKey();
 
-      // Mock: simulate, send, poll (success on third attempt after getAccount succeeds)
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 4,
-          result: {
-            transactionData: 'AAAAAgAAAABlM+QrJVf1z50IqnH57Ck35g==',
-            minResourceFee: '100000',
-          },
-        });
+    const config = {
+      rpcUrl,
+      factoryContractId: 'CFACTORY1',
+      logLevel: 'info',
+      pollIntervalMs: 1,
+      alertWebhookUrl: '',
+      alertFailureThreshold: 3,
+      alertRateLimitMs: 60000,
+      alertQueueDepthLimit: 10,
+      alertQueueAgeLimitMs: 300000,
+      alertRpcUnreachableThreshold: 3,
+    };
 
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 5,
-          result: {
-            hash: 'def9876543210abc9876543210abc9876543210abc9876543210abc987654321',
-            status: 'PENDING',
-          },
-        });
+    SorobanRpc.Server.prototype.getLatestLedger = async () => {
+      return { sequence: 100 } as any;
+    };
 
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 6,
-          result: {
-            status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
-          },
-        });
+    SorobanRpc.Server.prototype.getEvents = async () => {
+      return { latestLedger: 102, events: [] } as any;
+    };
 
-      const txHash = await submitter.submitProvideRandomness({
-        raffleContract,
-        randomSeed: 111111n,
-        publicKey: keyService.getPublicKeyBytes(),
-        proof: new Uint8Array(64),
-        requestId,
-      });
-
-      expect(txHash).toMatch(/^[a-f0-9]{64}$/);
-    });
-
-    it('fails permanently on non-retryable errors', async () => {
-      const submitter = new TxSubmitterService(keyService, rpcUrl);
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 1,
-          result: {
-            id: testOracleKeypair.publicKey(),
-            sequenceNumber: '999999999999999999',
-            balances: [{ balance: '1000', assetType: 'native' }],
-          },
-        });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            transactionData: 'AAAAAgAAAABlM+QrJVf1z50IqnH57Ck35g==',
-            minResourceFee: '100000',
-          },
-        });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 3,
-          result: {
-            status: 'ERROR',
-            errorResult: {
-              toXDR: () => 'base64encodederror',
-            },
-          },
-        });
-
-      await expect(
-        submitter.submitProvideRandomness({
-          raffleContract,
-          randomSeed: 222222n,
-          publicKey: keyService.getPublicKeyBytes(),
-          proof: new Uint8Array(64),
-          requestId,
-        }),
-      ).rejects.toThrow(/Permanent failure/);
-    });
-  });
-
-  describe('deduplication', () => {
-    it('drops duplicate RandomnessRequested events', async () => {
-      const listener = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
+    let simulationCount = 0;
+    SorobanRpc.Server.prototype.simulateTransaction = async () => {
+      simulationCount++;
+      return {
+        result: {
+          retval: {} as any,
         },
-      });
+      } as any;
+    };
 
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 101,
-            // Return same event twice
-            events: [
-              buildRandomnessRequestedEvent(),
-              buildRandomnessRequestedEvent(),
-            ],
+    const mockScValToNative = scValToNative as jest.Mock;
+    mockScValToNative.mockImplementation(() => {
+      return {
+        randomness_source: {
+          Quorum: {
+            k: 2,
+            oracles: [addressA, addressB, addressC],
           },
-        });
-
-      await listener.initialize();
-      await listener.startListening([raffleContract]);
-
-      // Both events should be enqueued (dedup happens at job level, not listener level)
-      // but when processed through dedup store, second should be dropped
-      const jobs = queue.drain();
-      expect(jobs.length).toBeGreaterThanOrEqual(1);
-
-      // Now test dedup store behavior
-      expect(dedup.isDuplicate(requestId, raffleContract)).toBe(false); // First seen = false
-      expect(dedup.isDuplicate(requestId, raffleContract)).toBe(true); // Second time = true (duplicate)
-    });
-
-    it('allows same request ID from different raffle contracts', () => {
-      const contract1 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
-      const contract2 = 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
-
-      expect(dedup.isDuplicate(requestId, contract1)).toBe(false);
-      expect(dedup.isDuplicate(requestId, contract2)).toBe(false);
-      expect(dedup.isDuplicate(requestId, contract1)).toBe(true);
-      expect(dedup.isDuplicate(requestId, contract2)).toBe(true);
-    });
-  });
-
-  describe('checkpoint and restart recovery', () => {
-    it('resumes from saved checkpoint on restart', async () => {
-      const listener1 = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener1.stopListening();
         },
-      });
-
-      // First run: initialize and process events
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 105,
-            events: [buildRandomnessRequestedEvent()],
-          },
-        });
-
-      await listener1.initialize();
-      expect(listener1['startLedger']).toBe(100); // Started from latest
-
-      await listener1.startListening([raffleContract]);
-
-      // Verify checkpoint was saved
-      const savedLedger = await checkpoint.load();
-      expect(savedLedger).toBe(105);
-
-      // ===== Simulated restart with same checkpoint store =====
-      const listener2 = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener2.stopListening();
-        },
-      });
-
-      // Second run: should resume from checkpoint + 1
-      await listener2.initialize();
-      expect(listener2['startLedger']).toBe(106); // Resumed from saved checkpoint + 1
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 3,
-          result: {
-            latestLedger: 110,
-            events: [buildRandomnessRequestedEvent({ requestId: 99n })],
-          },
-        });
-
-      await listener2.startListening([raffleContract]);
-
-      const jobs = queue.drain();
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0].requestId).toBe(99n);
-
-      // Verify checkpoint was updated
-      const newLedger = await checkpoint.load();
-      expect(newLedger).toBe(110);
+      };
     });
 
-    it('starts from current ledger if no checkpoint exists', async () => {
-      const emptyCheckpoint = new MemoryLedgerCheckpointStore();
-      const listener = new EventListenerService(queue, testOracleAddress, emptyCheckpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
-        },
-      });
+    // Mock accounts lookup
+    SorobanRpc.Server.prototype.getAccount = async (addr: string) => {
+      return {
+        accountId: () => addr,
+        sequenceNumber: () => '1',
+      } as any;
+    };
 
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 200 } });
+    // Track transaction submissions
+    const submittedContracts: string[] = [];
 
-      await listener.initialize();
-      expect(listener['startLedger']).toBe(200);
-    });
-  });
+    SorobanRpc.Server.prototype.sendTransaction = async (tx) => {
+      const op = tx.operations[0] as any;
+      submittedContracts.push(op.destination ?? op.contractId ?? raffleContract);
+      return {
+        status: 'PENDING',
+        hash: 'abc1234567890def1234567890def1234567890def1234567890def123456789',
+      } as any;
+    };
 
-  describe('full pipeline integration', () => {
-    it('processes event → vrf sign → tx submit end-to-end', async () => {
-      const listener = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
-        },
-      });
+    SorobanRpc.Server.prototype.getTransaction = async () => {
+      return {
+        status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      } as any;
+    };
 
-      // Setup mocks for listener
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
+    // Create 3 pipelines
+    process.env.ORACLE_SECRET_KEY = keypairA.secret();
+    const pipelineA = createPipeline(config, { alerter: mockAlerter, checkpointStore: new MemoryLedgerCheckpointStore(), dedupStore: new DeduplicationStore(':memory:') });
+    await pipelineA.start([raffleContract]);
 
-      const eventRequestId = 555n;
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 101,
-            events: [buildRandomnessRequestedEvent({ requestId: eventRequestId })],
-          },
-        });
+    process.env.ORACLE_SECRET_KEY = keypairB.secret();
+    const pipelineB = createPipeline(config, { alerter: mockAlerter, checkpointStore: new MemoryLedgerCheckpointStore(), dedupStore: new DeduplicationStore(':memory:') });
+    await pipelineB.start([raffleContract]);
 
-      // Initialize and listen
-      await listener.initialize();
-      await listener.startListening([raffleContract]);
+    process.env.ORACLE_SECRET_KEY = keypairC.secret();
+    const pipelineC = createPipeline(config, { alerter: mockAlerter, checkpointStore: new MemoryLedgerCheckpointStore(), dedupStore: new DeduplicationStore(':memory:') });
+    await pipelineC.start([raffleContract]);
 
-      // Verify event was enqueued with correct request ID
-      const jobs = queue.drain();
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0].requestId).toBe(eventRequestId);
+    // Manually trigger processJob for each oracle to simulate receiving the event
+    const job = { requestId: 99n, raffleContract, timestamp: 111n };
+    await (pipelineA as any).processJob(job);
+    await (pipelineB as any).processJob(job);
+    await (pipelineC as any).processJob(job);
 
-      // Process through VRF
-      const vrf = new VrfService(keyService);
-      const randomSeed = 987654321n;
-      const proofData = vrf.signRandomnessProof(raffleContract, eventRequestId, randomSeed);
+    await Promise.all([
+      pipelineA.shutdown(),
+      pipelineB.shutdown(),
+      pipelineC.shutdown(),
+    ]);
 
-      // Submit transaction
-      const submitter = new TxSubmitterService(keyService, rpcUrl);
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 3,
-          result: {
-            id: testOracleKeypair.publicKey(),
-            sequenceNumber: '1',
-            balances: [{ balance: '1000', assetType: 'native' }],
-          },
-        });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 4,
-          result: {
-            transactionData: 'AAAAAgAAAABlM+QrJVf1z50IqnH57Ck35g==',
-            minResourceFee: '100000',
-          },
-        });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 5,
-          result: {
-            hash: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-            status: 'PENDING',
-          },
-        });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 6,
-          result: {
-            status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
-          },
-        });
-
-      const txHash = await submitter.submitProvideRandomness({
-        raffleContract,
-        randomSeed,
-        publicKey: proofData.publicKey,
-        proof: proofData.proof,
-        requestId: eventRequestId,
-      });
-
-      expect(txHash).toMatch(/^[a-f0-9]{64}$/);
-    });
-  });
-
-  describe('edge cases', () => {
-    it('ignores events for other oracles', async () => {
-      const listener = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
-        },
-      });
-
-      const otherOracle = Keypair.random().publicKey();
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 101,
-            events: [
-              buildRandomnessRequestedEvent({ oracle: otherOracle }),
-            ],
-          },
-        });
-
-      await listener.initialize();
-      await listener.startListening([raffleContract]);
-
-      const jobs = queue.drain();
-      expect(jobs).toHaveLength(0); // Event filtered out
-    });
-
-    it('handles multiple raffle contracts', async () => {
-      const listener = new EventListenerService(queue, testOracleAddress, checkpoint, {
-        rpcUrl,
-        pollIntervalMs: 1,
-        sleep: async () => {
-          listener.stopListening();
-        },
-      });
-
-      const contract1 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
-      const contract2 = 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, { jsonrpc: '2.0', id: 1, result: { sequence: 100 } });
-
-      nock(rpcUrl)
-        .post('/')
-        .reply(200, {
-          jsonrpc: '2.0',
-          id: 2,
-          result: {
-            latestLedger: 101,
-            events: [
-              buildRandomnessRequestedEvent({ raffleContract: contract1, requestId: 111n }),
-              buildRandomnessRequestedEvent({ raffleContract: contract2, requestId: 222n }),
-            ],
-          },
-        });
-
-      await listener.initialize();
-      await listener.startListening([contract1, contract2]);
-
-      const jobs = queue.drain();
-      expect(jobs).toHaveLength(2);
-      expect(jobs[0].raffleContract).toBe(contract1);
-      expect(jobs[0].requestId).toBe(111n);
-      expect(jobs[1].raffleContract).toBe(contract2);
-      expect(jobs[1].requestId).toBe(222n);
-    });
+    // Verify all 3 oracles made a submission attempt
+    expect(submittedContracts).toHaveLength(3);
   });
 });

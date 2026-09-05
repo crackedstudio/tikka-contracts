@@ -1,7 +1,9 @@
-# Rust's output and lock files
+# Rust's output
 target/
 *.wasm
-Cargo.lock
+
+# Cargo.lock is deliberately tracked: these are deployable contracts, not a
+# library, and byte-reproducible builds need the exact dependency graph (#843).
 
 # Node dependencies and build artifacts
 node_modules/
@@ -37,6 +39,10 @@ CLAUDE.md
 # Test snapshots
 test_snapshots/
 
+# Python tooling cache (scripts/*.py)
+__pycache__/
+*.pyc
+
 # Skills
 .windsurf/
 # ./skills
@@ -55,4 +61,9 @@ test_output*.txt
 check_out*.txt
 error*.txt
 *.tar.gz
-patch*.py
+# Agent / scratch artefacts
+patch_*.txt
+scratch_*.rs
+test_*.rs
+update_*.py
+inject_*.py

@@ -1,2 +1,0 @@
-Add this line after line 58 (pub max_tickets_per_tx: u32,) in contracts/raffle-instance/src/lib.rs:
-    pub max_tickets_per_address: u32,

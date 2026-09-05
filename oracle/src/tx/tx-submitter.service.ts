@@ -8,15 +8,31 @@ import {
 } from '@stellar/stellar-sdk';
 import { Alerter } from '../alert/alerter';
 import { KeyService } from '../keys/key.service';
+import {
+  oracleDeadLetterTotal,
+  oracleFeesSpentStroopsTotal,
+  oracleRequestLatencySeconds,
+  oracleRpcErrorsTotal,
+  oracleSubmissionsTotal,
+} from '../metrics/metrics';
+import { RandomnessJob } from '../queue/request-queue';
 
 const MAX_RETRIES = 5;
 const BASE_BACKOFF_MS = 500;
+const SUBMISSION_FEE_STROOPS = 100_000;
 
 export interface ProvideRandomnessParams {
   raffleContract: string;
   randomSeed: bigint;
   publicKey: Uint8Array;
   proof: Uint8Array;
+  requestId: bigint;
+  observedAtMs?: number;
+}
+
+export interface ProvideQuorumRandomnessParams {
+  raffleContract: string;
+  randomSeed: bigint;
   requestId: bigint;
 }
 
@@ -41,26 +57,156 @@ export class TxSubmitterService {
     private readonly keyService: KeyService,
     options: TxSubmitterOptions | string = {},
   ) {
-    // Allow passing a plain rpcUrl string for convenience (e.g. in tests).
     if (typeof options === 'string') {
       options = { rpcUrl: options };
     }
-    const rpcUrl = options.rpcUrl ?? process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+    const rpcUrl =
+      options.rpcUrl ?? process.env['STELLAR_RPC_URL'] ?? 'https://soroban-testnet.stellar.org';
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
     this.networkPassphrase =
-      options.networkPassphrase ?? process.env.STELLAR_NETWORK_PASSPHRASE ?? Networks.TESTNET;
+      options.networkPassphrase ?? process.env['STELLAR_NETWORK_PASSPHRASE'] ?? Networks.TESTNET;
     this.alerter = options.alerter;
     this.failureThreshold =
-      options.failureThreshold ?? Number(process.env.ALERT_FAILURE_THRESHOLD ?? 3);
+      options.failureThreshold ?? Number(process.env['ALERT_FAILURE_THRESHOLD'] ?? 3);
     this.sleepImpl = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
-  async submitProvideRandomness(params: ProvideRandomnessParams): Promise<string> {
+  async submitProvideRandomness(params: ProvideRandomnessParams): Promise<SubmitResult> {
+    let lastError: Error | undefined;
+    let retried = false;
+
+    for (let attempt = 0; attempt < this.retryPolicy.maxAttempts; attempt++) {
+      try {
+        const hash = await this.submitOnce(params);
+        this.consecutiveFailures = 0;
+        oracleSubmissionsTotal.labels(retried ? 'retry' : 'success').inc();
+        if (params.observedAtMs !== undefined) {
+          oracleRequestLatencySeconds.observe((Date.now() - params.observedAtMs) / 1000);
+        }
+        oracleFeesSpentStroopsTotal.inc(SUBMISSION_FEE_STROOPS);
+        return hash;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const decision = this.retryPolicy.classify(lastError);
+
+        this.recordFailure(message);
+
+        if (!this.isRetryable(message)) {
+          oracleSubmissionsTotal.labels('fatal').inc();
+          oracleDeadLetterTotal.inc();
+          throw new Error(`Permanent failure submitting provide_randomness: ${message}`);
+        }
+
+        retried = true;
+
+        if (message.includes('AccountSequenceMismatch') || message.includes('sequence')) {
+          this.sequenceCache = undefined;
+        }
+
+        if (attempt < MAX_RETRIES - 1) {
+          const delay = BASE_BACKOFF_MS * 2 ** attempt;
+          await this.sleepImpl(delay);
+        }
+      }
+    }
+
+    oracleSubmissionsTotal.labels('fatal').inc();
+    oracleDeadLetterTotal.inc();
+    throw new Error(
+      `Failed to submit provide_randomness after ${MAX_RETRIES} attempts: ${lastError?.message}`
+    );
+  }
+
+  /** Convenience wrapper that forwards queue job metadata for latency metrics. */
+  async submitJob(job: RandomnessJob, randomSeed: bigint, publicKey: Uint8Array, proof: Uint8Array): Promise<string> {
+    return this.submitProvideRandomness({
+      raffleContract: job.raffleContract,
+      randomSeed,
+      publicKey,
+      proof,
+      requestId: job.requestId,
+      observedAtMs: job.observedAtMs,
+    });
+  }
+
+  private async submitOnce(params: ProvideRandomnessParams): Promise<string> {
+    const publicKey = this.keyService.getPublicKey();
+    const account = await this.server.getAccount(publicKey);
+    const sequence = this.sequenceCache ?? account.sequenceNumber();
+    const sourceAccount = new Account(account.accountId(), sequence);
+
+    const contract = new Contract(params.raffleContract);
+    const operation = contract.call(
+      'provide_randomness',
+      nativeToScVal(params.randomSeed, { type: 'u64' }),
+      nativeToScVal(Buffer.from(params.publicKey), { type: 'bytes' }),
+      nativeToScVal(Buffer.from(params.proof), { type: 'bytes' }),
+      nativeToScVal(params.requestId, { type: 'u64' })
+    );
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: String(SUBMISSION_FEE_STROOPS),
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(300)
+      .build();
+
+    let simulated: SorobanRpc.Api.SimulateTransactionResponse;
+    try {
+      simulated = await this.server.simulateTransaction(tx);
+    } catch (error) {
+      oracleRpcErrorsTotal.labels('simulate').inc();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (SorobanRpc.Api.isSimulationError(simulated)) {
+      throw new Error(`Simulation failed: ${JSON.stringify(simulated)}`);
+    }
+
+    const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
+    this.keyService.signTransaction(prepared);
+
+    let sendResult: SorobanRpc.Api.SendTransactionResponse;
+    try {
+      sendResult = await this.server.sendTransaction(prepared);
+    } catch (error) {
+      oracleRpcErrorsTotal.labels('send').inc();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (sendResult.status === 'ERROR') {
+      throw new Error(`Send failed: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`);
+    }
+
+    const hash = sendResult.hash;
+    let status: SorobanRpc.Api.GetTransactionResponse;
+    try {
+      status = await this.pollTransaction(hash);
+    } catch (error) {
+      oracleRpcErrorsTotal.labels('poll').inc();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      this.sequenceCache = String(BigInt(sequence) + 1n);
+      console.log(`provide_randomness confirmed: ${hash}`);
+      return hash;
+    }
+
+    if (status.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Transaction failed on-chain: ${hash}`);
+    }
+
+    throw new Error(`Transaction did not confirm: ${hash}`);
+  }
+
+  async submitProvideQuorumRandomness(params: ProvideQuorumRandomnessParams): Promise<string> {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        const hash = await this.submitOnce(params);
+        const hash = await this.submitQuorumOnce(params);
         this.consecutiveFailures = 0;
         return hash;
       } catch (err) {
@@ -70,7 +216,7 @@ export class TxSubmitterService {
         this.recordFailure(message);
 
         if (!this.isRetryable(message)) {
-          throw new Error(`Permanent failure submitting provide_randomness: ${message}`);
+          throw new Error(`Permanent failure submitting provide_quorum_randomness: ${message}`);
         }
 
         if (message.includes('AccountSequenceMismatch') || message.includes('sequence')) {
@@ -85,22 +231,20 @@ export class TxSubmitterService {
     }
 
     throw new Error(
-      `Failed to submit provide_randomness after ${MAX_RETRIES} attempts: ${lastError?.message}`
+      `Failed to submit provide_quorum_randomness after ${MAX_RETRIES} attempts: ${lastError?.message}`
     );
   }
 
-  private async submitOnce(params: ProvideRandomnessParams): Promise<string> {
-    const keypair = this.keyService.getKeypair();
-    const account = await this.server.getAccount(keypair.publicKey());
+  private async submitQuorumOnce(params: ProvideQuorumRandomnessParams): Promise<string> {
+    const publicKey = this.keyService.getPublicKey();
+    const account = await this.server.getAccount(publicKey);
     const sequence = this.sequenceCache ?? account.sequenceNumber();
     const sourceAccount = new Account(account.accountId(), sequence);
 
     const contract = new Contract(params.raffleContract);
     const operation = contract.call(
-      'provide_randomness',
+      'provide_quorum_randomness',
       nativeToScVal(params.randomSeed, { type: 'u64' }),
-      nativeToScVal(Buffer.from(params.publicKey), { type: 'bytes' }),
-      nativeToScVal(Buffer.from(params.proof), { type: 'bytes' }),
       nativeToScVal(params.requestId, { type: 'u64' })
     );
 
@@ -109,7 +253,7 @@ export class TxSubmitterService {
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(operation)
-      .setTimeout(300)
+      .setTimeout(timeout)
       .build();
 
     const simulated = await this.server.simulateTransaction(tx);
@@ -118,7 +262,7 @@ export class TxSubmitterService {
     }
 
     const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
-    prepared.sign(keypair);
+    this.keyService.signTransaction(prepared);
 
     const sendResult = await this.server.sendTransaction(prepared);
     if (sendResult.status === 'ERROR') {
@@ -130,7 +274,7 @@ export class TxSubmitterService {
 
     if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
       this.sequenceCache = String(BigInt(sequence) + 1n);
-      console.log(`provide_randomness confirmed: ${hash}`);
+      console.log(`provide_quorum_randomness confirmed: ${hash}`);
       return hash;
     }
 

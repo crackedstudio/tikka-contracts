@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: read
   issues: write
   pull-requests: write
 
@@ -14,8 +15,9 @@ jobs:
   stale:
     name: Mark and close stale issues/PRs
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/stale@v11
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11
         with:
           days-before-issue-stale: 21
           days-before-issue-close: 7

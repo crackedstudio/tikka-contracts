@@ -1,0 +1,1 @@
+// registry.rs - registry features

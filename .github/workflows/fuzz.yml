@@ -1,0 +1,120 @@
+name: Fuzz
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  FUZZ_MAX_TIME: 1800
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_buy_ticket
+          - fuzz_finalize_raffle
+          - fuzz_winner_selection
+          - fuzz_refund_cancel
+          - fuzz_commit_reveal
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust (nightly)
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+        with:
+          toolchain: nightly
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Restore fuzz corpus
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ hashFiles('fuzz/fuzz_targets/**', 'contracts/**/src/**') }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run fuzz target
+        id: fuzz
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_MAX_TIME }}
+
+      - name: Detect crash artifacts
+        id: crash
+        if: failure()
+        run: |
+          shopt -s nullglob
+          files=(fuzz/artifacts/${{ matrix.target }}/crash-*)
+          if [ ${#files[@]} -gt 0 ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "artifact=${files[0]}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload crash input
+        if: steps.crash.outputs.found == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}/crash-*
+          retention-days: 90
+
+      - name: Open issue on crash
+        if: steps.crash.outputs.found == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const target = '${{ matrix.target }}';
+            const artifact = '${{ steps.crash.outputs.artifact }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `Fuzz crash: ${target} (run ${context.runId})`;
+            const body = [
+              '## Summary',
+              '',
+              `The nightly fuzz job found a crash in \`${target}\`.`,
+              '',
+              '## Reproduction',
+              '',
+              `1. Download the crash artifact from the [workflow run](${runUrl}).`,
+              '2. From the repository root with nightly Rust and `cargo-fuzz` installed:',
+              '',
+              '```bash',
+              'rustup toolchain install nightly',
+              'cargo install cargo-fuzz --locked',
+              `cargo fuzz run ${target} ${artifact}`,
+              '```',
+              '',
+              'See [`fuzz/README.md`](fuzz/README.md) for full details.',
+              '',
+              '## Next steps',
+              '',
+              '- Minimize the input with `cargo fuzz tmin`.',
+              '- Commit the minimized seed under `fuzz/corpus/<target>/` as a regression test.',
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['type: bug'],
+            });
