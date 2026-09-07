@@ -358,9 +358,6 @@ pub(crate) fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32
         .map_err(|_| Error::TokenTransferFailed)?;
 
     if protocol_fee > 0 {
-        if let Some(treasury) = &raffle.treasury_address {
-            token_client.transfer(&env.current_contract_address(), treasury, &protocol_fee);
-        }
         let prev: i128 = env
             .storage()
             .instance()
