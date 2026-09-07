@@ -37,6 +37,22 @@ Commit entries are **structurally keyed by ticket ID**, not by the owner's publi
 - A commit submitted by the original buyer remains entirely intact and preserved even if the associated ticket is transferred or traded before finalization occurs
 - This prevents the silent loss of entropy when tickets change hands
 
+  ## 2.1 One commit per ticket
+
+`submit_commit` stores at most one `CommitEntry` per `ticket_id`.
+
+- A second submission for the same ticket returns `Error::CommitAlreadySubmitted`.
+- This blocks last-look bias: a participant cannot overwrite their commitment after
+  seeing other on-chain commits and recomputing the prospective seed.
+
+## 2.2 Commit window
+
+Commits are accepted only while the raffle status is **`Active`**.
+
+Once the raffle enters **`Drawing`**, the commit window is closed. Accepting new
+entropy after the draw is triggered would give the last committer more information
+than earlier participants.
+
 ## 3. Fallback Behavior
 
 If zero commits are submitted by the time finalization is triggered, the contract automatically falls back to using an internal PRNG fallback mechanism so the raffle can still be finalized.

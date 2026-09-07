@@ -8,7 +8,7 @@
  * The on-chain verifier in contracts/raffle-instance/src/lib.rs
  * (`provide_randomness`) reconstructs the signed message as:
  *
- *   let message = Bytes::from_array(&env, &random_seed.to_be_bytes());
+ *   let message = Bytes::from_array(&env, &(current_contract_address, request_id).to_xdr(&env));
  *   env.crypto().ed25519_verify(&public_key, &message, &proof);
  *
  * The oracle must sign precisely that buffer.  Any byte-level drift between

@@ -1,54 +1,47 @@
 #!/usr/bin/env bash
+# Deploy a fully initialised raffle factory to testnet.
+#
+# One command produces a factory that can create raffles: the instance WASM is
+# installed, the factory is deployed and initialised, the result is verified
+# against the chain, and the deployment is recorded with enough detail to
+# identify the code running at the address (issues #842, #843).
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
+# shellcheck source=scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+NETWORK="testnet"
 
-require_env() {
-  local name="$1"
-  if [[ -z "${!name:-}" ]]; then
-    echo "Error: ${name} is required to deploy" >&2
-    exit 1
-  fi
-}
+load_env
+require_env DEPLOYER_SECRET_KEY "the account that signs the deployment"
+require_env ADMIN_ADDRESS "factory admin, passed to init_factory"
 
-require_env DEPLOYER_SECRET_KEY
+TREASURY_ADDRESS="${TREASURY_ADDRESS:-${ADMIN_ADDRESS}}"
+PROTOCOL_FEE_BP="${PROTOCOL_FEE_BP:-0}"
 
-echo "Building WASM..."
-stellar contract build
+warn_on_cli_mismatch
+require_no_existing_deployment "${NETWORK}"
 
-WASM_FILE="target/wasm32v1-none/release/raffle-factory.wasm"
+build_contracts
 
-if [[ ! -f "${WASM_FILE}" ]]; then
-    echo "Error: WASM file not found at ${WASM_FILE}" >&2
-    exit 1
-fi
+deploy_and_init_factory \
+  "${NETWORK}" \
+  "${DEPLOYER_SECRET_KEY}" \
+  "${ADMIN_ADDRESS}" \
+  "${TREASURY_ADDRESS}" \
+  "${PROTOCOL_FEE_BP}"
 
-echo "Deploying to Testnet..."
+verify_deployed_bytecode "${NETWORK}" "${FACTORY_CONTRACT_ID}"
 
-CONTRACT_ID=$(stellar contract deploy \
-  --wasm "${WASM_FILE}" \
-  --source "${DEPLOYER_SECRET_KEY}" \
-  --network testnet)
+write_deployment_manifest \
+  "${NETWORK}" \
+  "${ADMIN_ADDRESS}" \
+  "${TREASURY_ADDRESS}" \
+  "${PROTOCOL_FEE_BP}"
 
-echo "Deployment successful!"
-echo "Contract ID: ${CONTRACT_ID}"
-
-mkdir -p deployments
-cat <<EOF > deployments/testnet.json
-{
-  "network": "testnet",
-  "contractId": "${CONTRACT_ID}",
-  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-}
-EOF
-
-echo "Saved deployment info to deployments/testnet.json"
+echo ""
+echo "Deployment successful."
+echo "Factory contract ID: ${FACTORY_CONTRACT_ID}"
+echo "Instance WASM hash:  ${INSTANCE_WASM_HASH}"

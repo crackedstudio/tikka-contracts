@@ -1,5 +1,5 @@
 import { KeyService } from '../keys/key.service';
-import { buildVrfProofMessage } from './proof-message';
+import { buildVrfProofMessage, deriveRandomSeedFromProof } from './proof-message';
 
 export interface RandomnessProof {
   randomSeed: bigint;
@@ -14,13 +14,10 @@ export class VrfService {
   /**
    * Signs a randomness reveal bound to a specific raffle contract and request.
    */
-  signRandomnessProof(
-    raffleContract: string,
-    requestId: bigint,
-    randomSeed: bigint
-  ): RandomnessProof {
-    const message = buildVrfProofMessage(raffleContract, requestId, randomSeed);
+  signRandomnessProof(raffleContract: string, requestId: bigint): RandomnessProof {
+    const message = buildVrfProofMessage(raffleContract, requestId);
     const proof = this.keyService.sign(message);
+    const randomSeed = deriveRandomSeedFromProof(proof);
 
     return {
       randomSeed,

@@ -16,7 +16,6 @@ describe('OraclePipeline End-to-End', () => {
     testKeypair = Keypair.random();
 
     mockConfig = {
-      secretKey: testKeypair.secret(),
       rpcUrl: 'http://localhost:8000',
       factoryContractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
       logLevel: 'info',

@@ -32,6 +32,15 @@ pub const MIN_TICKET_PRICE: i128 = 10_000;
 /// Maximum allowed prize pool.  Prevents i128 overflow in prize calculations.
 pub const MAX_PRIZE_AMOUNT: i128 = 1_000_000_000_000_000_000_000; // 1e21
 
+/// Maximum prize pool permitted when `RandomnessSource::Internal` is used.
+///
+/// `Internal` derives its seed from ledger timestamp, sequence, network id,
+/// and the contract address — all deterministic and public before
+/// `finalize_raffle` runs. Set to 5e9 (~500 XLM at 7-decimal stroops),
+/// operationalizing the existing "≲ ~500 XLM" guidance in
+/// docs/RANDOMNESS.md as an enforced limit. See docs/RANDOMNESS.md. (#773)
+pub const MAX_INTERNAL_RANDOMNESS_PRIZE_AMOUNT: i128 = 5_000_000_000; // 5e9 ≈ 500 XLM
+
 // --- Timing constants -------------------------------------------------------
 
 /// Default delay (seconds) between raffle finalization and when winners may
@@ -40,6 +49,16 @@ pub const DEFAULT_CLAIM_LOCKUP_SECONDS: u64 = 3_600;
 
 /// Upper bound on the claim lockup delay (7 days).
 pub const MAX_CLAIM_LOCKUP_SECONDS: u64 = 604_800;
+
+/// Minimum time (seconds) after finalization before unclaimed prizes may be
+/// swept to the treasury.  Equals 30 days.
+pub const MIN_CLAIM_EXPIRY_SECONDS: u64 = 30 * 24 * 3_600; // 2_592_000
+
+/// Default claim expiry when the creator does not specify one.
+pub const DEFAULT_CLAIM_EXPIRY_SECONDS: u64 = MIN_CLAIM_EXPIRY_SECONDS;
+
+/// Maximum unclaimed prize tiers processed in a single `sweep_unclaimed` call.
+pub const MAX_SWEEP_UNCLAIMED_PER_CALL: u32 = 10;
 
 /// Default window (seconds) added to the current timestamp when submitting
 /// token-swap transactions.  Equals 5 minutes.

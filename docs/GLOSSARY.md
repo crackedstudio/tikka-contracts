@@ -37,6 +37,18 @@ A single instance of a prize draw created and managed by a raffle creator. A raf
 
 **Code reference**: [`contracts/raffle-instance/src/lib.rs`](../contracts/raffle-instance/src/lib.rs) — `struct Raffle` (via `RaffleConfig`)
 
+### End Time
+
+The Unix timestamp (`Raffle::end_time` / `RaffleConfig::end_time`) after which ticket sales for a raffle close. **The boundary is exclusive of `end_time` itself**: sales are open only while `ledger_timestamp < end_time`, so the instant `ledger_timestamp == end_time` is already past the deadline. This single rule governs three otherwise-independent code paths, which must always agree:
+
+- **Ticket purchases** (`buy_tickets`, `buy_tickets_for`): reject with `Error::RaffleExpired` once `ledger_timestamp >= end_time` (unless `no_deadline` is `true`).
+- **Finalization** (`finalize_raffle`): treats the deadline as reached (`time_ended`) once `ledger_timestamp >= end_time`; together with `tickets_full`, this is what allows an `Active` raffle to leave that state.
+- **Stats** (`get_stats().time_remaining`): returns `end_time - ledger_timestamp` while `ledger_timestamp < end_time`, and `0` from `ledger_timestamp == end_time` onward. `0` is also returned whenever `no_deadline` is `true`.
+
+When `no_deadline` is `true`, `end_time` is not enforced by any of the above; `RaffleConfig::end_time` must be `0` in that case (checked at `init`).
+
+**Code reference**: [`contracts/raffle-instance/src/lib.rs`](../contracts/raffle-instance/src/lib.rs) — `struct Raffle` (`end_time`, `no_deadline`); [`contracts/raffle-instance/src/tickets.rs`](../contracts/raffle-instance/src/tickets.rs) — `buy_tickets`, `buy_tickets_for`; [`contracts/raffle-instance/src/draw.rs`](../contracts/raffle-instance/src/draw.rs) — `finalize_raffle`; [`contracts/raffle-instance/src/views.rs`](../contracts/raffle-instance/src/views.rs) — `get_stats`
+
 ### Ticket
 
 A single entry in a raffle draw owned by a participant. Each ticket represents one chance to win. A ticket is identified by a monotonic `id` unique to the raffle, recorded with the owner's address and purchase timestamp. See [`docs/EVENTS.md`](EVENTS.md) for the `TicketPurchased` event structure.

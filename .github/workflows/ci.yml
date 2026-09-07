@@ -19,24 +19,48 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Must match STELLAR_CLI_VERSION in scripts/common.sh (issues #841, #843).
+  STELLAR_CLI_VERSION: "23.4.1"
 
 jobs:
+  check:
+    name: Compile check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+        with:
+          toolchain: stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+      - run: cargo check --workspace --all-targets --all-features --exclude raffle-fuzz
+
   build_and_test:
     name: Build, Test, and Lint
     runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
-      with:
-        toolchain: stable
-        targets: wasm32-unknown-unknown
-        components: clippy, rustfmt
+    # rust-toolchain.toml is the single source of truth for the compiler
+    # version, components and WASM target (issues #841, #843).
+    - name: Set up pinned Rust toolchain
+      run: |
+        rustup toolchain install "$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain.toml)"
+        rustup show
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+    - name: Cargo Check (fast compile gate)
+      run: cargo check --workspace --all-targets
 
     - name: Check Formatting
       run: cargo fmt --all -- --check
@@ -44,8 +68,11 @@ jobs:
     - name: Check for Orphaned Modules
       run: python3 scripts/check_orphan_modules.py
 
+    # Build through the Stellar CLI so CI produces the same artifacts the deploy
+    # scripts upload — previously CI built wasm32-unknown-unknown while
+    # deploy-testnet.sh deployed wasm32v1-none (issue #841).
     - name: Build Contracts
-      run: cargo build --target wasm32-unknown-unknown --release
+      run: stellar contract build
 
     - name: Check WASM Binary Size (128KB limit + baseline delta)
       run: python3 scripts/check_wasm_sizes.py
@@ -68,7 +95,12 @@ jobs:
     - name: Check Error Docs Sync
       run: |
         python3 scripts/generate_error_docs.py
-        git diff --exit-code docs/ERRORS.md || (echo "ERROR: docs/ERRORS.md is out of sync with Error enum in contracts/raffle-instance/src/lib.rs. Run 'python scripts/generate_error_docs.py' to update." && exit 1)
+        git diff --exit-code docs/ERRORS.md || (echo "ERROR: docs/ERRORS.md is out of sync with Error enums in contracts/raffle-instance/src/lib.rs and ContractError in contracts/raffle-factory/src/lib.rs. Run 'python3 scripts/generate_error_docs.py' to update." && exit 1)
+
+    - name: Check Events Docs Sync
+      run: |
+        python3 scripts/generate_event_docs.py
+        git diff --exit-code docs/EVENTS.md || (echo "ERROR: docs/EVENTS.md is out of sync with the event struct definitions in contracts/*/src/events.rs. Run 'python scripts/generate_event_docs.py' to update." && exit 1)
 
     - name: Run Linter (Clippy)
       run: cargo clippy --all-targets --all-features -- -D warnings
@@ -82,6 +114,7 @@ jobs:
   shellcheck:
     name: Shell Script Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install shellcheck
@@ -92,6 +125,7 @@ jobs:
   oracle_check:
     name: Oracle Service CI
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: oracle
@@ -103,12 +137,52 @@ jobs:
           cache: 'npm'
           cache-dependency-path: oracle/package-lock.json
       - name: Install dependencies
+        timeout-minutes: 5
         run: npm ci
       - name: Check formatting (Prettier)
         run: npm run format:check
       - name: Lint (ESLint)
         run: npm run lint
       - name: TypeScript compile check
-        run: npm run build
+        run: npm run typecheck
       - name: Run tests
         run: npm run test:ci
+
+      - name: Upload Oracle coverage artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oracle-coverage-lcov
+          path: oracle/coverage/lcov.info
+
+  coverage:
+    name: Rust Coverage + Ratchet
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust (coverage)
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Collect code coverage (lcov)
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-coverage-lcov
+          path: coverage/lcov.info
+
+      - name: Check coverage ratchet
+        run: python3 scripts/check_coverage_ratchet.py --lcov coverage/lcov.info --baseline coverage/coverage-ratchet.json

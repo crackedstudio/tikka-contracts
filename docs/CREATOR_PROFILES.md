@@ -1,5 +1,7 @@
 # Creator Profiles
 
+> **Implementation note:** This feature is now implemented in `contracts/raffle-factory/src/registry.rs`. The registry module holds no funds and gates no funds movement.
+
 ## Overview
 
 Creator profiles provide lightweight on-chain identity and reputation for raffle organizers. Buyers can distinguish reputable organizers from throwaway addresses without requiring off-chain infrastructure.

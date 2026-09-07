@@ -1,4 +1,5 @@
 import { Address, nativeToScVal, xdr } from '@stellar/stellar-sdk';
+import { createHash } from 'crypto';
 
 /**
  * Encodes a u64 seed as an 8-byte big-endian buffer.
@@ -30,14 +31,20 @@ export function buildProofMessage(seed: bigint): Buffer {
  */
 export function buildVrfProofMessage(
   raffleContract: string,
-  requestId: bigint,
-  randomSeed: bigint
+  requestId: bigint
 ): Buffer {
   const address = new Address(raffleContract);
-  const scVal = xdr.ScVal.scvVec([
-    address.toScVal(),
-    nativeToScVal(requestId, { type: 'u64' }),
-    nativeToScVal(randomSeed, { type: 'u64' }),
-  ]);
+  const scVal = xdr.ScVal.scvVec([address.toScVal(), nativeToScVal(requestId, { type: 'u64' })]);
   return Buffer.from(scVal.toXDR());
+}
+
+/**
+ * Derive a deterministic u64 seed from the signed proof bytes.
+ *
+ * The oracle cannot choose this value independently: it is the first 8 bytes
+ * of SHA-256(proof), interpreted as a big-endian u64.
+ */
+export function deriveRandomSeedFromProof(proof: Uint8Array | Buffer): bigint {
+  const digest = createHash('sha256').update(proof).digest();
+  return digest.readBigUInt64BE(0);
 }

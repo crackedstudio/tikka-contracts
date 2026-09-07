@@ -4,19 +4,34 @@ This document covers the `scripts/` deployment toolchain and the `deployments/` 
 
 ## Prerequisites
 
-- Rust toolchain via [rustup](https://rustup.rs/)
-- Stellar CLI **v23.x** (must match workspace `soroban-sdk = "23"`)
-- WASM target used by your toolchain (see [FAQ](FAQ.md) for `wasm32-unknown-unknown` vs `wasm32v1-none`)
+- [rustup](https://rustup.rs/) — the compiler version and the WASM target are
+  pinned in `rust-toolchain.toml` and installed automatically
+- Stellar CLI **23.4.1** — pinned as `STELLAR_CLI_VERSION` in `scripts/common.sh`
 - A funded Stellar account secret key for the target network
 
 ```bash
-rustup target add wasm32-unknown-unknown
-# Newer stellar-cli builds may also require:
-# rustup target add wasm32v1-none
+rustup show                 # installs the pinned toolchain + wasm32v1-none
 
-cargo install --locked stellar-cli --features opt
-stellar --version   # expect 23.x
+cargo install --locked stellar-cli --version 23.4.1 --features opt
+stellar --version           # expect 23.4.1
 ```
+
+### Build target
+
+Everything builds `wasm32v1-none` — the target `stellar contract build` produces
+and the only target Soroban accepts. The Makefile, CI, the deploy scripts and
+`verify.sh` all derive the target and the artifact paths from a single place,
+`scripts/common.sh`:
+
+```bash
+WASM_TARGET="wasm32v1-none"
+WASM_DIR="${REPO_ROOT}/target/${WASM_TARGET}/release"
+FACTORY_WASM="${WASM_DIR}/raffle_factory.wasm"
+INSTANCE_WASM="${WASM_DIR}/raffle_instance.wasm"
+```
+
+Change it there and every path follows. Do not hardcode a target or an artifact
+path anywhere else.
 
 ## Environment variables
 
@@ -37,7 +52,10 @@ Every script under `scripts/` loads `.env` when present (`export $(cat .env | xa
 | `STELLAR_HORIZON_URL`                  | optional                   | Horizon endpoint                               |
 | `FACTORY_CONTRACT_ID`                  | oracle service             | Factory ID the oracle listens on               |
 | `ORACLE_ADDRESS` / `ORACLE_SECRET_KEY` | oracle / External raffles  | Oracle identity for `provide_randomness`       |
-| `ADMIN_ADDRESS`                        | manual init                | Factory admin G-address                        |
+| `ADMIN_ADDRESS`                        | `deploy-*.sh`              | Factory admin G-address (**required**)         |
+| `TREASURY_ADDRESS`                     | `deploy-*.sh`              | Treasury G-address; defaults to `ADMIN_ADDRESS` |
+| `PROTOCOL_FEE_BP`                      | `deploy-*.sh`              | Protocol fee in basis points; defaults to `0`  |
+| `ALLOW_REDEPLOY`                       | `deploy-*.sh`              | Set to `1` to replace a recorded deployment    |
 
 > **Security:** Never commit `.env` or secret keys. `DEPLOYER_SECRET_KEY` and `ORACLE_SECRET_KEY` must stay local or in a secrets manager.
 
@@ -65,47 +83,85 @@ Every script under `scripts/` loads `.env` when present (`export $(cat .env | xa
 
 ### `scripts/deploy-testnet.sh`
 
-**Purpose:** Build WASM with `stellar contract build`, deploy `raffle-factory.wasm` to testnet, and record the result under `deployments/`.
+**Purpose:** Produce a fully initialised factory on testnet in one command.
 
-**Required env:** `DEPLOYER_SECRET_KEY`
+The script:
+
+1. Builds both contracts with `stellar contract build` and enforces the 128KB
+   size limit on the artifacts it is about to deploy
+1. Installs the **raffle-instance** WASM and captures its hash — the factory
+   stores this as `DataKey::InstanceWasmHash` and cannot create a raffle without it
+1. Deploys the **raffle-factory**
+1. Calls `init_factory` with the admin, instance WASM hash, protocol fee and treasury
+1. Reads `get_admin` back off the chain to confirm the factory is initialised
+1. Runs `verify.sh` to confirm the deployed bytecode matches the local build
+1. Writes `deployments/testnet.json` and appends to `deployments/testnet-history.jsonl`
+
+There is no manual step between deploy and usable.
+
+**Required env:** `DEPLOYER_SECRET_KEY`, `ADMIN_ADDRESS`
+**Optional env:** `TREASURY_ADDRESS` (defaults to `ADMIN_ADDRESS`), `PROTOCOL_FEE_BP` (defaults to `0`), `ALLOW_REDEPLOY`
 
 **Example:**
 
 ```bash
 export DEPLOYER_SECRET_KEY="S..."
+export ADMIN_ADDRESS="G..."
+export PROTOCOL_FEE_BP=250
 ./scripts/deploy-testnet.sh
 ```
 
-**Expected output:**
-
-```text
-Building WASM...
-Deploying to Testnet...
-Deployment successful!
-Contract ID: C...
-Saved deployment info to deployments/testnet.json
-```
-
-**WASM path expected by the script:** `target/wasm32v1-none/release/raffle-factory.wasm`
-
-If that path is missing after `stellar contract build`, see [FAQ](FAQ.md) (WASM target mismatch).
+**Re-running is safe.** If `deployments/testnet.json` already records a contract
+ID, the script refuses rather than silently deploying a second factory and
+orphaning the first. Pass `ALLOW_REDEPLOY=1` when replacing it is what you want.
 
 ---
 
 ### `scripts/deploy-mainnet.sh`
 
-**Purpose:** Same as testnet deploy, but targets `mainnet` and writes `deployments/mainnet.json`.
+**Purpose:** Same sequence as the testnet script, against `mainnet`, writing
+`deployments/mainnet.json`.
 
-**Required env:** `DEPLOYER_SECRET_KEY`
-
-**Safety:** Prompts `WARNING: You are deploying to MAINNET. Proceed? (y/N)` and aborts unless you confirm with `y` / `yes`.
+**Safety:** Prints the admin, treasury and protocol fee, then prompts
+`Proceed? (y/N)` and aborts unless you confirm with `y` / `yes`.
 
 **Example:**
 
 ```bash
 export DEPLOYER_SECRET_KEY="S..."
+export ADMIN_ADDRESS="G..."
 ./scripts/deploy-mainnet.sh
 # type y when prompted
+```
+
+---
+
+### `scripts/build-reproducible.sh`
+
+**Purpose:** Build both contracts with the pinned toolchain from a clean target
+directory and print their SHA-256 hashes. This is the command a third party runs
+to check that the bytecode at an address is built from this source.
+
+**Example:**
+
+```bash
+./scripts/build-reproducible.sh
+```
+
+**Expected output:**
+
+```text
+Toolchain
+  rust:        1.94.0 (rust-toolchain.toml)
+  stellar-cli: 23.4.1 (pinned), 23.4.1 (installed)
+  target:      wasm32v1-none
+  commit:      <sha>
+
+...
+
+SHA-256
+  raffle_factory.wasm   <hex>
+  raffle_instance.wasm  <hex>
 ```
 
 ---
@@ -137,17 +193,19 @@ Arguments after the function name are forwarded to the Stellar CLI as contract f
 
 ### `scripts/verify.sh`
 
-**Purpose:** Fetch the on-chain WASM for `RAFFLE_CONTRACT_ADDRESS` and compare its SHA-256 hash to the local factory WASM.
+**Purpose:** Fetch the on-chain WASM for `RAFFLE_CONTRACT_ADDRESS` and compare
+its SHA-256 hash to the local factory artifact. Both deploy scripts call it
+automatically and fail the deployment on a mismatch.
 
-**Required env:** `RAFFLE_CONTRACT_ADDRESS`  
-**Optional env:** `STELLAR_NETWORK` (default `testnet`)  
-**Local artifact:** `target/wasm32v1-none/release/raffle-factory.wasm` (build first)
+**Required env:** `RAFFLE_CONTRACT_ADDRESS`
+**Optional env:** `STELLAR_NETWORK` (default `testnet`)
+**Local artifact:** `target/wasm32v1-none/release/raffle_factory.wasm` (build first)
 
 **Example:**
 
 ```bash
 export RAFFLE_CONTRACT_ADDRESS="C..."
-stellar contract build   # or cargo build --release --target ...
+./scripts/build-reproducible.sh
 ./scripts/verify.sh
 ```
 
@@ -159,7 +217,37 @@ Remote WASM Hash: <hex>
 Verification Result: Match: YES
 ```
 
-Exit code `0` on match, `1` on mismatch or fetch failure. Temporary file `remote.wasm` is deleted after comparison.
+Exit code `0` on match, `1` on mismatch or fetch failure. The fetched file goes
+to a temp path and is removed on exit.
+
+---
+
+## Verifying someone else's deployment
+
+Anyone can check what is running at a recorded address, using only this
+repository:
+
+```bash
+# 1. Check out the commit the deployment was built from
+git checkout "$(jq -r .gitCommit deployments/testnet.json)"
+
+# 2. Rebuild with the pinned toolchain
+./scripts/build-reproducible.sh
+
+# 3. Compare against the recorded hashes
+jq -r '.factoryWasmHash, .instanceWasmHash' deployments/testnet.json
+
+# 4. Compare against the chain
+RAFFLE_CONTRACT_ADDRESS="$(jq -r .contractId deployments/testnet.json)" \
+  ./scripts/verify.sh
+```
+
+Step 2 must reproduce the hashes from step 3 byte for byte. If it does not,
+check that your Stellar CLI matches `STELLAR_CLI_VERSION` in
+`scripts/common.sh` and that `gitDirty` is `false` in the manifest.
+
+Every GitHub release carries the same information: the WASM artifacts, a
+`SHA256SUMS.txt`, and the toolchain versions in the release notes.
 
 ---
 
@@ -171,60 +259,39 @@ Order of operations from a clean machine:
 
 ```bash
 cp .env.example .env
-# Set DEPLOYER_SECRET_KEY, ADMIN_ADDRESS, and network URLs
+# Set DEPLOYER_SECRET_KEY and ADMIN_ADDRESS at minimum
 ```
 
 ### 2. Fund the deployer
 
 ```bash
-# Derive public key from your secret (example with stellar CLI)
 stellar keys address <alias-or-secret>
 ./scripts/fund-testnet.sh <YOUR_PUBLIC_KEY>
 ```
 
-### 3. Deploy the factory
+### 3. Deploy
 
 ```bash
 ./scripts/deploy-testnet.sh
 ```
 
-Note the printed `Contract ID` and confirm `deployments/testnet.json` was updated.
+That single command builds, installs the instance WASM, deploys the factory,
+initialises it, verifies the deployed bytecode, and records the result. The
+factory can create raffles when it returns — there is no separate init step.
 
 ### 4. Point tooling at the factory
 
 ```bash
-# Use the factory ID for verify/invoke against the factory itself
 export RAFFLE_CONTRACT_ADDRESS="$(jq -r .contractId deployments/testnet.json)"
 export FACTORY_CONTRACT_ID="$RAFFLE_CONTRACT_ADDRESS"
 ```
 
-### 5. Initialize the factory
-
-`deploy-*.sh` only uploads/deploys WASM — it does **not** call `init_factory`. Initialize once:
-
-```bash
-# Upload instance WASM and capture its hash (needed by init_factory)
-stellar contract install \
-  --wasm target/wasm32v1-none/release/raffle_instance.wasm \
-  --source "$DEPLOYER_SECRET_KEY" \
-  --network testnet
-# → prints WASM hash
-
-./scripts/invoke.sh init_factory \
-  --admin "$ADMIN_ADDRESS" \
-  --wasm_hash <INSTANCE_WASM_HASH_HEX> \
-  --protocol_fee_bp 250 \
-  --treasury "$ADMIN_ADDRESS"
-```
-
-Exact CLI flag spelling follows `stellar contract invoke --help` for your CLI version. `protocol_fee_bp` is basis points (250 = 2.5%); see [FEE_MODEL.md](FEE_MODEL.md).
-
-### Upgrade procedure
+### 5. Upgrade procedure
 
 1. Propose a new instance WASM hash through the factory timelock with `propose_wasm_upgrade`.
-2. Confirm the proposal is pending and cannot be executed before `TIMELOCK_DELAY_SECONDS` elapses.
-3. Advance the ledger time past the delay, then invoke `execute_config_change` to apply the upgrade.
-4. Verify the new instance WASM is active and that existing raffles remain readable after the upgrade.
+1. Confirm the proposal is pending and cannot be executed before `TIMELOCK_DELAY_SECONDS` elapses.
+1. Advance the ledger time past the delay, then invoke `execute_config_change` to apply the upgrade.
+1. Verify the new instance WASM is active and that existing raffles remain readable after the upgrade.
 
 ### 6. Create a raffle
 
@@ -264,33 +331,41 @@ export RAFFLE_CONTRACT_ADDRESS="$(jq -r .contractId deployments/testnet.json)"
 
 ## The `deployments/` directory
 
-Deployment scripts write a small JSON receipt after a successful deploy:
+Each successful deployment writes two files.
 
-| File                       | Written by          | Contents                                            |
-| -------------------------- | ------------------- | --------------------------------------------------- |
-| `deployments/testnet.json` | `deploy-testnet.sh` | `network`, `contractId`, `timestamp` (UTC ISO-8601) |
-| `deployments/mainnet.json` | `deploy-mainnet.sh` | same shape for mainnet                              |
+`deployments/<network>.json` — the current deployment:
 
-Example (`deployments/testnet.json`):
+| Field | Meaning |
+| --- | --- |
+| `network` | `testnet` or `mainnet` |
+| `contractId` | Factory contract address |
+| `factoryWasmHash` | SHA-256 of the deployed factory artifact |
+| `instanceWasmHash` | Hash the factory stores as `DataKey::InstanceWasmHash` |
+| `admin` / `treasury` | Values passed to `init_factory` |
+| `protocolFeeBp` | Protocol fee in basis points |
+| `gitCommit` | Commit the artifacts were built from |
+| `gitDirty` | `true` if the tree had uncommitted changes — the build is then not reproducible |
+| `wasmTarget` | Build target (`wasm32v1-none`) |
+| `rustToolchain` / `stellarCli` | Toolchain versions that produced the bytes |
+| `timestamp` | UTC ISO-8601 |
 
-```json
-{
-  "network": "testnet",
-  "contractId": "CCTCPMI66REXIJQPVOPNTNUZBCMSRM7TZLMIPQROZIID44XNP2P2MKFZ",
-  "timestamp": "2026-02-24T18:05:54Z"
-}
-```
+`deployments/<network>-history.jsonl` — one line per deployment, appended and
+never rewritten, so replacing a deployment does not erase what came before.
+
+> The existing `deployments/testnet.json` predates this format and records only
+> `network`, `contractId` and `timestamp`. The code at
+> `CCTCPMI66REXIJQPVOPNTNUZBCMSRM7TZLMIPQROZIID44XNP2P2MKFZ` therefore cannot be
+> identified from the repository; the next deployment fills in the rest.
 
 ### Recording a new deployment
 
 1. Run `./scripts/deploy-testnet.sh` or `./scripts/deploy-mainnet.sh`.
-1. The script overwrites the corresponding JSON file with the new `contractId` and timestamp.
-1. Commit the updated JSON when the deployment is meant to be the shared reference address for the team (optional; treat secrets separately).
+1. Commit the updated JSON and the history line when the deployment is the
+   shared reference address for the team.
 1. Update `.env` (`RAFFLE_CONTRACT_ADDRESS` / `FACTORY_CONTRACT_ID`) to match.
 
-The scripts currently record the **factory** contract ID only. Instance addresses from `create_raffle` should be tracked separately (notes, frontend config, or an extended deployments file of your own).
-
----
+The manifest records the **factory** only. Instance addresses returned by
+`create_raffle` are tracked separately.
 
 ## Related docs
 

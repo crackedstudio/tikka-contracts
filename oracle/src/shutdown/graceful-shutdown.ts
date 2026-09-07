@@ -1,5 +1,6 @@
 import { LedgerCheckpointStore } from '../listener/ledger-checkpoint';
 import { RequestQueue, RandomnessJob } from '../queue/request-queue';
+import { logger } from '../logging/logger';
 
 export interface ShutdownOptions {
   /**
@@ -83,7 +84,7 @@ export class GracefulShutdown {
     this.stopListening = stopListeningFn;
 
     const handler = (signal: string) => {
-      console.log(`Received ${signal} — starting graceful shutdown.`);
+      logger.info(`Received ${signal} — starting graceful shutdown.`);
       void this.shutdown();
     };
 
@@ -110,7 +111,7 @@ export class GracefulShutdown {
     let timedOut = false;
     const forceExitTimer = this.setTimeoutFn(() => {
       timedOut = true;
-      console.error(
+      logger.error(
         `Graceful shutdown drain exceeded ${this.drainTimeoutMs} ms — forcing exit 1.`,
       );
       this.exitFn(1);
@@ -124,7 +125,7 @@ export class GracefulShutdown {
     try {
       await this.drainQueue();
     } catch (err) {
-      console.error('Error during drain:', err);
+      logger.error('Error during drain:', err);
     }
 
     if (!timedOut) {
@@ -136,15 +137,15 @@ export class GracefulShutdown {
       const lastCheckpoint = await this.checkpointStore.load();
       if (lastCheckpoint !== undefined) {
         await this.checkpointStore.save(lastCheckpoint);
-        console.log(`Checkpoint persisted at ledger ${lastCheckpoint}.`);
+        logger.info(`Checkpoint persisted at ledger ${lastCheckpoint}.`);
       }
     } catch (err) {
-      console.error('Failed to persist checkpoint on shutdown:', err);
+      logger.error('Failed to persist checkpoint on shutdown:', err);
     }
 
     // 4. Exit 0 — clean shutdown.
     if (!timedOut) {
-      console.log('Graceful shutdown complete. Exiting 0.');
+      logger.info('Graceful shutdown complete. Exiting 0.');
       this.exitFn(0);
     }
   }
@@ -160,22 +161,22 @@ export class GracefulShutdown {
     if (jobs.length === 0) {
       return;
     }
-    console.log(`Draining ${jobs.length} in-flight job(s) before shutdown.`);
+    logger.info(`Draining ${jobs.length} in-flight job(s) before shutdown.`);
 
     for (const job of jobs) {
       try {
         const processed = await this.processJob(job);
         if (processed) {
-          console.log(
+          logger.info(
             `Job drained: raffle=${job.raffleContract} requestId=${job.requestId}`,
           );
         } else {
-          console.log(
+          logger.info(
             `Job skipped (deduped): raffle=${job.raffleContract} requestId=${job.requestId}`,
           );
         }
       } catch (err) {
-        console.error(
+        logger.error(
           `Failed to drain job raffle=${job.raffleContract} requestId=${job.requestId}:`,
           err,
         );

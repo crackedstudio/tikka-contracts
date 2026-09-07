@@ -27,16 +27,31 @@ jobs:
         run: |
           set -o pipefail
           cargo audit --json > audit-report.json 2>&1 || true
-          cargo audit 2>&1 | tee audit-output.txt
-          if grep -q "Crate:" audit-output.txt; then
-            echo "findings=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "findings=false" >> "$GITHUB_OUTPUT"
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path('audit-report.json')
+          findings = False
+          if report_path.exists():
+              report = json.loads(report_path.read_text(encoding='utf-8'))
+              findings = bool(report.get('vulnerabilities', {}).get('found'))
+
+          out = Path(os.environ['GITHUB_OUTPUT'])
+          with out.open('a', encoding='utf-8') as fh:
+              fh.write(f"findings={'true' if findings else 'false'}\n")
+
+          if findings:
+              report_text = report_path.read_text(encoding='utf-8')
+              Path('audit-output.txt').write_text(report_text, encoding='utf-8')
+          else:
+              Path('audit-output.txt').write_text('cargo audit reported no vulnerabilities.', encoding='utf-8')
+          PY
 
       - name: Open issue on new findings
         if: steps.audit.outputs.findings == 'true' && github.event_name == 'schedule'
-        uses: actions/github-script@ed597411d8f924073f7796069d6c627c6dc1e702 # v8.0.0
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');

@@ -12,14 +12,24 @@ Versioning: [Semantic Versioning](https://semver.org/)
 - Architecture documentation with factory -> instance -> oracle flow and state-machine diagrams (`docs/ARCHITECTURE.md`).
 - Comprehensive rustdoc comments for all public `raffle-shared` enums, structs, fields, constants, and functions.
 - Pull request template requiring changelog updates for non-trivial changes.
+- `OracleSeedDelivered` event documenting per-oracle quorum seed submissions; `OracleNotRegistered` and `DuplicateOracleSubmission` error codes (#856).
+- Deterministic event-doc generator (`scripts/generate_event_docs.py`) with a CI sync check for `docs/EVENTS.md` (#856).
+- Rust line-coverage ratchet (`scripts/check_coverage_ratchet.py`) with `coverage/coverage-ratchet.json` baseline, a `coverage` CI job, and oracle coverage artifact upload (#830).
 
 ### Changed
 
 - README documentation section now links to architecture docs.
+- `Error::ExceedsMaxTicketsPerAddress` renumbered from `65` to `67` (was colliding with `CancelTimelockActive`); `OracleNotRegistered` (`68`) and `DuplicateOracleSubmission` (`69`) added (#605, #856).
+- `WinnerDrawn.ticket_id` now publishes the 1-based ticket ID (`index + 1`) instead of the 0-based pool position; `docs/EVENTS.md` documents the index-vs-ID convention (#856).
+- `TicketPurchased.effective_ticket_price` is now populated (was an undefined variable that broke the build); `TicketGifted` sets it consistently (#856).
+- `ContractPaused` / `ContractUnpaused` event structs defined once in `raffle-shared` and re-exported, removing the duplicate E0252 definitions in the factory and instance crates (#856).
+- `.github/CODEOWNERS` now uses real maintainer usernames instead of the nonexistent `@maintainers` team (#848).
+- `generate_error_docs.py` regenerates the whole `docs/ERRORS.md` deterministically from both the instance and factory error enums (#856).
 
 ### Documented
 
 - Standardized event emission model and event catalog (`docs/EVENTS.md`).
+- All `#[contractevent]` structs and fields now carry `///` doc comments with explicit index-vs-ID semantics; `max_tickets_per_address` doc entries in `init.rs` and `tickets.rs` updated to reflect that the cap is now validated and enforced (#605, #856).
 - Lifecycle/admin event coverage and event publishing patterns from the previous implementation summary.
 - Admin key migration was recorded as a historical note (source file existed but contained no additional details).
 #### Factory contract

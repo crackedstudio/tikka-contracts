@@ -5,7 +5,7 @@
 
 use raffle_shared::constants::{MAX_PRIZES, MAX_TICKETS_LIMIT};
 use soroban_sdk::{
-    testutils::Budget,
+    testutils::budget::Budget,
     token::StellarAssetClient,
     Address, BytesN, Env, String, Vec,
 };
@@ -136,6 +136,7 @@ fn setup_raffle(
         tikka_token: None,
         metadata_hash: BytesN::from_array(env, &[9u8; 32]),
         claim_lockup_seconds: Some(0),
+        claim_expiry_seconds: None,
         swap_deadline_seconds: Some(300),
         early_bird_ticket_percentage: 0,
         early_bird_discount_bp: 0,
@@ -197,19 +198,53 @@ fn sweep_unclaimed_max_tiers_within_baseline() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, _, buyer) = setup_raffle(&env, MAX_PRIZES, MAX_PRIZES, MAX_PRIZES);
+    let (client, contract_id, buyer) = setup_raffle(&env, MAX_PRIZES, MAX_PRIZES, MAX_PRIZES);
     for _ in 0..MAX_PRIZES {
         client.buy_tickets(&buyer, &1);
     }
     client.finalize_raffle();
 
-    env.ledger().set_timestamp(10_000_000);
+    let raffle = env.as_contract(&contract_id, || read_raffle(&env).unwrap());
+    let sweep_after = raffle.finalized_at.unwrap() + raffle.claim_expiry_seconds + 1;
+    env.ledger().set_timestamp(sweep_after);
 
+    let mut start = 0u32;
+    let page = raffle_shared::constants::MAX_SWEEP_UNCLAIMED_PER_CALL;
+    let mut total_swept = 0u32;
     let snap = measure(&env, || {
-        let result = client.try_sweep_unclaimed();
-        assert_ne!(result, Err(Ok(Error::InvalidStatus)));
+        loop {
+            let result = client.try_sweep_unclaimed(&start, &page);
+            assert_ne!(result, Err(Ok(Error::ClaimTooEarly)));
+            assert_ne!(result, Err(Ok(Error::InvalidStatus)));
+            let swept = result.unwrap().unwrap();
+            if swept == 0 {
+                break;
+            }
+            total_swept += swept;
+            start = start.saturating_add(page);
+        }
     });
+    assert_eq!(total_swept, MAX_PRIZES);
     assert_within_tolerance("sweep_unclaimed_max_tiers", snap, SWEEP_UNCLAIMED_MAX_TIERS);
+}
+
+#[test]
+fn sweep_unclaimed_before_expiry_returns_claim_too_early() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, contract_id, buyer) = setup_raffle(&env, 10, 10, 1);
+    client.buy_tickets(&buyer, &1);
+    client.finalize_raffle();
+
+    let raffle = env.as_contract(&contract_id, || read_raffle(&env).unwrap());
+    let too_early = raffle.finalized_at.unwrap() + raffle.claim_expiry_seconds - 1;
+    env.ledger().set_timestamp(too_early);
+
+    assert_eq!(
+        client.try_sweep_unclaimed(&0, &10),
+        Err(Ok(Error::ClaimTooEarly))
+    );
 }
 
 #[test]

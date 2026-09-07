@@ -1,0 +1,10 @@
+[
+  {
+    "description": "Two seeds sorted by oracle address XDR before SHA-256 over big-endian u64 bytes",
+    "seeds": [
+      { "oracleIndex": 0, "seed": "3405691582" },
+      { "oracleIndex": 1, "seed": "3735928559" }
+    ],
+    "note": "Oracle addresses are Soroban test addresses; recompute with aggregate_quorum_seeds after generating the same pair. Order of seeds in this array does not matter — aggregation sorts by address XDR."
+  }
+]

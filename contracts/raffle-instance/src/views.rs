@@ -16,7 +16,7 @@
 
 use soroban_sdk::{Address, Env, Vec};
 
-use raffle_shared::{BuyQuote, FairnessData};
+use raffle_shared::{BuyQuote, FairnessData, RaffleStats};
 
 use crate::helpers::calculate_buy_quote;
 use crate::{read_raffle, DataKey, Error, FairnessMetadata};
@@ -72,6 +72,7 @@ pub(crate) fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         draw_timestamp: meta.draw_timestamp,
         draw_sequence: meta.draw_sequence,
         unique_winners: meta.unique_winners,
+        quorum_contributions: meta.quorum_contributions,
     })
 }
 
@@ -92,7 +93,7 @@ pub(crate) fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
 /// | `fees_accrued` | `AccumulatedFees` instance storage |
 /// | `prize_funded` | [`Raffle::prize_deposited`](crate::Raffle) |
 /// | `status` | [`Raffle::status`](crate::Raffle) |
-/// | `time_remaining` | `end_time - ledger_timestamp` (0 if past deadline or `no_deadline`) |
+/// | `time_remaining` | `end_time - ledger_timestamp` while `ledger_timestamp < end_time`; `0` at or after `end_time`, or whenever `no_deadline` is `true` (see `docs/GLOSSARY.md` § "End Time") |
 ///
 /// # Errors
 ///
@@ -162,8 +163,10 @@ pub(crate) fn is_ticket_sales_paused(env: Env) -> bool {
 
 /// Return the number of tickets `owner` may still receive.
 ///
-/// A zero per-address cap means unlimited, so the raffle-wide remaining
-/// capacity is returned in that case.
+/// If `max_tickets_per_address` is non-zero, it limits the result and supersedes
+/// `allow_multiple`. A zero per-address cap means unlimited, in which case
+/// `allow_multiple: false` still limits an address to one ticket. The result
+/// never exceeds the raffle-wide remaining capacity.
 pub(crate) fn get_remaining_ticket_allowance(
     env: Env,
     owner: Address,
@@ -174,12 +177,16 @@ pub(crate) fn get_remaining_ticket_allowance(
         .persistent()
         .get(&DataKey::TicketCount(owner))
         .unwrap_or(0);
-    let limit = if raffle.max_tickets_per_address == 0 {
-        raffle.max_tickets
-    } else {
+    let per_address_limit = if raffle.max_tickets_per_address > 0 {
         raffle.max_tickets_per_address
+    } else if !raffle.allow_multiple {
+        1
+    } else {
+        raffle.max_tickets
     };
-    Ok(limit.saturating_sub(current_count))
+    let global_remaining = raffle.max_tickets.saturating_sub(raffle.tickets_sold);
+    let address_remaining = per_address_limit.saturating_sub(current_count);
+    Ok(global_remaining.min(address_remaining))
 }
 
 /// Return the total protocol fees collected in this raffle instance that have
@@ -223,4 +230,28 @@ pub(crate) fn get_accumulated_fees(env: Env) -> i128 {
 pub(crate) fn preview_buy(env: Env, quantity: u32) -> Result<BuyQuote, Error> {
     let raffle = read_raffle(&env)?;
     calculate_buy_quote(&raffle, quantity)
+}
+
+/// Returns the timestamp at which a scheduled admin cancel becomes
+/// executable, or `None` if no cancel is currently scheduled (#406).
+///
+/// When an admin calls `cancel_raffle`, a cancellation is scheduled with a
+/// timelock delay.  This function allows clients to check if a cancel is
+/// pending and when it will become available.
+///
+/// Returns `None` if no admin cancel has been scheduled.
+pub(crate) fn get_pending_cancel(env: Env) -> Option<u64> {
+    env.storage().instance().get(&DataKey::PendingAdminCancel)
+}
+
+/// Return all ticket IDs owned by `owner`.
+///
+/// Uses the `OwnerTickets` index maintained during `buy_tickets` for an
+/// O(1) read.  Falls back to an empty Vec when the address has never
+/// purchased a ticket.
+pub(crate) fn get_my_tickets(env: Env, owner: Address) -> Vec<u32> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::OwnerTickets(owner))
+        .unwrap_or_else(|| Vec::new(&env))
 }

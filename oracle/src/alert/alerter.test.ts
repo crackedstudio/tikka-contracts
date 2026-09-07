@@ -1,5 +1,15 @@
 import { Alerter } from './alerter';
 
+jest.mock('./logging/logger', () => ({
+  logger: {
+    error: jest.fn(),
+  },
+}));
+
+const { logger } = jest.requireMock('./logging/logger') as {
+  logger: { error: jest.Mock };
+};
+
 function mockFetch() {
   return jest.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
 }
@@ -10,8 +20,8 @@ describe('Alerter', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    delete process.env.ALERT_WEBHOOK_URL;
-    delete process.env.ALERT_RATE_LIMIT_MS;
+    delete process.env['ALERT_WEBHOOK_URL'];
+    delete process.env['ALERT_RATE_LIMIT_MS'];
   });
 
   afterEach(() => {
@@ -103,7 +113,6 @@ describe('Alerter', () => {
   });
 
   it('logs and swallows webhook delivery failures', async () => {
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const fetchImpl = jest.fn().mockRejectedValue(new Error('network down'));
     const alerter = new Alerter({ webhookUrl, fetchImpl });
 
@@ -114,26 +123,23 @@ describe('Alerter', () => {
     });
 
     expect(delivered).toBe(true);
-    expect(errorSpy).toHaveBeenCalledWith(
+    expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('Alert delivery failed'),
     );
-    errorSpy.mockRestore();
   });
 
   it('logs a non-OK webhook response', async () => {
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 500 } as Response);
     const alerter = new Alerter({ webhookUrl, fetchImpl });
 
     await alerter.notify({ type: 'process_stop', severity: 'info', message: 'stopped' });
 
-    expect(errorSpy).toHaveBeenCalledWith('Alert delivery failed: HTTP 500');
-    errorSpy.mockRestore();
+    expect(logger.error).toHaveBeenCalledWith('Alert delivery failed: HTTP 500');
   });
 
   it('reads the webhook URL and rate limit from the environment', async () => {
-    process.env.ALERT_WEBHOOK_URL = webhookUrl;
-    process.env.ALERT_RATE_LIMIT_MS = '5000';
+    process.env['ALERT_WEBHOOK_URL'] = webhookUrl;
+    process.env['ALERT_RATE_LIMIT_MS'] = '5000';
     const fetchImpl = mockFetch();
     const alerter = new Alerter({ fetchImpl });
 
@@ -142,5 +148,41 @@ describe('Alerter', () => {
 
     const [url] = fetchImpl.mock.calls[0];
     expect(url).toBe(webhookUrl);
+  });
+
+  it('rejects alerts containing Stellar, Hex, or Base64 secret key patterns', async () => {
+    const fetchImpl = mockFetch();
+    const alerter = new Alerter({ webhookUrl, fetchImpl });
+
+    // Stellar secret
+    await expect(
+      alerter.notify({
+        type: 'leak_check',
+        severity: 'critical',
+        message: 'A secret key leaked: SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+      }),
+    ).rejects.toThrow('Stellar secret key detected');
+
+    // Hex secret
+    await expect(
+      alerter.notify({
+        type: 'leak_check',
+        severity: 'critical',
+        message: 'A hex key leaked',
+        details: { key: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' },
+      }),
+    ).rejects.toThrow('Hex secret key detected');
+
+    // Config object containing secretKey
+    await expect(
+      alerter.notify({
+        type: 'leak_check',
+        severity: 'critical',
+        message: 'A config leaked',
+        details: { config: { secretKey: 'someKey', rpcUrl: 'http://localhost' } },
+      }),
+    ).rejects.toThrow('Secret key field "secretKey" detected');
+
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

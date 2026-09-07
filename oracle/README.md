@@ -122,3 +122,23 @@ npm test
 ```
 
 Set `STELLAR_INTEGRATION_TEST=1` with funded testnet credentials to run the transaction submission integration test.
+
+## Scripts
+
+| Script | Purpose |
+| --- | --- |
+| `npm run build` | Compile TypeScript to `dist/` using `tsc -p tsconfig.json`. |
+| `npm start` | Run the built service from `dist/index.js`. |
+| `npm run dev` | Watch TypeScript sources and rebuild on change. Pair with `npm start` in a second terminal if you want a running process while iterating. |
+| `npm test` | Run the Jest suite once. |
+| `npm run test:watch` | Run Jest in watch mode for focused local iteration. |
+| `npm run test:coverage` | Run Jest with coverage enabled. |
+| `npm run test:ci` | CI-friendly coverage run with `--runInBand`. |
+| `npm run lint` | Run ESLint with zero warnings allowed. |
+| `npm run typecheck` | Run `tsc --noEmit` for a fast type-only check. |
+| `npm run format` | Rewrite source and markdown files with Prettier. |
+| `npm run format:check` | Check formatting without changing files. |
+
+### Build output
+
+The TypeScript compiler is configured with `rootDir: "./src"` and `outDir: "./dist"`, so the entrypoint emitted by `npm run build` is `dist/index.js`. Both `main` and `npm start` point there.

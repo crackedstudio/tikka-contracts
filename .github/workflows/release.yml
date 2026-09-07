@@ -14,17 +14,20 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Must match STELLAR_CLI_VERSION in scripts/common.sh (issues #841, #843).
+  STELLAR_CLI_VERSION: "23.4.1"
 
 jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install "$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain.toml)"
+          rustup show
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - name: Run Tests
         run: cargo test --workspace
@@ -32,20 +35,66 @@ jobs:
   release:
     name: Build and Release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install "$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain.toml)"
+          rustup show
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+      - name: Install Stellar CLI
+        timeout-minutes: 5
+        run: |
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz
+          sudo mv stellar /usr/local/bin/stellar
+          stellar --version
+
+      # Builds through the same path as the deploy scripts, so the artifacts
+      # attached here are the ones that get deployed (issue #841).
       - name: Build release WASMs
-        run: cargo build --target wasm32-unknown-unknown --release
+        run: ./scripts/build-reproducible.sh | tee build-output.txt
+
+      # Publishing the hashes is what makes "the contract is open source" a
+      # checkable claim rather than an assertion (issue #843).
+      - name: Generate checksums and build provenance
+        run: |
+          source scripts/common.sh
+          ( cd "${WASM_DIR}" && sha256sum ./*.wasm ) > SHA256SUMS.txt
+          {
+            echo "## Reproducing this build"
+            echo
+            echo '```'
+            echo "git checkout ${GITHUB_REF_NAME}"
+            echo "./scripts/build-reproducible.sh"
+            echo '```'
+            echo
+            echo "Rust toolchain: $(rust_toolchain_channel) (rust-toolchain.toml)"
+            echo "Stellar CLI:    ${STELLAR_CLI_VERSION}"
+            echo "WASM target:    ${WASM_TARGET}"
+            echo "Commit:         ${GITHUB_SHA}"
+            echo
+            echo '### SHA-256'
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+            echo
+            cat CHANGELOG.md
+          } > RELEASE_NOTES.md
+          cp "${WASM_DIR}"/*.wasm .
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          files: target/wasm32-unknown-unknown/release/*.wasm
-          body_path: CHANGELOG.md
+          files: |
+            ./*.wasm
+            SHA256SUMS.txt
+          body_path: RELEASE_NOTES.md
           draft: false

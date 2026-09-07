@@ -1,9 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-  "contracts/*",
+  "contracts/raffle-factory",
+  "contracts/raffle-instance",
+  "contracts/raffle-shared",
 ]
-default-members = ["contracts/*"]
+default-members = [
+  "contracts/raffle-factory",
+  "contracts/raffle-instance",
+  "contracts/raffle-shared",
+]
 
 [workspace.package]
 rust-version = "1.70"
@@ -11,6 +17,9 @@ rust-version = "1.70"
 
 [workspace.dependencies]
 soroban-sdk = "23"
+ed25519-dalek = "=2.1.1"
+getrandom = "0.4.3"
+rand = "0.8.8"
 
 [profile.release]
 opt-level = "z"

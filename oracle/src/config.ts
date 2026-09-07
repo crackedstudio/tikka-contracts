@@ -1,8 +1,8 @@
 import { Keypair } from '@stellar/stellar-sdk';
 import { decodeSecretKey } from './keys/secret-key';
+import { logger } from './logging/logger';
 
 export interface OracleConfig {
-  secretKey: string;
   rpcUrl: string;
   factoryContractId: string;
   logLevel: string;
@@ -33,7 +33,6 @@ function readPositiveInt(name: string, defaultValue: number, errors: string[]): 
 function isValidSecretKey(secret: string): boolean {
   const trimmed = secret.trim();
 
-  // Accept Stellar S... secrets directly.
   if (trimmed.startsWith('S')) {
     try {
       Keypair.fromSecret(trimmed);
@@ -43,7 +42,6 @@ function isValidSecretKey(secret: string): boolean {
     }
   }
 
-  // Reuse existing decoder support (hex/base64) and enforce 32-byte seed.
   try {
     const decoded = decodeSecretKey(trimmed);
     return decoded.length === 32;
@@ -55,31 +53,24 @@ function isValidSecretKey(secret: string): boolean {
 export function loadAndValidateConfig(): OracleConfig {
   const errors: string[] = [];
 
-  const secretKey = process.env.ORACLE_SECRET_KEY;
-  if (!secretKey) {
-    errors.push('ORACLE_SECRET_KEY is required');
-  } else if (!isValidSecretKey(secretKey)) {
-    errors.push('ORACLE_SECRET_KEY is not a valid Ed25519 secret key');
-  }
-
   const rpcUrl = process.env.STELLAR_RPC_URL;
   if (!rpcUrl) {
     errors.push('STELLAR_RPC_URL is required');
   }
 
-  const factoryContractId = process.env.FACTORY_CONTRACT_ID;
+  const factoryContractId = process.env['FACTORY_CONTRACT_ID'];
   if (!factoryContractId) {
     errors.push('FACTORY_CONTRACT_ID is required');
   }
 
   const rawPollInterval =
-    process.env.POLL_INTERVAL_MS ?? process.env.ORACLE_POLL_INTERVAL_MS ?? '5000';
+    process.env['POLL_INTERVAL_MS'] ?? process.env['ORACLE_POLL_INTERVAL_MS'] ?? '5000';
   const pollIntervalMs = Number(rawPollInterval);
   if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
     errors.push('POLL_INTERVAL_MS must be a positive number');
   }
 
-  const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL ?? '';
+  const alertWebhookUrl = process.env['ALERT_WEBHOOK_URL'] ?? '';
   const alertFailureThreshold = readPositiveInt('ALERT_FAILURE_THRESHOLD', 3, errors);
   const alertRateLimitMs = readPositiveInt('ALERT_RATE_LIMIT_MS', 60_000, errors);
   const alertQueueDepthLimit = readPositiveInt('ALERT_QUEUE_DEPTH_LIMIT', 10, errors);
@@ -87,15 +78,18 @@ export function loadAndValidateConfig(): OracleConfig {
   const alertRpcUnreachableThreshold = readPositiveInt('ALERT_RPC_UNREACHABLE_THRESHOLD', 3, errors);
 
   if (errors.length > 0) {
-    console.error('Configuration errors:');
+    logger.error('Configuration errors:');
     for (const error of errors) {
-      console.error(` - ${error}`);
+      logger.error(` - ${error}`);
     }
     process.exit(1);
   }
 
+  if (secretKey === undefined || rpcUrl === undefined || factoryContractId === undefined) {
+    throw new Error('Required configuration missing after validation');
+  }
+
   return {
-    secretKey: secretKey!,
     rpcUrl: rpcUrl!,
     factoryContractId: factoryContractId!,
     logLevel: process.env.LOG_LEVEL ?? 'info',

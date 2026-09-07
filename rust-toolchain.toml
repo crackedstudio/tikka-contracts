@@ -1,0 +1,11 @@
+# Pinned toolchain — the single source of truth for the compiler used by CI, the
+# devcontainer, the deploy scripts and anyone reproducing a deployment (#843).
+#
+# Reproducible builds depend on this exact version: changing the channel changes
+# the WASM hash, so bump it deliberately and re-publish the hashes recorded in
+# deployments/ and on the corresponding GitHub release.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32v1-none"]
+profile = "minimal"

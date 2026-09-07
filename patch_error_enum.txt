@@ -1,2 +1,0 @@
-Add this line after line 185 (RandomnessTooEarly = 64,) in contracts/raffle-instance/src/lib.rs:
-    ExceedsMaxTicketsPerAddress = 65,
