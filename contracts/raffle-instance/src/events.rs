@@ -225,6 +225,18 @@ pub struct OracleSeedDelivered {
     pub timestamp: u64,
 }
 
+/// Emitted when the raffle is finalized with all winners selected.
+///
+/// ## Ticket-ID convention
+///
+/// `winning_ticket_ids` contains **1-indexed ticket IDs** — one per prize
+/// tier, in prize-tier order, parallel to `winners`.  These IDs match
+/// `TicketPurchased.ticket_ids` and `WinnerDrawn.ticket_id`, and can be used
+/// directly as `DataKey::Ticket(id)` storage keys for independent verification.
+///
+/// Internal draw machinery uses zero-based indices for winner selection (stored
+/// in `FairnessMetadata.winning_ticket_indices` for deterministic replay), but
+/// this public-facing event always presents 1-indexed IDs.
 #[derive(Clone)]
 #[contractevent]
 #[soroban_sdk::contracttype]

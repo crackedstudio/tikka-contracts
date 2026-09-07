@@ -468,12 +468,14 @@ pub(crate) fn do_finalize_with_seed(
     let mut winning_ticket_ids =
         selector.select_winner_indices(env, total_tickets, raffle.prizes.len());
     let mut winners = Vec::new(env);
+    // 1-indexed ticket IDs emitted in events and stored in RaffleFinalized.
+    let mut winning_ticket_ids_1indexed: Vec<u32> = Vec::new(env);
 
-    for i in 0..winning_ticket_ids.len() {
-        let mut idx = winning_ticket_ids.get(i).ok_or(Error::InvalidIndex)?;
+    for i in 0..winning_indices.len() {
+        let mut idx = winning_indices.get(i).ok_or(Error::InvalidIndex)?;
         if raffle.unique_winners {
             idx = resolve_unique_winner(env, seed, i as u32, total_tickets, &winners, idx);
-            winning_ticket_ids.set(i, idx);
+            winning_indices.set(i, idx);
         }
         let owner = get_ticket_owner(env, idx + 1).ok_or(Error::TicketNotFound)?;
         winners.push_back(crate::Winner {
