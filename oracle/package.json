@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^14.6.1",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.2",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3"
   },
