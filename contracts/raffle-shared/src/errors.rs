@@ -1,4 +1,8 @@
 #![allow(dead_code)]
+//! Shared protocol error types and error-range policy documentation.  The
+//! `ProtocolError` enum below is the catalog used to generate
+//! `docs/ERRORS.md`; on-chain discriminants keep their own ranges (1–99
+//! shared, 100–199 instance, 200–299 factory) and must not be renumbered.
 
 /// Canonical protocol error catalog.
 ///

@@ -1,5 +1,10 @@
 #![no_std]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
+//! Shared types crate root consumed by both the factory and instance
+//! contracts: `RaffleConfig` + enums, pagination types, error-range policy,
+//! client traits for oracle / NFT / randomness, `impl_require_admin!` and
+//! `impl_require_not_paused!` macros, and module declarations for the
+//! constants, events, errors, config_builder, and nft_mint_test submodules.
 
 pub mod constants;
 pub mod events;

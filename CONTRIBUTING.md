@@ -46,6 +46,25 @@ You can also filter by `good first issue` and `type:docs` to start with document
 
 Unfamiliar with a term in the issue? Check [`docs/GLOSSARY.md`](docs/GLOSSARY.md) for one-paragraph definitions with code references.
 
+## Where does my code go?
+
+Use the following placement rules to keep the workspace searchable and to avoid
+accidentally turning a crate root into a monolith. Files should stay around
+**~600 lines maximum**; when a module grows beyond that scale, split it along
+responsibility lines (tests, helpers, views) rather than piling on.
+
+| What are you adding?                                                         | Where it goes                                                                                                     |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| New contract entrypoint (`#[contractimpl]` method)                          | The topical module inside the crate — `admin.rs`, `claim.rs`, `draw.rs`, `tickets.rs`, `views.rs`. `lib.rs` holds only a one-line delegation. |
+| New numeric or string constant                                              | [`contracts/raffle-shared/src/constants.rs`](contracts/raffle-shared/src/constants.rs). **Never inline a magic number.** |
+| New error variant on a `#[contracterror]` enum                               | Append a fresh, unused discriminant in the relevant range (1–99 shared, 100–199 instance, 200–299 factory). Then regenerate [`docs/ERRORS.md`](docs/ERRORS.md) with `python3 scripts/generate_error_docs.py`. |
+| New event (`#[contractevent]` struct)                                        | `events.rs` in the relevant crate (`raffle-shared`, `raffle-factory`, or `raffle-instance`). Regenerate [`docs/EVENTS.md`](docs/EVENTS.md) with `python scripts/generate_event_docs.py`. Every struct and every field must carry a `///` doc comment. |
+| New persistent / temporary / instance storage key                            | The crate's `DataKey` enum (inside `contracts/<crate>/src/lib.rs`). Document the key, its tier, and its write pattern in [`docs/STORAGE.md`](docs/STORAGE.md). |
+| New type shared across factory and instance (config, enums, client traits)  | [`contracts/raffle-shared/`](contracts/raffle-shared/). Unit tests for shared types live alongside.               |
+| Tests for a contract entrypoint or helper                                    | `src/tests/<name>.rs` under the relevant crate. **Never inline `#[test]` blocks inside `lib.rs` except for tiny shared-type unit tests.** |
+| Oracle / off-chain service logic (VRF, queue, listener, alerter, …)         | Matching directory under [`oracle/src/<name>/`](oracle/src/) (e.g. `oracle/src/vrf/`, `oracle/src/queue/`). Unit tests live in the same directory. |
+| Script for build / deploy / verification                                    | [`scripts/`](scripts/). Run `shellcheck scripts/*.sh` against any new `.sh` file.                                |
+
 ## Development Expectations
 
 - Keep changes scoped and easy to review.
@@ -88,6 +107,16 @@ there are no exceptions for individual jobs. Required checks on `master` are:
 Repository admins must enable branch protection on `master` so these checks are
 required and branches must be up to date before merging. Workflow changes land in
 PRs first; enforcement is enabled once the pipeline is green.
+
+### Required pre-push check: `make ci`
+
+Before you push, run **`make ci`** from the repository root. It runs exactly the
+same pipeline CI runs (fmt check, `cargo check`, clippy, orphan-module check,
+contract build, WASM size check, docs sync check, full test suite including
+doc-tests, `shellcheck` over `scripts/*.sh`, and the oracle `npm ci` +
+typecheck + lint + format + test:ci suite). Passing `make ci` locally implies
+passing in CI. If a check fails locally that the remote would also catch, fix
+it before pushing — it saves everyone queue time.
 
 ## Events Documentation Sync
 

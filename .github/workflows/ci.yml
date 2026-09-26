@@ -30,10 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Rust
+      # Reads rust-toolchain.toml (channel, components, targets) automatically.
+      - name: Set up pinned Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
-        with:
-          toolchain: stable
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
@@ -50,20 +49,28 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     # rust-toolchain.toml is the single source of truth for the compiler
-    # version, components and WASM target (issues #841, #843).
-    - name: Set up pinned Rust toolchain
-      run: |
-        rustup toolchain install "$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain.toml)"
-        rustup show
+    # version, components and WASM target (issues #841, #843). dtolnay's
+    # action reads the file automatically; the explicit `toolchain:` arg
+    # below is intentionally omitted.
+    - name: Set up pinned Rust toolchain (from rust-toolchain.toml)
+      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
-    - name: Cargo Check (fast compile gate)
-      run: cargo check --workspace --all-targets
+    - name: Install stellar-cli (pinned, matches scripts/common.sh)
+      run: cargo install --locked stellar-cli --version "${STELLAR_CLI_VERSION}" --features opt
 
-    - name: Check Formatting
+    # Every step below is dispatched through the root Makefile so that
+    # `make ci` reproduces CI locally.  Keep build_and_test steps are broken into
+    # individual `make <target>` invocations rather than one `make ci` so that GitHub
+    # annotations line up with a single failing job step.
+
+    - name: cargo fmt --check
       run: cargo fmt --all -- --check
+
+    - name: Cargo Check (fast compile gate, via `make check`)
+      run: make check
 
     - name: Check for Orphaned Modules
       run: python3 scripts/check_orphan_modules.py
@@ -71,11 +78,11 @@ jobs:
     # Build through the Stellar CLI so CI produces the same artifacts the deploy
     # scripts upload — previously CI built wasm32-unknown-unknown while
     # deploy-testnet.sh deployed wasm32v1-none (issue #841).
-    - name: Build Contracts
-      run: stellar contract build
+    - name: Build Contracts (`make build`)
+      run: make build
 
     - name: Check WASM Binary Size (128KB limit + baseline delta)
-      run: python3 scripts/check_wasm_sizes.py
+      run: make size-check
 
     - name: Report WASM size delta on PR
       if: github.event_name == 'pull_request'
@@ -92,43 +99,33 @@ jobs:
       env:
         WASM_SIZE_REPORT: /tmp/wasm-size-report.txt
 
-    - name: Check Error Docs Sync
-      run: |
-        python3 scripts/generate_error_docs.py
-        git diff --exit-code docs/ERRORS.md || (echo "ERROR: docs/ERRORS.md is out of sync with Error enums in contracts/raffle-instance/src/lib.rs and ContractError in contracts/raffle-factory/src/lib.rs. Run 'python3 scripts/generate_error_docs.py' to update." && exit 1)
-
-    - name: Check Events Docs Sync
-      run: |
-        python3 scripts/generate_event_docs.py
-        git diff --exit-code docs/EVENTS.md || (echo "ERROR: docs/EVENTS.md is out of sync with the event struct definitions in contracts/*/src/events.rs. Run 'python scripts/generate_event_docs.py' to update." && exit 1)
+    - name: Check Docs Sync (ERRORS.md + EVENTS.md)
+      run: make docs-check
 
     - name: Run Linter (Clippy)
       run: cargo clippy --all-targets --all-features -- -D warnings
 
-    - name: Run Tests
+    - name: Run Tests (incl. doc tests (`cargo test --workspace`)
       run: cargo test --workspace
 
     - name: Run Documentation Tests
       run: cargo test --workspace --doc
 
   shellcheck:
-    name: Shell Script Checks
+    name: Shell Script Checks (`make shellcheck`)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck make
       - name: Run shellcheck
-        run: shellcheck scripts/*.sh
+        run: make shellcheck
 
   oracle_check:
-    name: Oracle Service CI
+    name: Oracle Service CI (`make oracle-ci`)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: oracle
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -136,17 +133,10 @@ jobs:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: oracle/package-lock.json
-      - name: Install dependencies
-        timeout-minutes: 5
-        run: npm ci
-      - name: Check formatting (Prettier)
-        run: npm run format:check
-      - name: Lint (ESLint)
-        run: npm run lint
-      - name: TypeScript compile check
-        run: npm run typecheck
-      - name: Run tests
-        run: npm run test:ci
+      - name: Install make (dispatch to root Makefile)
+        run: sudo apt-get update && sudo apt-get install -y make
+      - name: Oracle full CI (format:check, lint, typecheck, test:ci)
+        run: make oracle-ci
 
       - name: Upload Oracle coverage artifact
         if: always()
@@ -162,7 +152,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Rust (coverage)
+      # Reads rust-toolchain.toml automatically.
+      - name: Set up pinned Rust toolchain (coverage; from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
 
       - name: Rust Cache

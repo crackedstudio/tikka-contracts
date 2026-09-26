@@ -1,6 +1,12 @@
+# Pre-commit hooks — fast, local-only checks that run on every commit.
+# For the full CI gate (including tests, WASM size, doc sync, oracle tests,
+# shellcheck), run `make ci` before pushing — CONTRIBUTING.md documents this
+# as the required pre-push command.
 repos:
   - repo: local
     hooks:
+      # Rust fast checks. Full lint happens in `make ci` / CI's clippy job with
+      # the same -D warnings flag.
       - id: cargo-fmt-check
         name: cargo fmt --check
         entry: cargo fmt --all -- --check
@@ -16,9 +22,13 @@ repos:
         entry: python3 scripts/check_orphan_modules.py
         language: system
         pass_filenames: false
+      # Oracle fast checks. Uses pinned local dev-dependency (npm run
+      # format:check) instead of `npx prettier` so the formatter matches
+      # what CI runs. `oracle-lint` target combines format:check + lint +
+      # typecheck.
       - id: prettier-oracle
-        name: prettier oracle
-        entry: bash -lc 'cd oracle && npx prettier --check "**/*.{js,jsx,ts,tsx,json,md}"'
+        name: prettier oracle (npm run format:check, local pinned)
+        entry: bash -lc 'cd oracle && npm run format:check'
         language: system
         pass_filenames: false
       - id: eslint-oracle

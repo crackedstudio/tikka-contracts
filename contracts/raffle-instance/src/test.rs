@@ -1,4 +1,8 @@
 #![cfg(test)]
+//! Test-only utilities and top-level module declarations pointing into
+//! `src/tests/{admin,invariants,tickets}.rs`; also defines shared setup helpers
+//! (e.g. `assert_event!`) and the signing-key test scaffolding used by the
+//! integration test suites.
 
 #[path = "tests/admin.rs"]
 mod admin;

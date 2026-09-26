@@ -1,3 +1,8 @@
+//! Raffle finalization, randomness handling, winner selection, and fairness
+//! emission.  Covers external oracle VRF callbacks, quorum seed delivery,
+//! `trigger_randomness_fallback`, `do_finalize_with_seed`, and the draw-
+//! triggered state-machine transition.
+
 use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 
 use raffle_shared::{

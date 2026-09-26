@@ -1,3 +1,9 @@
+//! Internal shared helpers used across the raffle-instance crate: the
+//! reentrancy `Guard`, read / write raffle, `transition_status`,
+//! `transition_to_drawing`, `request_randomness`, seed builders,
+//! `calculate_buy_quote`, `bump_raffle_ttl`, solvency assertions, and the
+//! shared `do_finalize_with_seed` finalization path.
+
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     token,

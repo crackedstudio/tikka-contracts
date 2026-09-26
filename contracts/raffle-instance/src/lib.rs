@@ -2,6 +2,11 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #![warn(clippy::arithmetic_side_effects)]
 #![deny(unused)]
+//! Raffle-instance contract crate root — per-raffle state machine spanning
+//! ticket sales, randomness draw, finalization, claims, and admin controls.
+//! `lib.rs` defines the `RaffleContract` `#[contractimpl]` surface using
+//! one-line delegations to topical submodules (`admin.rs`, `claim.rs`,
+//! `draw.rs`, `init.rs`, `tickets.rs`, `views.rs`, …).
 
 #[cfg(test)]
 extern crate std;

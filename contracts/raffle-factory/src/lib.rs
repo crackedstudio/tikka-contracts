@@ -1,5 +1,9 @@
 #![no_std]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
+//! Factory contract crate root — deploys raffle instances, manages the global
+//! registry, timelocked governance, creator profiles, the global pause flag,
+//! and protocol-fee parameters.  `lib.rs` holds only one-line delegations to
+//! topical submodules (`views.rs`, `events.rs`, `registry.rs`).
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,

@@ -2,11 +2,62 @@
 
 ![Tikka Logo](docs/assets/tikka-logo.svg)
 
-> Documentation is indexed in [docs/README.md](docs/README.md). The repository
-> is currently undergoing a hardening and build-repair pass; feature claims
-> should be treated as unverified until the relevant contract compiles.
+> ⚠️ **PRE-AUDIT — NOT PRODUCTION-READY.**
+> This repository is in active development. The contracts have **not** been
+> audited by a third-party security firm. Any deployment to a mainnet, or any
+> handling of real funds, carries severe risk of loss of all assets. Assume
+> bugs. The on-chain error surface, event shapes, and storage layout are all
+> subject to change without notice before the audit release. See the issue
+> tracker for the current [BUILD] priority tickets below, and always verify
+> behaviour against the pinned toolchain in `rust-toolchain.toml`.
+
+> **Authoritative documentation lives in [`docs/`](docs/README.md).**
+> This `README.md` is a short overview. For architecture, storage,
+> randomness, events, errors, fees, migration, testing, deploy, views, and
+> the glossary — see the [documentation index](docs/README.md).
 
 [![codecov](https://codecov.io/gh/OWNER/tikka-contracts/branch/master/graph/badge.svg)](https://codecov.io/gh/OWNER/tikka-contracts)
+
+## 🚧 Current Priority: [BUILD] issues
+
+The current build-hardening track is tracked under `[BUILD]` GitHub issues.
+These are the immediate priority before any new feature work:
+
+-   **`[BUILD]` Toolchain pinning + WASM size baseline** (this PR) — reproducible builds,
+    WASM size delta checks on every toolchain upgrade.
+-   **`[BUILD]` CI / local parity via `make ci`** — pass locally, pass in CI.
+-   **`[BUILD]` Contract build & orphan-module clean-up** — stub wiring for
+    attestation, quorum randomness, bundle pricing, batch refunds, and the
+    oracle service (see status table below).
+
+Search GitHub issues for the `[BUILD]` label prefix to see the full list.
+
+## 🧩 Feature Status
+
+Use this table as a ground truth. Everything below is confirmed against the
+current crate tree. Stub-only surfaces are explicitly marked **In progress**
+or **Planned** so you do not rely on them.
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Factory (`init_factory`, `create_raffle`, registry, views, pagination) | 🟢 **Shipped** | Contract: `contracts/raffle-factory/src/`. Views live in `views.rs`. |
+| Raffle instance: lifecycle state machine (`PendingPrize` → `Claimed`) | 🟢 **Shipped** | Contract: `contracts/raffle-instance/src/`. |
+| Ticket sales (`buy_tickets`, `buy_tickets_for`, solvency checks, TTL bumps) | 🟢 **Shipped** | `tickets.rs`; bundle-pricing field exists in `calculate_buy_quote` but bundle-discount logic is **Planned** (see row). |
+| Internal PRNG draw (`env.prng()` multi-source seed) | 🟢 **Shipped** | `randomness.rs`. Deterministic replayable. |
+| External oracle / VRF draw path (`provide_randomness` + `request_randomness` + fallback) | 🟡 **In progress** | Entrypoints + `OracleSeedWinnerSelection` wired; oracle service in `oracle/` is a partial stub (see row below). |
+| Creator profiles (display name, verified badge, track record) | 🟢 **Shipped** | `registry.rs` in factory. |
+| Protocol fees (ticket-purchase only; fee BP, treasury, withdraw_fees) | 🟢 **Shipped** | Prize-claim fees are **not** implemented (see FEE_MODEL.md). |
+| Prize claim + per-tier `claim_prize`, `refund_ticket` | 🟢 **Shipped** | `claim.rs`. |
+| `sweep_unclaimed_prizes` | 🟢 **Shipped** | `claim.rs`, capped by `MAX_SWEEP_UNCLAIMED_PER_CALL`. |
+| **Batch refunds** (`batch_refund_tickets`) | 🟡 **In progress** | Entrypoints and discriminants added; duplicate/conflicting signatures in `claim.rs` still being resolved. Not safe to call. |
+| **Bundle pricing / bulk-ticket discount** | ⚪ **Planned** | `calculate_buy_quote` accepts the field but the discount curve is not wired; currently behaves like unit pricing × quantity. |
+| **Commit-Reveal randomness** mode | 🟡 **In progress** | `RandomnessSource::CommitReveal` + commit phase exist; the reveal/finalize branch in `draw.rs` is stubbed. |
+| **Quorum randomness** mode (`provide_quorum_randomness`, `QuorumConfig`) | 🟡 **In progress** | Variant + type defined; quorum threshold validation and seed aggregation in `draw.rs` is a partial stub. |
+| **Draw attestation** (third-party verifiable proof of draw) | 🟡 **In progress** | `attestation.rs` structs + docs exist; attestation is not yet emitted alongside `RaffleFinalized` in the finalization path. |
+| **Oracle off-chain service** (`oracle/` — VRF, queue, listener, Tx, metrics, health, quorum) | 🟡 **In progress** | TypeScript scaffolding + `package.json` scripts present; VRF signer, chain listener, and quorum-aggregation worker implementations are partial stubs. |
+| Fuzz harnesses (`fuzz/`) | 🟢 **Shipped** | `cargo-fuzz` targets for ticket math and randomness. |
+| Weekly Testnet smoke test | 🟢 **Shipped** | `.github/workflows/testnet-smoke.yml`. |
+| Metadata integrity (`metadata_hash` SHA-256, immutable) | 🟢 **Shipped** | Committed on-chain at creation. |
 
 ## 🎯 What is Tikka?
 
@@ -135,24 +186,31 @@ and deployment documentation, see the [documentation index](docs/README.md).
 #### **`contracts/raffle-factory/src/lib.rs`**
 
 ```rust
-pub fn init_factory(... ) -> Result<(), ContractError>;
-pub fn create_raffle(... ) -> Result<Address, ContractError>;
-pub fn get_raffles(... ) -> PageResultRaffles;
+pub fn init_factory(env: Env, admin: Address, wasm_hash: BytesN<32>, protocol_fee_bp: u32, treasury: Address) -> Result<(), ContractError>;
+pub fn create_raffle(env: Env, creator: Address, config: RaffleConfig) -> Result<Address, ContractError>;
+pub fn get_raffles_page(env: Env, params: PaginationParams) -> PageResultRaffles;
+pub fn get_raffles_by_creator(env: Env, creator: Address, params: PaginationParams) -> PageResultRaffles;
+pub fn get_raffles_by_category(env: Env, category: String, params: PaginationParams) -> PageResultRaffles;
 ```
 
 #### **`contracts/raffle-instance/src/lib.rs`**
 
 ```rust
-pub fn init(... ) -> Result<(), Error>;
-pub fn deposit_prize(... ) -> Result<(), Error>;
-pub fn buy_tickets(... ) -> Result<u32, Error>;
-pub fn finalize_raffle(... ) -> Result<(), Error>;
-pub fn provide_randomness(... ) -> Result<(), Error>;
-pub fn claim_prize(... ) -> Result<i128, Error>;
-pub fn cancel_raffle(... ) -> Result<(), Error>;
-pub fn refund_ticket(... ) -> Result<i128, Error>;
-pub fn get_raffle(... ) -> Result<Raffle, Error>;
+pub fn init(env: Env, factory: Address, admin: Address, creator: Address, config: RaffleConfig) -> Result<(), Error>;
+pub fn deposit_prize(env: Env) -> Result<(), Error>;
+pub fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32, Error>;
+pub fn buy_tickets_for(env: Env, buyer: Address, recipient: Address, quantity: u32) -> Result<u32, Error>;
+pub fn finalize_raffle(env: Env) -> Result<(), Error>;
+pub fn provide_randomness(env: Env, random_seed: u64, public_key: BytesN<32>, proof: BytesN<64>, request_id: u64) -> Result<Address, Error>;
+pub fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<i128, Error>;
+pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error>;
+pub fn refund_ticket(env: Env, caller: Address, ticket_id: u32) -> Result<i128, Error>;
+pub fn get_raffle(env: Env) -> Result<Raffle, Error>;
 ```
+
+> **Source of truth:** these signatures are generated directly from the
+> `#[contractimpl]` blocks in the matching `lib.rs`. If you spot a drift,
+> regenerate the example — do not rely on out-of-date prose.
 
 ### **Data Structures**
 

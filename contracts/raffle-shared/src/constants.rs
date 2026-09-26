@@ -1,10 +1,8 @@
-// ============================================================================
-// Protocol-wide constants
-//
-// Single source of truth for every magic number used across the raffle
-// contracts.  Import from `raffle_shared::constants::*` (or individually) in
-// any crate that needs them.
-// ============================================================================
+//! Protocol-wide constants.
+//!
+//! Single source of truth for every magic number used across the raffle
+//! contracts.  Import from `raffle_shared::constants::*` (or individually) in
+//! any crate that needs them.  **Never inline a literal** — add it here.
 
 // --- Raffle instance limits -------------------------------------------------
 

@@ -1,3 +1,7 @@
+//! Prize claim, refund, and sweep paths: `claim_prize`, `refund_ticket`,
+//! `batch_refund_tickets`, `sweep_unclaimed_prizes`, plus their shared
+//! solvency and state-transition helpers.
+
 use raffle_shared::constants::MAX_SWEEP_UNCLAIMED_PER_CALL;
 use soroban_sdk::{token, Address, Env};
 

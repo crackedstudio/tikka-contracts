@@ -1,4 +1,7 @@
 #![cfg(any(test, feature = "testutils"))]
+//! Fluent builder for [`RaffleConfig`] intended for tests and development.
+//! Production callers should construct [`RaffleConfig`] exhaustively so that
+//! every new field is a deliberate decision at the factory boundary.
 
 use soroban_sdk::{Address, BytesN, Env, String, Vec};
 use crate::{RandomnessSource, RaffleConfig};

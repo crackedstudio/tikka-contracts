@@ -93,15 +93,56 @@ Documents the read-only query surface extracted into `contracts/raffle-factory/s
 
 For auditors, add [COMMIT_REVEAL.md](COMMIT_REVEAL.md) and [FEE_MODEL.md](FEE_MODEL.md) to understand protocol specifics and economic design.
 
+## Repository Subdirectories
+
+Documentation is not the only place to look; these sibling directories host
+runnable code and have their own READMEs or top-of-file conventions.
+
+### [oracle/](../oracle/)
+
+Off-chain TypeScript service delivering VRF randomness, quorum aggregation,
+chain-listener logic, queue workers, metrics, health checks, and alerting.
+
+-   [Oracle service README](../oracle/README.md) — setup, architecture, and
+    environment variables.
+-   [Oracle runbook](../oracle/RUNBOOK.md) — deploy, rotate keys, page an
+    operator, debug stuck deliveries.
+-   Source layout: [`oracle/src/<name>/`](../oracle/src/) — `vrf/`, `queue/`,
+    `listener/`, `tx/`, `quorum/`, `health/`, `metrics/`, `logging/`,
+    `alert/`, `keys/`, `deduplication/`, `shutdown/`, and top-level
+    `config.ts`, `index.ts`, `pipeline.ts`.
+
+### [fuzz/](../fuzz/)
+
+Rust fuzz harnesses (via `cargo-fuzz`) targeting ticket-math invariants,
+randomness boundaries, and edge-case input spaces. Run via the root
+`Makefile` (`make fuzz`) or per-harness with `cargo fuzz run <target>`.
+No README is present yet — see [`docs/TESTING.md`](TESTING.md) for when to
+add a fuzz harness.
+
+### [scripts/](../scripts/)
+
+Build, deploy, and documentation-generation shell scripts. Any `.sh` file in
+this directory is covered by the `shellcheck` target in the root `Makefile`
+and CI. Key scripts:
+
+-   `generate_error_docs.py` / `generate_event_docs.py` — regenerate
+    `docs/ERRORS.md` and `docs/EVENTS.md` from the Rust source.
+-   Deployment helpers — referenced from [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
 ## Related Documentation
 
-- [Project overview](../README.md)
-- [Contributing guidelines](../CONTRIBUTING.md)
+- [Project overview (root README)](../README.md) — **pre-audit warning, feature
+  status table, [BUILD] priority tickets, and entrypoint signatures.**
+- [Contributing guidelines](../CONTRIBUTING.md) — "Where does my code go?",
+  required pre-push `make ci`, and PR expectations.
 - [Security policy](../SECURITY.md)
 - [Support policy](../SUPPORT.md)
 - [Code of conduct](../CODE_OF_CONDUCT.md)
 - [Changelog](../CHANGELOG.md)
 - [License](../LICENSE)
-- [Oracle service README](../oracle/README.md)
-- [Oracle runbook](../oracle/RUNBOOK.md)
-- [Fuzzing README](../fuzz/README.md)
+- [Root `Makefile`](../Makefile) — `make ci` reproduces CI locally.
+- [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) — fast fmt + clippy
+  + prettier hooks run on every commit.
+- [Rust toolchain pin](../rust-toolchain.toml) — reproducible build
+  version; documented in [`DEPLOYMENT.md`](DEPLOYMENT.md).

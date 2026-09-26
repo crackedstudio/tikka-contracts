@@ -1,3 +1,7 @@
+//! Admin-only entrypoints for the raffle instance: pause / unpause, cancel,
+//! withdraw_fees, rescue_tokens, emergency_withdraw, storage wiping, oracle /
+//! protocol-fee / metadata-hash updates, and the ticket-sales pause toggle.
+
 use soroban_sdk::{token, Address, BytesN, Env};
 
 use raffle_shared::CancelReason;

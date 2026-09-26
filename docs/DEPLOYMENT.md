@@ -5,7 +5,9 @@ This document covers the `scripts/` deployment toolchain and the `deployments/` 
 ## Prerequisites
 
 - [rustup](https://rustup.rs/) — the compiler version and the WASM target are
-  pinned in `rust-toolchain.toml` and installed automatically
+  pinned in `rust-toolchain.toml` and installed automatically.  **Never**
+  override `RUSTUP_TOOLCHAIN` for a deploy build — reproducible hashes depend
+  on the exact pinned version.
 - Stellar CLI **23.4.1** — pinned as `STELLAR_CLI_VERSION` in `scripts/common.sh`
 - A funded Stellar account secret key for the target network
 
@@ -15,6 +17,28 @@ rustup show                 # installs the pinned toolchain + wasm32v1-none
 cargo install --locked stellar-cli --version 23.4.1 --features opt
 stellar --version           # expect 23.4.1
 ```
+
+### Pinned toolchain used for deployment
+
+| Pin | Value | Where it lives |
+| --- | --- | --- |
+| Rust channel | **1.94.0** | `rust-toolchain.toml` → `[toolchain].channel` |
+| Rust components | `rustfmt`, `clippy` | `rust-toolchain.toml` → `[toolchain].components` |
+| Rust target | `wasm32v1-none` | `rust-toolchain.toml` → `[toolchain].targets` |
+| Rust MSRV (workspace) | **1.70** | Root `Cargo.toml` → `[workspace.package].rust-version` |
+| Stellar CLI | **23.4.1** | `scripts/common.sh` → `STELLAR_CLI_VERSION`, CI env, Devcontainer Dockerfile |
+| Node (oracle) | **20.x** | `.github/workflows/ci.yml` oracle job, Devcontainer Dockerfile |
+
+> **Toolchain upgrades require a dedicated PR that tracks WASM size changes.**
+> Before bumping `rust-toolchain.toml`, open a PR whose description contains:
+> (1) the old and new Rust / Stellar CLI versions,
+> (2) the per-artifact WASM size delta (`factory.wasm` and `instance.wasm`) in
+> bytes compared to `scripts/check_wasm_sizes.py`'s baseline,
+> (3) output of `scripts/build-reproducible.sh` confirming reproducibility on a
+> second machine, and
+> (4) a link to the toolchain release notes / advisory database that motivated
+> the bump.  The PR must not bundle unrelated feature work — reviewers should
+> be able to eyeball the size delta alone.  Merge only once CI reports green.
 
 ### Build target
 

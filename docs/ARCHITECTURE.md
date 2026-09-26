@@ -34,6 +34,105 @@ graph TB
 1. The oracle service polls those events and calls `provide_randomness` back on the instance.
 1. The instance finalizes winners, emits finalization events, and winners claim prizes.
 
+## Crate and Module Map
+
+Every directory below lists each crate, its top-level responsibility, and a one-line
+responsibility for each submodule. `lib.rs` in each contract crate is intentionally a
+delegation-only root; the real logic lives in the named submodules.
+
+### Rust Workspace (`Cargo.toml`)
+
+| Crate | Root file | Responsibility |
+|-------|-----------|----------------|
+| `raffle-factory` | `contracts/raffle-factory/src/lib.rs` | Factory contract: deploys instances, manages registry, timelocked governance, creator profiles, global pausing. |
+| `raffle-instance` | `contracts/raffle-instance/src/lib.rs` | Per-raffle instance contract: ticket sales, draw execution, claims, refunds, randomness integration. |
+| `raffle-shared` | `contracts/raffle-shared/src/lib.rs` | Types shared across factory and instance: config, enums, pagination, macro helpers, constants. |
+| `raffle-fuzz` | `fuzz/Cargo.toml` | `cargo-fuzz targets for lifecycle, ticket purchase, draw, refund, commit-reveal harnesses. Not part of the default workspace members. |
+
+#### `contracts/raffle-factory/src/`
+
+| File | Responsibility |
+|------|----------------|
+| `lib.rs` | Crate root. Declares `RaffleFactory contract, `DataKey` storage keys, `ContractError` enum, `PendingOp` timelock struct, `StateCheckpoint`, entrypoint delegations to submodules. |
+| `events.rs` | `#[contractevent]` structs published by the factory: `FactoryInitialized`, `AdminOpProposed`, `ContractPaused`, `CheckpointCreated`, `RecurringRaffleCreated`, and all registry events. |
+| `views.rs` | Read-only query surface: `get_raffles_page`, `get_raffles_by_creator`, `get_raffles_by_category`, `get_protocol_stats`, `get_pending_op`, pagination helpers. |
+| `registry.rs` | Creator profiles (`CreatorProfile`), partner leaderboard stats, partner whitelisting, rate limiting. |
+| `tests/mod.rs` | Integration test harness. |
+| `tests/budget.rs` | Gas/instruction budget tests. |
+| `tests/views.rs` | View/pagination tests. |
+| `tests/governance.rs` | Timelock and admin-operation tests. |
+
+#### `contracts/raffle-instance/src/`
+
+| File | Responsibility |
+|------|----------------|
+| `lib.rs` | Crate root. Declares `RaffleInstance` contract, `DataKey`, `Error` enum, `Raffle` struct, `Winner`, entrypoint delegations to submodules. |
+| `admin.rs` | Admin-only entrypoints: `pause`, `unpause`, `cancel_raffle`, `withdraw_fees`, `emergency_withdraw`, `rescue_tokens`, `sweep_dust`, `wipe_storage`, oracle+fee+metadata updates, ticket-sales pause. |
+| `attestation.rs` | `get_draw_attestation` package: bundles fairness data, metadata hash, winner list, winning ticket IDs, randomness source, effective-config hash for third-party verifiers. |
+| `claim.rs` | `claim_prize`, `sweep_unclaimed`, `refund_prize`, `refund_ticket`, `batch_refund_tickets` paths with entitlement + solvency checks. |
+| `draw.rs` | `finalize_raffle` (Internal/External/CommitReveal/Quorum), `provide_randomness` with VRF verify, `provide_quorum_randomness`, `trigger_randomness_fallback` paths, winner selection, fairness emission. |
+| `events.rs` | Instance `#[contractevent]` structs: `RaffleCreated`, `TicketPurchased`, `RandomnessRequested`, `RaffleFinalized`, `WinnerDrawn`, `PrizeClaimed`, all lifecycle events. |
+| `helpers.rs` | Internal shared helpers: `Guard` reentrancy guard, `read_raffle` / `write_raffle`, solvency assertions, `transition_status`, `do_finalize_with_seed`, oracle randomness request, admin/auth helpers. |
+| `init.rs` | Instance `init` entrypoint and `deposit_prize` validation. |
+| `randomness.rs` | `build_vrf_proof_message`, VRF verification, quorum seed aggregation (`aggregate_quorum_seeds`). |
+| `tickets.rs` | `buy_tickets`, `buy_tickets_for`, `submit_commit` commit-reveal commits, NFT ticket hooks, bundle pricing logic. |
+| `views.rs` | Read-only instance queries: `get_raffle`, `get_stats`, `get_fairness_data`, `get_my_tickets`, `preview_buy`, `get_remaining_ticket_allowance`, pause flags. |
+| `test.rs` | Test-only utilities. |
+| `tests/` | Integration tests per concern (admin, budget, claim, claim_state, draw, fairness, init, invariants, tickets, ttl). |
+
+#### `contracts/raffle-shared/src/`
+
+| File | Responsibility |
+|------|----------------|
+| `lib.rs` | Crate root. Shared structs + enums: `RaffleConfig`, `RaffleStatus`, `RandomnessSource`, `RandomnessType`, `CancelReason`, `FailureReason`, `Ticket`, `Winner`, `FairnessData`, pagination types (`PaginationParams`, `PageResultRaffles`, `PageResultTickets`), client traits for oracle/NFT/randomness contracts, `impl_require_admin!` / `impl_require_not_paused!` macros. |
+| `constants.rs` | Single source of truth for protocol magic numbers: ticket/pricing/description limits, timing, timelock, TTL, page defaults, randomness cap. |
+| `errors.rs` | Shared `ProtocolError` and error-range policy documentation. |
+| `events.rs` | Shared event structs reused across factory+instance contracts. |
+| `config_builder.rs` | `RaffleConfig` builder/helpers. |
+| `nft_mint_test.rs` | NFT mint success/failure-path test harness. |
+
+### TypeScript Oracle Service (`oracle/`)
+
+Each directory under `oracle/src/` holds a focused responsibility with its
+own tests.
+
+| Directory | Responsibility |
+|-----------|----------------|
+| `alert/` | Alerter service for pipeline and alert routing. |
+| `deduplication/` | Request deduplication store preventing double-submission. |
+| `health/` | Health check HTTP server + health probe logic. |
+| `keys/` | Oracle secret-key management, service abstraction. |
+| `listener/` | Stellar ledger event listener, checkpoint persistence. |
+| `logging/` | Structured pino logger setup. |
+| `metrics/` | Prometheus-style metrics surface. |
+| `queue/` | Randomness-request queue, dead-letter store, fatal-error handlers. |
+| `quorum/` | k-of-N oracle quorum aggregation for Quorum randomness mode. |
+| `shutdown/` | Graceful-shutdown controller for all long-running tasks. |
+| `tx/` | Stellar TX submitter with retry policy. |
+| `vrf/` | VRF proof-message construction + service. |
+| `config.ts` | Load/validate runtime configuration. |
+| `index.ts` | Service entrypoint wiring all components together. |
+| `pipeline.ts` | Core request pipeline from event → VRF → submit. |
+
+### Scripts & Tooling
+
+| Path | Responsibility |
+|------|----------------|
+| `scripts/build-reproducible.sh` | Deterministic WASM build + SHA-256 output. |
+| `scripts/deploy-testnet.sh` / `deploy-mainnet.sh` | Full deploy sequences with WASM install → init → verify → registry write. |
+| `scripts/invoke.sh` | Thin `stellar contract invoke` wrapper. |
+| `scripts/verify.sh` | On-chain WASM hash vs local artifact comparison. |
+| `scripts/fund-testnet.sh` | Friendbot funding helper. |
+| `scripts/smoke-test.sh` | End-to-end testnet lifecycle smoke test. |
+| `scripts/check_error_codes.py` | Checks discriminant uniqueness across the protocol enums. |
+| `scripts/check_wasm_sizes.py` | 128KB WASM size cap + baseline delta check. |
+| `scripts/check_coverage_ratchet.py` | Coverage non-regression (ratchet). |
+| `scripts/check_orphan_modules.py` | Detects `mod x;` with no file. |
+| `scripts/generate_error_docs.py` | Regenerates `docs/ERRORS.md` from `#[contracterror]` enums. |
+| `scripts/generate_event_docs.py` | Regenerates `docs/EVENTS.md` from `#[contractevent]` structs. |
+| `baselines/wasm_sizes.json` | Committed WASM size baseline for delta check. |
+| `coverage/coverage-ratchet.json` | Committed line-coverage ratchet baseline. |
+
 ## RaffleStatus State Machine
 
 ```mermaid
