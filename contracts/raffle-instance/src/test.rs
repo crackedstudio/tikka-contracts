@@ -6,8 +6,8 @@ mod admin;
 mod invariants;
 #[path = "tests/tickets.rs"]
 mod tickets;
-#[path = "tests/quorum.rs"]
-mod quorum;
+#[path = "tests/refund_prize.rs"]
+mod refund_prize;
 
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};

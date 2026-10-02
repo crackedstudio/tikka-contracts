@@ -553,7 +553,7 @@ pub(crate) fn calculate_tier_prize(raffle: &Raffle, tier_index: u32) -> Result<i
     let bp = raffle.prizes.get(tier_index).ok_or(Error::InvalidIndex)?;
     raffle_shared::apply_bp(raffle.prize_amount, bp)
         .ok_or(Error::ArithmeticOverflow)
-    apply_bp(raffle.prize_amount, bp).map_err(|_| Error::ArithmeticOverflow)
+        .map(|a| a / 10000)
 }
 
 /// Finalize the raffle using a pre-computed `u64` seed.

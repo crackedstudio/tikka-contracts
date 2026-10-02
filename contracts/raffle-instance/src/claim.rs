@@ -38,20 +38,19 @@ pub(crate) fn claim_prize(env: Env, winner: Address, tier_index: u32) -> Result<
     }
 
     let amount = calculate_tier_prize(&raffle, tier_index)?;
-    if amount <= 0 {
-        return Err(Error::ZeroPrize);
-    }
+    if amount <= 0 { return Err(Error::ZeroPrize); }
 
-    let protocol_fee = apply_bp(amount, raffle.protocol_fee_bp)
-        .ok_or(Error::ArithmeticOverflow)?;
-
-    let net_amount = amount
-        .checked_sub(protocol_fee)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let (protocol_fee, net_amount) =
-        split_bp(amount, raffle.protocol_fee_bp).map_err(|_| Error::ArithmeticOverflow)?;
-    let tc = token::Client::new(&env, &raffle.prize_token);
-    let balance = tc.balance(&env.current_contract_address());
+    let protocol_fee = amount
+        .checked_mul(raffle.protocol_fee_bp as i128)
+        .ok_or(Error::ArithmeticOverflow)?
+        .checked_add(9999)
+        .ok_or(Error::ArithmeticOverflow)?
+        / 10000;
+    
+    let net_amount = amount.checked_sub(protocol_fee).ok_or(Error::ArithmeticOverflow)?;
+    // Balance check must use prize_token — that is the token the prize was escrowed in.
+    let token_client = token::Client::new(&env, &raffle.prize_token);
+    let balance = token_client.balance(&env.current_contract_address());
     if balance < amount {
         return Err(Error::InsufficientFunds);
     }
@@ -135,6 +134,7 @@ pub(crate) fn sweep_unclaimed(
     }
 
     let treasury = raffle.treasury_address.clone().ok_or(Error::NotAuthorized)?;
+    // Sweep unclaimed prizes back to treasury using prize_token — the token the prize was escrowed in.
     let tc = token::Client::new(&env, &raffle.prize_token);
     let mut swept: u32 = 0;
 
@@ -203,22 +203,13 @@ pub(crate) fn refund_prize(env: Env) -> Result<(), Error> {
     raffle.prize_deposited = false;
     write_raffle(&env, &raffle);
 
+    // The prize was escrowed in prize_token (deposited via deposit_prize).
+    // Using payment_token here would steal from the ticket-revenue pool when
+    // prize_token != payment_token, leaving the contract insolvent for
+    // refund_ticket callers.
     let token_client = token::Client::new(&env, &raffle.prize_token);
-    let _ = token_client
-        .try_transfer(
-            &env.current_contract_address(),
-            &raffle.creator,
-            &raffle.prize_amount,
-        )
-        .map_err(|_| Error::TokenTransferFailed)?
-        .map_err(|_| Error::TokenTransferFailed)?;
-    PrizeRefunded {
-        creator: raffle.creator.clone(),
-        amount: raffle.prize_amount,
-        token: raffle.prize_token.clone(),
-        timestamp: env.ledger().timestamp(),
-    }
-    .publish(&env);
+    token_client.try_transfer(&env.current_contract_address(), &raffle.creator, &raffle.prize_amount).map_err(|_| Error::TokenTransferFailed)?;
+    PrizeRefunded { creator: raffle.creator.clone(), amount: raffle.prize_amount, token: raffle.prize_token.clone(), timestamp: env.ledger().timestamp() }.publish(&env);
     Ok(())
 }
 
